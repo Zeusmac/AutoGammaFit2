@@ -1,0 +1,29 @@
+# Build artifacts
+build/
+bin/
+
+# ROOT dictionary generated files
+*Dict.cpp
+*Dict_rdict.pcm
+
+# ROOT data files
+*.root
+
+# Runtime fit cache files
+fit_caches/
+
+# Program output
+Gamma_fits/
+AllGammaFits.root
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+\#*\#
+
+# OS
+.DS_Store
+Thumbs.db
