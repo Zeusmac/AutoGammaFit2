@@ -9,6 +9,8 @@ bin/
 # ROOT data files
 *.root
 
+# Dat files
+*.dat
 # Runtime fit cache files
 fit_caches/
 

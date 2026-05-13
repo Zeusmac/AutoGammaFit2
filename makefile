@@ -94,7 +94,7 @@ CORE_SRCS := $(filter-out app/FitGammaAnalyzer.cpp, \
 CORE_OBJS := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(CORE_SRCS))
 
 # GUI-specific sources
-GUI_SRCS     := $(GUI_DIR)/GammaFitGUI.cpp $(GUI_DIR)/RunGUI.cpp
+GUI_SRCS     := $(wildcard $(GUI_DIR)/*.cpp)
 GUI_OWN_OBJS := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(GUI_SRCS))
 
 # rootcling dictionary

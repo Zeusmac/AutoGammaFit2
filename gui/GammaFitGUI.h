@@ -118,6 +118,10 @@ public:
     void OnIsoApply();
     void OnIsoApplyLabelAll();
     void OnIsoClear();
+    void OnIsoClearAll();
+    void OnIsoAutoMatchAll();
+    void OnIsoDrawSchematic();
+    void OnIsoApplyClassToAll();
     void OnIsoDbSearch();
     void OnIsoDbClear();
     void OnIsoDbLineSelected(Int_t id);
@@ -247,8 +251,11 @@ private:
     TGTextEntry*   isoCustomEntry_      = nullptr;
     // parallel arrays: one entry per isoList_ item
     std::vector<std::string> isoListKeys_;       // FitEntry keys matching each row
-    std::vector<std::string> isoListAutoMatch_;  // best DB match (may be empty)
+    std::vector<std::string> isoListAutoMatch_;  // best DB match isotope (may be empty)
+    std::vector<double>      isoListDbEnergy_;   // matched DB line energy (0 if none)
     std::string              isoHistName_;  // histogram whose cache is shown
+    // Label → class mapping (label name → class string, e.g. "Co-60" → "Parent")
+    std::map<std::string, std::string> labelClassMap_;
     // Isotope DB browser
     TGListBox*     isoDbList_      = nullptr;
     TGTextEntry*   isoDbSearch_    = nullptr;
@@ -358,6 +365,10 @@ private:
     std::vector<double> fwhmAllX_;       // all FWHM data points (energy)
     std::vector<double> fwhmAllY_;       // all FWHM data points (FWHM value)
     std::vector<bool>   fwhmExcluded_;   // parallel exclusion flags
+    double         fwhmChi2Ndf_   = -1.0;
+    double         fwhmPValue_    = -1.0;
+    double         fwhmResidRMS_  = -1.0;
+    int            fwhmNdf_       = 0;
 
     // ── Decay tab widgets ─────────────────────────────────────────────────────
     TGComboBox*    decayTh2Combo_       = nullptr;  // TH2 selection
@@ -471,9 +482,10 @@ private:
     void UpdatePeakStats(TF1* f, TH1* h, double xlo, double xhi);
     void PopulateIsoList(const std::string& filterLabel = "");
     void PopulateIsoDbList(const std::string& filter = "");
-    // Rebuild filter combo + peak list from the current isoHistName_
-    // WITHOUT resetting isoHistName_ to currentHist_.
     void RefreshIsoDisplay();
+    void DrawDecaySchematic(TCanvas* c);
+    void LoadLabelClassMap(FitDatabase& fitdb);
+    void SaveLabelClassMap(FitDatabase& fitdb);
     void PopulateDecayTh2Combo();
     void PopulateCustProjTh2Combo();
 
