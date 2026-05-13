@@ -38,9 +38,9 @@ bool GammaDB::Load(const string& filename) {
             continue;
         }
 
-        ss >> intensity;
+        bool hasInt = static_cast<bool>(ss >> intensity);
 
-        db.push_back({iso, energy, intensity});
+        db.push_back({iso, energy, intensity, hasInt});
         Debug::Log(Debug::GAMMADB,
             "Loaded: " + iso +
             "  E=" + std::to_string(energy) +

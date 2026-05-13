@@ -8,7 +8,8 @@
 struct GammaLine {
     std::string isotope;
     double energy;
-    double intensity = 100.0;
+    double intensity    = 100.0;
+    bool   hasIntensity = false;  // true only when intensity was present in the file
 };
 
 // Single-peak match, scored by intensity × Gaussian proximity

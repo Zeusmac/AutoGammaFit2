@@ -12,15 +12,37 @@
 
 class TCanvas;
 
+struct PeakFitterBgOptions {
+    bool   subtractBg      = true;
+    int    iterations      = 14;
+    double tspecSigma      = 2.0;    // TSpectrum::Search sigma (bins)
+    double tspecThresh     = 0.02;   // TSpectrum::Search threshold (fraction of max)
+    bool   useLogLikelihood = true;  // AdaptiveFitter: "L" option
+    bool   useImprove       = false; // AdaptiveFitter: "M" option (IMPROVE)
+};
+
+// Flat resolution model used as a fallback when the energy-calibrated model
+// gives nonsensical sigma for non-energy axes (e.g. time projections).
+struct ConstantResModel {
+    double fwhm = 5.0;
+    double FWHM(double /*E*/) const { return fwhm; }
+    double Sigma(double /*E*/) const { return fwhm / 2.3548200450309493; }
+};
+
 class PeakFitter {
 public:
+    using BgOptions = PeakFitterBgOptions;
+
     PeakFitter(GammaDB& db,
                PeakTracker* tracker,
                ResolutionModel& res,
                FitStorage& storage,
                FitDatabase* fitdb = nullptr);
 
-    void FitHistogram(TH1* h, TFile* fout, bool enableTracking, TCanvas* extCanvas = nullptr);
+    void FitHistogram(TH1* h, TFile* fout, bool enableTracking,
+                      TCanvas* extCanvas = nullptr,
+                      BgOptions bg = BgOptions{},
+                      const std::vector<double>& forcedSeeds = {});
 
     void SetFitDatabase(FitDatabase* db) { fitdb = db; }
 

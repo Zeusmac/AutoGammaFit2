@@ -5,8 +5,10 @@
 
 #include "Debug.h"
 #include "TSpectrum.h"
+#include "TROOT.h"
 #include "TLatex.h"
 #include "TCanvas.h"
+#include "TSystem.h"
 #include "TMath.h"
 #include "TFitResult.h"
 #include "RootFileManager.h"
@@ -14,6 +16,7 @@
 
 #include <fstream>
 #include <algorithm>
+#include <set>
 
 using namespace std;
 
@@ -28,7 +31,9 @@ PeakFitter::PeakFitter(GammaDB& db,
 void PeakFitter::FitHistogram(TH1* h,
                               TFile* fout,
                               bool enableTracking,
-                              TCanvas* extCanvas)
+                              TCanvas* extCanvas,
+                              BgOptions bg,
+                              const std::vector<double>& forcedSeeds)
 {
     if (!h) return;
     std::string hname = h->GetName();
@@ -44,9 +49,14 @@ void PeakFitter::FitHistogram(TH1* h,
         c->SetTitle(hname.c_str());
         c->Clear();
     } else {
+        // No external canvas — create one silently in batch mode so no
+        // X11 window appears.  Batch state is restored immediately after.
+        Bool_t wasBatch = gROOT->IsBatch();
+        gROOT->SetBatch(kTRUE);
         c = new TCanvas(Form("c_%s", hname.c_str()),
                         hname.c_str(),
                         1200, 800);
+        gROOT->SetBatch(wasBatch);
     }
     c->cd();
 
@@ -66,24 +76,44 @@ void PeakFitter::FitHistogram(TH1* h,
     h_work->Sumw2();
 
     // -------------------------------------------------
-    // Peak search
+    // Background subtraction + peak finding
     // -------------------------------------------------
     TSpectrum spectrum(1000);
 
-    int nPeaks =
-        spectrum.Search(h_work, 2, "", 0.02);
+    // Background subtraction is independent of peak search
+    if (bg.subtractBg) {
+        TH1* bkg = spectrum.Background(h_work, bg.iterations);
+        h_work->Add(bkg, -1);
+    }
 
-    Debug::Log(Debug::PEAKFITTER,
-        "TSpectrum found " + std::to_string(nPeaks) + " peaks in " + hname);
+    // Peak positions: either from TSpectrum or caller-supplied forced seeds
+    std::vector<double> peaks;
+    if (forcedSeeds.empty()) {
+        int nPeaks = spectrum.Search(h_work, bg.tspecSigma, "", bg.tspecThresh);
+        Debug::Log(Debug::PEAKFITTER,
+            "TSpectrum found " + std::to_string(nPeaks) + " peaks in " + hname +
+            "  sigma=" + std::to_string(bg.tspecSigma) +
+            "  thresh=" + std::to_string(bg.tspecThresh));
+        peaks.assign(spectrum.GetPositionX(), spectrum.GetPositionX() + nPeaks);
+    } else {
+        peaks = forcedSeeds;
+        Debug::Log(Debug::PEAKFITTER,
+            "Source mode: using " + std::to_string(peaks.size()) +
+            " forced seed energies in " + hname);
+    }
 
-    TH1* bkg = spectrum.Background(h_work, 14);
-    h_work->Add(bkg, -1);
+    h_work->SetTitle(hname.c_str());
+    h_work->GetXaxis()->SetTitle("Energy (keV)");
+    h_work->GetYaxis()->SetTitle("Counts / 1ms per bin");
+    h_work->SetMinimum(0);
+    h_work->SetLineColor(kBlack);
+    h_work->SetMarkerSize(0);
+    h_work->Draw("hist");
+    h_work->Draw("E1 same");
+    c->Modified();
+    c->Update();
 
     Debug::DumpHistogram(fout, h_work);
-
-    std::vector<double> peaks(
-        spectrum.GetPositionX(),
-        spectrum.GetPositionX() + nPeaks);
 
     std::sort(peaks.begin(), peaks.end());
 
@@ -103,6 +133,8 @@ void PeakFitter::FitHistogram(TH1* h,
     std::vector<double> fittedEnergies;  // collect for IdentifyIsotopes at end
     double fwhmSum = 0.0;
     int    fwhmCount = 0;
+    // Tracks DB lines already assigned to a peak so each line is claimed once.
+    std::set<std::string> claimedLines;
 
     // =================================================
     // LOOP OVER GROUPS
@@ -131,6 +163,10 @@ void PeakFitter::FitHistogram(TH1* h,
 
         int nUsed = 1;
 
+        AdaptiveFitterConfig fitCfg;
+        fitCfg.useLogLikelihood = bg.useLogLikelihood;
+        fitCfg.useImprove       = bg.useImprove;
+
         TF1* model =
             AdaptiveFitter::FitGroup(
                 h_work,
@@ -138,11 +174,29 @@ void PeakFitter::FitHistogram(TH1* h,
                 res,
                 fitResult,
                 nUsed,
-                fitdb);
+                fitdb,
+                fitCfg);
 
         if (!model) {
             Debug::Log(Debug::PEAKFITTER,
-                "Group " + std::to_string(g) + ": no model returned — skipping");
+                "Group " + std::to_string(g) + ": group fit failed — retrying each peak individually");
+            // Fallback: fit each peak alone using TSpectrum sigma × bin-width as
+            // the resolution estimate, so every TSpectrum-found peak gets stored.
+            if (fitdb) {
+                for (double E : group.energies) {
+                    double bw     = h_work->GetBinWidth(h_work->FindBin(E));
+                    ConstantResModel cres;
+                    cres.fwhm = bg.tspecSigma * bw * 2.3548200450309493;
+                    TFitResultPtr fr;
+                    int nu = 1;
+                    TF1* fm = AdaptiveFitter::FitGroup(h_work, {E}, cres, fr, nu, fitdb);
+                    Debug::Log(Debug::PEAKFITTER,
+                        "  Fallback peak E=" + std::to_string(E) +
+                        "  fwhm_est=" + std::to_string(cres.fwhm) +
+                        (fm ? "  stored" : "  failed"));
+                    delete fm;
+                }
+            }
             continue;
         }
 
@@ -150,13 +204,15 @@ void PeakFitter::FitHistogram(TH1* h,
                          Form("fit_group_%ld", g));
 
         // -------------------------------------------------
-        // Fit quality
+        // Fit quality — Pearson chi2/ndf from pull RMS (count-independent).
+        // r->Chi2() from a log-likelihood fit returns -2*NLL, not chi2.
         // -------------------------------------------------
-        double chi2ndf = -1;
-
-        if (fitResult.Get() && fitResult->Ndf() > 0) {
-            chi2ndf = fitResult->Chi2() / fitResult->Ndf();
-        }
+        const double sigL = res.FWHM(group.energies.front()) / 2.3548;
+        const double sigR = res.FWHM(group.energies.back())  / 2.3548;
+        const double xlo  = group.energies.front() - 4.0 * sigL;
+        const double xhi  = group.energies.back()  + 4.0 * sigR;
+        ResidualMetrics rm = FitDatabase::ComputeResiduals(h_work, model, xlo, xhi);
+        double chi2ndf = (rm.rms < 1.0e6) ? FitDatabase::Chi2Ndf(rm, model->GetNpar()) : -1.0;
 
         Debug::Log(Debug::PEAKFITTER,
             "Group " + std::to_string(g) +
@@ -244,10 +300,21 @@ void PeakFitter::FitHistogram(TH1* h,
                 : 0;
 
             // -------------------------------------------------
-            // Matching
+            // Matching — each DB line claimed by at most one peak
             // -------------------------------------------------
             double fwhmAtE = res.FWHM(E);
             auto matches = db.Match(E, fwhmAtE);
+            // Remove DB lines already claimed by an earlier peak
+            matches.erase(
+                std::remove_if(matches.begin(), matches.end(),
+                    [&](const GammaMatch& m) {
+                        return claimedLines.count(
+                            m.isotope + Form("_%.1f", m.energy));
+                    }),
+                matches.end());
+            // Claim the best remaining line
+            if (!matches.empty())
+                claimedLines.insert(matches[0].isotope + Form("_%.1f", matches[0].energy));
 
             fittedEnergies.push_back(E);
             fwhmSum += fwhmAtE;
@@ -394,6 +461,13 @@ void PeakFitter::FitHistogram(TH1* h,
         }
 
         model->Draw("same");
+
+        // Flush the GUI event queue so the canvas repaints after each group
+        if (extCanvas) {
+            c->Modified();
+            c->Update();
+            gSystem->ProcessEvents();
+        }
     }
     // -------------------------------------------------
     // Multi-line isotope identification for full spectrum

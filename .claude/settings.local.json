@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make gui *)",
+      "Bash(awk 'NR>=2290 && NR<=2295' /home/macwheeler/Research/AutoGammaFit/gui/GammaFitGUI.cpp)",
+      "Bash(awk 'NR>=2430 && NR<=2450' /home/macwheeler/Research/AutoGammaFit/gui/GammaFitGUI.cpp)"
+    ]
+  }
+}

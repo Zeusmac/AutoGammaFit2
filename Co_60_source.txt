@@ -1,0 +1,8 @@
+isotope   Co-60     #Run 1209
+activity  10.0    # micro Curies
+halflife  1925.5     # days
+caldate   1988-01-11
+measdate  2025-03-10
+livetime  43200     # seconds
+1173.228  0.9985     # energy_keV  branching_ratio
+1332.492  0.9998

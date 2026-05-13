@@ -47,7 +47,7 @@ struct DoubleGaussOverride {
 };
 
 struct AdaptiveFitterConfig {
-    double kPenalty       = 0.15;
+    double kPenalty       = 0.05;
     double sigmaLoFrac    = 0.3;
     double sigmaHiFrac    = 3.0;
     double ampLoFrac      = 0.05;
@@ -55,6 +55,8 @@ struct AdaptiveFitterConfig {
     double meanWindowKeV  = 8.0;
     double driftWarnKeV   = 5.0;
     int    maxPeaksPerGrp = 3;
+    bool   useLogLikelihood = true;   // "L" option; uncheck for chi2/least-squares
+    bool   useImprove       = false;  // "M" option: IMPROVE after MIGRAD
 
     // Default: treat the 511 keV annihilation peak as double-Gaussian.
     // broadFrac=3 means the broad component is 3× wider than the narrow one.
@@ -169,7 +171,7 @@ public:
             }
 
             // ---- fit: 3-stage retry with progressively looser sigma ----
-            TFitResultPtr r = TryFit_(h, f);
+            TFitResultPtr r = TryFit_(h, f, false, cfg.useLogLikelihood);
             Debug::Log(Debug::FITTER, std::to_string(n) + "-peak stage1"
                        "  status=" + std::to_string(r.Get() ? r->Status() : -1) +
                        "  edm=" + std::to_string(r.Get() ? r->Edm() : -1.0));
@@ -182,7 +184,7 @@ public:
                     SetParSafe_(f, 3*i+2, f->GetParameter(3*i+2), 0.1*sig, 8.0*sig);
                     SetParSafe_(f, 3*i+0, A, 0.01*A, 50.0*A);
                 }
-                r = TryFit_(h, f, /*improve=*/true);
+                r = TryFit_(h, f, /*improve=*/true, cfg.useLogLikelihood);
                 Debug::Log(Debug::FITTER, std::to_string(n) + "-peak stage2"
                            "  status=" + std::to_string(r.Get() ? r->Status() : -1));
             }
@@ -192,7 +194,7 @@ public:
                 for (int i = 0; i < n; i++) {
                     SetParSafe_(f, 3*i+2, f->GetParameter(3*i+2), 0.01, 50.0);
                 }
-                r = TryFit_(h, f, /*improve=*/true);
+                r = TryFit_(h, f, /*improve=*/true, cfg.useLogLikelihood);
                 Debug::Log(Debug::FITTER, std::to_string(n) + "-peak stage3"
                            "  status=" + std::to_string(r.Get() ? r->Status() : -1));
             }
@@ -205,8 +207,10 @@ public:
 
             CheckDrift_(f, n, peaks, cfg.driftWarnKeV);
 
-            // AIC-style selection
-            double chi2ndf   = r->Chi2() / r->Ndf();
+            // AIC-style selection — Pearson chi2/ndf with proper DOF
+            ResidualMetrics rmN = FitDatabase::ComputeResiduals(h, f, xmin, xmax);
+            double chi2ndf   = (rmN.rms < 1.0e6) ? FitDatabase::Chi2Ndf(rmN, 3*n + 2)
+                                                  : r->Chi2() / r->Ndf();
             double penalised = chi2ndf + cfg.kPenalty * (n - 1);
 
             Debug::Log(Debug::FITTER, std::to_string(n) + "-peak"
@@ -236,13 +240,15 @@ public:
             InitDoubleGaussParams_(dg, peak, res, h, bgL, bgR,
                                    xmin, xmax, cfg, *ovr);
 
-            TFitResultPtr r = TryFit_(h, dg);
+            TFitResultPtr r = TryFit_(h, dg, false, cfg.useLogLikelihood);
             if (!r.Get() || r->Ndf() <= 0) { delete dg; break; }
 
             CheckDrift_DG_(dg, peak, cfg.driftWarnKeV);
 
             // AIC penalty: 2 extra free parameters vs single-Gaussian+pol1
-            double chi2ndf   = r->Chi2() / r->Ndf();
+            ResidualMetrics rmDG = FitDatabase::ComputeResiduals(h, dg, xmin, xmax);
+            double chi2ndf   = (rmDG.rms < 1.0e6) ? FitDatabase::Chi2Ndf(rmDG, 7)
+                                                   : r->Chi2() / r->Ndf();
             double penalised = chi2ndf + cfg.kPenalty * 2.0;
 
             Debug::Log(Debug::FITTER, "[FITTER] Double-Gauss 511: chi2/ndf=" +
@@ -260,9 +266,23 @@ public:
             break;  // only one double-Gauss peak per group
         }
 
+        // ---- Residual-guided peak discovery (post-fit) ----------------------
+        // Scan (data − best_fit)/σ for bins that exceed 3σ. If a significant
+        // cluster is found, add the missed peak, expand the model, and refit.
+        // The AIC penalty prevents spurious expansions.
+        if (best && bestFit.Get() && bestFit->Ndf() > 0) {
+            best = ResidualExpand_(h, best, res, bestFit, bestChi2, nUsed,
+                                   xmin, xmax, cfg);
+        }
+
+        // ---- Compute residual metrics for composite cache comparison --------
+        ResidualMetrics rm;
+        if (best)
+            rm = FitDatabase::ComputeResiduals(h, best, xmin, xmax);
+
         // ---- store in DB if better ----
         if (best && db) {
-            FitEntry candidate = FitDatabase::MakeEntry(key, bestFit, best, nUsed);
+            FitEntry candidate = FitDatabase::MakeEntry(key, bestFit, best, nUsed, rm);
             db->StoreIfBetter(key, candidate);
         }
 
@@ -353,8 +373,10 @@ private:
     //        retry stages; using it on every attempt causes mnimpr to report
     //        status 4 even when MIGRAD itself converged cleanly.
     // -----------------------------------------------------------------------
-    static TFitResultPtr TryFit_(TH1* h, TF1* f, bool improve = false) {
-        std::string opts = "R S Q L B";
+    static TFitResultPtr TryFit_(TH1* h, TF1* f, bool improve = false,
+                                  bool logLik = true) {
+        std::string opts = "R S Q B";
+        if (logLik)  opts += " L";
         if (improve) opts += " M";
         return h->Fit(f, opts.c_str());
     }
@@ -488,6 +510,122 @@ private:
         if (std::abs(fitted - nominal) > warnKeV)
             std::cerr << "[AdaptiveFitter] Double-Gauss mean drifted: nominal="
                       << nominal << " fitted=" << fitted << " keV\n";
+    }
+
+    // -----------------------------------------------------------------------
+    // ScanResidualPeaks_ — find clusters of bins where (data−fit)/σ > threshold.
+    // Returns the energy of the highest-pull bin in each cluster.
+    // -----------------------------------------------------------------------
+    static std::vector<double> ScanResidualPeaks_(TH1* h, TF1* f,
+                                                   double xmin, double xmax,
+                                                   double threshold)
+    {
+        std::vector<double> peaks;
+        int binLo = h->FindBin(xmin);
+        int binHi = h->FindBin(xmax);
+
+        bool   inCluster = false;
+        double bestPull  = 0.0;
+        double bestX     = -1.0;
+
+        for (int b = binLo; b <= binHi; b++) {
+            double err = h->GetBinError(b);
+            if (err <= 0.0) continue;
+            double x    = h->GetBinCenter(b);
+            double pull = (h->GetBinContent(b) - f->Eval(x)) / err;
+
+            if (pull > threshold) {
+                if (!inCluster || pull > bestPull) {
+                    bestPull = pull;
+                    bestX    = x;
+                }
+                inCluster = true;
+            } else if (inCluster) {
+                peaks.push_back(bestX);
+                inCluster = false;
+                bestPull  = 0.0;
+                bestX     = -1.0;
+            }
+        }
+        if (inCluster && bestX > 0.0) peaks.push_back(bestX);
+        return peaks;
+    }
+
+    // -----------------------------------------------------------------------
+    // ResidualExpand_ — iteratively add missed peaks found in residuals.
+    // Up to maxPasses rounds; each round costs one MIGRAD call.
+    // AIC penalty guards against over-expansion.
+    // -----------------------------------------------------------------------
+    template<typename ResModel>
+    static TF1* ResidualExpand_(TH1*           h,
+                                 TF1*           current,
+                                 const ResModel& res,
+                                 TFitResultPtr&  bestFit,
+                                 double&         bestScore,
+                                 int&            nUsed,
+                                 double          xmin,
+                                 double          xmax,
+                                 const Config&   cfg,
+                                 int             maxPasses = 2)
+    {
+        for (int pass = 0; pass < maxPasses; pass++) {
+            std::vector<double> newPeaks =
+                ScanResidualPeaks_(h, current, xmin, xmax, 3.0);
+            if (newPeaks.empty()) break;
+
+            // Collect currently fitted peak means
+            std::vector<double> expanded;
+            for (int i = 0; i < nUsed; i++)
+                expanded.push_back(current->GetParameter(3*i + 1));
+            for (double E : newPeaks)
+                expanded.push_back(E);
+            std::sort(expanded.begin(), expanded.end());
+
+            // Merge peaks closer than 2 keV (avoid duplicating existing peaks)
+            auto last = std::unique(expanded.begin(), expanded.end(),
+                [](double a, double b){ return std::abs(a - b) < 2.0; });
+            expanded.erase(last, expanded.end());
+
+            int newN = (int)expanded.size();
+            if (newN == nUsed) break;                       // nothing changed
+            if (newN > cfg.maxPeaksPerGrp + maxPasses) break; // cap total
+
+            TF1* f = Build(newN, xmin, xmax);
+            f->SetName(("model_res_" + std::to_string(newN) + "pk").c_str());
+
+            double bgL = SafeBinContent_(h, xmin);
+            double bgR = SafeBinContent_(h, xmax);
+            InitParams_(f, newN, expanded, res, h, bgL, bgR, xmin, xmax, cfg);
+
+            TFitResultPtr r = TryFit_(h, f, false, cfg.useLogLikelihood);
+            if (!r.Get() || r->Ndf() <= 0) { delete f; break; }
+
+            ResidualMetrics rmEx = FitDatabase::ComputeResiduals(h, f, xmin, xmax);
+            double chi2ndf   = (rmEx.rms < 1.0e6) ? FitDatabase::Chi2Ndf(rmEx, 3*newN + 2)
+                                                   : r->Chi2() / r->Ndf();
+            double penalised = chi2ndf + cfg.kPenalty * (newN - 1);
+
+            Debug::Log(Debug::FITTER,
+                "[ResidualExpand] pass=" + std::to_string(pass) +
+                "  newN=" + std::to_string(newN) +
+                "  chi2/ndf=" + std::to_string(chi2ndf) +
+                "  penalised=" + std::to_string(penalised) +
+                "  prev=" + std::to_string(bestScore));
+
+            if (penalised < bestScore) {
+                delete current;
+                current   = f;
+                bestFit   = r;
+                bestScore = penalised;
+                nUsed     = newN;
+                Debug::Log(Debug::FITTER,
+                    "[ResidualExpand] -> accepted " + std::to_string(newN) + "-peak model");
+            } else {
+                delete f;
+                break;
+            }
+        }
+        return current;
     }
 };
  

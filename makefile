@@ -33,6 +33,13 @@ BIN_DIR   := bin
 TARGET   := $(BIN_DIR)/gamma_fit
 
 # =========================
+# GUI TARGET NAMES
+# =========================
+GUI_DIR      := gui
+GUI_TARGET   := $(BIN_DIR)/gamma_gui
+GUI_ROOTLIBS := $(shell root-config --libs) -lSpectrum -lGui -lGuiHtml
+
+# =========================
 # SOURCES
 # =========================
 SOURCES := $(shell find $(SRC_DIRS) -name "*.cpp")
@@ -41,7 +48,7 @@ OBJECTS := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
 # =========================
 # DEFAULT RULE
 # =========================
-all: $(TARGET)
+all: $(TARGET) $(GUI_TARGET)
 
 # =========================
 # LINK
@@ -65,21 +72,21 @@ $(BIN_DIR):
 # =========================
 # CLEAN
 # =========================
+# Removes only compiled artifacts. fit_caches/ and Gamma_fits/ are
+# intentionally preserved so accumulated fit results are never lost.
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR)
+
+# Full wipe including fit caches and output — use only when you want a
+# completely fresh start.
+distclean: clean
+	rm -rf fit_caches Gamma_fits
 
 # =========================
 # RUN
 # =========================
 run: all
 	./$(TARGET)
-
-# =========================
-# GUI TARGET
-# =========================
-GUI_DIR      := gui
-GUI_TARGET   := $(BIN_DIR)/gamma_gui
-GUI_ROOTLIBS := $(shell root-config --libs) -lSpectrum -lGui -lGuiHtml
 
 # Core objects: everything except the CLI main
 CORE_SRCS := $(filter-out app/FitGammaAnalyzer.cpp, \
@@ -96,7 +103,11 @@ GUI_DICT_OBJ := $(OBJ_DIR)/gui/GammaFitGUIDict.o
 
 $(GUI_DICT_SRC): $(GUI_DIR)/GammaFitGUI.h $(GUI_DIR)/LinkDef.h
 	@mkdir -p $(dir $@)
-	rootcling -f $@ -c $(INCLUDES) -I$(shell root-config --incdir) $^
+	rootcling -f $@ \
+	    -I$(CURDIR) -I$(CURDIR)/app -I$(CURDIR)/core \
+	    -I$(CURDIR)/fitting -I$(CURDIR)/tracking -I$(CURDIR)/models \
+	    -I$(CURDIR)/database -I$(CURDIR)/io -I$(CURDIR)/analysis_modules \
+	    -I$(CURDIR)/gui -I$(shell root-config --incdir) $^
 
 $(GUI_DICT_OBJ): $(GUI_DICT_SRC)
 	@mkdir -p $(dir $@)
@@ -111,3 +122,4 @@ gui: $(GUI_TARGET)
 
 $(GUI_TARGET): $(CORE_OBJS) $(GUI_OWN_OBJS) $(GUI_DICT_OBJ) | $(BIN_DIR)
 	$(CXX) $^ -o $@ $(GUI_ROOTLIBS)
+	cp $(OBJ_DIR)/gui/GammaFitGUIDict_rdict.pcm $(BIN_DIR)/
