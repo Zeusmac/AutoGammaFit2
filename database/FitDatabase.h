@@ -43,6 +43,24 @@ struct FitEntry {
     // "Background", or "Custom:<user text>".  Both empty on unannotated entries.
     std::string label;
     std::string classification;
+
+    // Per-Gaussian labels for wide multi-Gaussian entries (peak spread > 4 keV).
+    // Empty vector → use .label / .classification for all Gaussians (legacy /
+    // tight-cluster entries).  When non-empty, size == number of Gaussians.
+    std::vector<std::string> peakLabels;
+    std::vector<std::string> peakClassifications;
+
+    // Return the effective label for Gaussian index gi (-1 = whole entry).
+    const std::string& PeakLabel(int gi) const {
+        if (gi >= 0 && gi < (int)peakLabels.size() && !peakLabels[gi].empty())
+            return peakLabels[gi];
+        return label;
+    }
+    const std::string& PeakClass(int gi) const {
+        if (gi >= 0 && gi < (int)peakClassifications.size() && !peakClassifications[gi].empty())
+            return peakClassifications[gi];
+        return classification;
+    }
 };
 
 class FitDatabase {
@@ -311,6 +329,23 @@ public:
                     }
                 }
             }
+            // Optional per-Gaussian labels / classifications
+            {
+                int npl = 0;
+                if (ss >> npl && npl > 0) {
+                    e.peakLabels.resize(npl);
+                    for (int i = 0; i < npl; i++) {
+                        std::string t; if (ss >> t && t != "-") e.peakLabels[i] = t;
+                    }
+                }
+                int npc = 0;
+                if (ss >> npc && npc > 0) {
+                    e.peakClassifications.resize(npc);
+                    for (int i = 0; i < npc; i++) {
+                        std::string t; if (ss >> t && t != "-") e.peakClassifications[i] = t;
+                    }
+                }
+            }
             entries_[e.key] = std::move(e);
             ++count;
         }
@@ -346,10 +381,19 @@ public:
             out << " " << e.xlo << " " << e.xhi;
             out << " " << (e.label.empty()          ? "-" : e.label);
             out << " " << (e.classification.empty() ? "-" : e.classification);
-            // Parameter errors (new field — ne followed by ne error values)
+            // Parameter errors (ne followed by ne values)
             int ne = (int)e.paramErrors.size();
             out << " " << ne;
             for (int i = 0; i < ne; i++) out << " " << e.paramErrors[i];
+            // Per-Gaussian labels / classifications (npl l0 l1 ... npc c0 c1 ...)
+            int npl = (int)e.peakLabels.size();
+            out << " " << npl;
+            for (int i = 0; i < npl; i++)
+                out << " " << (e.peakLabels[i].empty() ? "-" : e.peakLabels[i]);
+            int npc = (int)e.peakClassifications.size();
+            out << " " << npc;
+            for (int i = 0; i < npc; i++)
+                out << " " << (e.peakClassifications[i].empty() ? "-" : e.peakClassifications[i]);
             out << "\n";
         }
         out.close();

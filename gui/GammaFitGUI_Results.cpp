@@ -382,6 +382,9 @@ void GammaFitGUI::OnExportCacheCSV()
         { "Chi2/NDF",             true  },
         { "BG constant",          false },
         { "BG slope",             false },
+        { "Match isotope",        false },
+        { "Match energy (keV)",   false },
+        { "Match distance (keV)", false },
     };
     const int NC = (int)(sizeof(kCols)/sizeof(kCols[0]));
     std::vector<TGCheckButton*> chk(NC);
@@ -438,7 +441,8 @@ void GammaFitGUI::OnExportCacheCSV()
         "sigma_keV", "sigma_err_keV", "fwhm_keV", "fwhm_err_keV",
         "peak_area", "peak_area_err",
         "label", "classification", "chi2ndf",
-        "bg_constant", "bg_slope"
+        "bg_constant", "bg_slope",
+        "match_isotope", "match_energy_keV", "match_distance_keV"
     };
     bool first = true;
     for (int c = 0; c < NC; c++) {
@@ -449,13 +453,27 @@ void GammaFitGUI::OnExportCacheCSV()
     }
     csv << "\n";
 
-    // Data: iterate all fitted histograms → load each cache → write one row per peak
+    // Resolve which histogram to export: selected in the list, else current
+    Int_t selId = fitResultsList_ ? fitResultsList_->GetSelected() : -1;
+    std::string exportHist;
+    if (selId >= 1 && selId <= (Int_t)fittedHists_.size())
+        exportHist = fittedHists_[selId - 1];
+    else if (!currentHist_.empty())
+        exportHist = currentHist_;
+    else {
+        AppendLog("Select a histogram from the Fitted Histograms list first.");
+        return;
+    }
+
+    // Data: load the selected histogram's cache → write one row per peak
     const double kSqrt2Pi = 2.5066282746310002;
     int rowCount = 0;
-    for (const auto& hname : fittedHists_) {
+    {
+        const std::string& hname = exportHist;
         FitDatabase fdb;
         fdb.Load(CacheFileFor(hname));
         for (const auto& kv : fdb.GetEntries()) {
+            if (!kv.first.empty() && kv.first[0] == '_') continue;  // skip internal keys
             const FitEntry& e = kv.second;
             int npar = (int)e.params.size();
             if (npar < 5 || (npar - 2) % 3 != 0) continue;
@@ -479,6 +497,24 @@ void GammaFitGUI::OnExportCacheCSV()
                 double fwhm    = 2.3548 * sig;
                 double fwhmErr = 2.3548 * serr;
 
+                // Per-Gaussian label/class (falls back to entry-level if not set)
+                std::string peakLbl = e.PeakLabel(i);
+                std::string peakCls = e.PeakClass(i);
+
+                // Nearest DB match for this Gaussian
+                std::string matchIso;
+                double matchDbE = 0.0, matchDist = 0.0;
+                if (dbLoaded_) {
+                    double bestD = std::numeric_limits<double>::max();
+                    for (const auto& gl : db_.db) {
+                        double d = std::fabs(gl.energy - E);
+                        if (d < bestD) {
+                            bestD = d; matchIso = gl.isotope; matchDbE = gl.energy;
+                        }
+                    }
+                    matchDist = (matchDbE > 0) ? E - matchDbE : 0.0;
+                }
+
                 bool fr = true;
                 auto w = [&](const std::string& v) {
                     if (!fr) csv << ",";
@@ -490,20 +526,23 @@ void GammaFitGUI::OnExportCacheCSV()
                 for (int c = 0; c < NC; c++) {
                     if (!sel[c]) continue;
                     switch (c) {
-                        case  0: w(hname); break;
-                        case  1: wf(E);       break;
-                        case  2: wf(Eerr);    break;
-                        case  3: wf(sig);     break;
-                        case  4: wf(serr);    break;
-                        case  5: wf(fwhm);    break;
-                        case  6: wf(fwhmErr); break;
-                        case  7: wf(area);    break;
-                        case  8: wf(areaErr); break;
-                        case  9: w(e.label.empty() ? "" : e.label); break;
-                        case 10: w(e.classification.empty() ? "" : e.classification); break;
+                        case  0: w(hname);   break;
+                        case  1: wf(E);      break;
+                        case  2: wf(Eerr);   break;
+                        case  3: wf(sig);    break;
+                        case  4: wf(serr);   break;
+                        case  5: wf(fwhm);   break;
+                        case  6: wf(fwhmErr);break;
+                        case  7: wf(area);   break;
+                        case  8: wf(areaErr);break;
+                        case  9: w(peakLbl); break;
+                        case 10: w(peakCls); break;
                         case 11: wf(e.chi2ndf < 1e15 ? e.chi2ndf : -1.0); break;
-                        case 12: wf(bg0); break;
-                        case 13: wf(bg1); break;
+                        case 12: wf(bg0);    break;
+                        case 13: wf(bg1);    break;
+                        case 14: w(matchIso);     break;
+                        case 15: wf(matchDbE);    break;
+                        case 16: wf(matchDist);   break;
                     }
                 }
                 csv << "\n";
@@ -513,7 +552,8 @@ void GammaFitGUI::OnExportCacheCSV()
     }
 
     csv.close();
-    AppendLog(Form("CSV export: %d rows → %s", rowCount, outPath.c_str()));
+    AppendLog(Form("CSV export: %d rows [%s] -> %s",
+                   rowCount, exportHist.c_str(), outPath.c_str()));
     SetStatus(Form("Exported %d peaks to CSV", rowCount));
 }
 

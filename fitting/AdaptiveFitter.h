@@ -280,6 +280,26 @@ public:
         if (best)
             rm = FitDatabase::ComputeResiduals(h, best, xmin, xmax);
 
+        // ---- warn if any parameter hit its bound (errors will be zero) ----
+        if (best) {
+            int npar = best->GetNpar();
+            for (int i = 0; i < npar; i++) {
+                double val = best->GetParameter(i);
+                double lo, hi;
+                best->GetParLimits(i, lo, hi);
+                if (hi <= lo) continue;
+                double range = hi - lo;
+                if (std::abs(val - lo) / range < 0.002)
+                    Debug::Log(Debug::FITTER,
+                        Form("[BoundHit] %s  par[%d]=%s  hit LOWER bound %.5g",
+                             key.c_str(), i, best->GetParName(i), lo));
+                else if (std::abs(val - hi) / range < 0.002)
+                    Debug::Log(Debug::FITTER,
+                        Form("[BoundHit] %s  par[%d]=%s  hit UPPER bound %.5g",
+                             key.c_str(), i, best->GetParName(i), hi));
+            }
+        }
+
         // ---- store in DB if better ----
         if (best && db) {
             FitEntry candidate = FitDatabase::MakeEntry(key, bestFit, best, nUsed, rm);

@@ -18,8 +18,54 @@
 #include <limits>
 #include <sys/stat.h>
 
-// Key for persisting the label→class map inside the cache file
+// Keys for persisting data inside the cache file
 static constexpr const char* kLabelClassesKey = "__LABEL_CLASSES__";
+static constexpr const char* kParentInfoKey   = "__PARENT_INFO__";
+
+// Element symbols Z=1..118
+static const char* const kElementSymbols[] = {
+    "H",  "He", "Li", "Be", "B",  "C",  "N",  "O",  "F",  "Ne",
+    "Na", "Mg", "Al", "Si", "P",  "S",  "Cl", "Ar", "K",  "Ca",
+    "Sc", "Ti", "V",  "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+    "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y",  "Zr",
+    "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
+    "Sb", "Te", "I",  "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
+    "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb",
+    "Lu", "Hf", "Ta", "W",  "Re", "Os", "Ir", "Pt", "Au", "Hg",
+    "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th",
+    "Pa", "U",  "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm",
+    "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",
+    "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og"
+};
+static constexpr int kNElements = 118;
+
+static const char* ElementSymbol(int Z) {
+    if (Z < 1 || Z > kNElements) return "?";
+    return kElementSymbols[Z - 1];
+}
+
+static int SymbolToZ(const std::string& sym) {
+    for (int z = 1; z <= kNElements; z++)
+        if (sym == kElementSymbols[z - 1]) return z;
+    return 0;
+}
+
+// Beta-minus decay chain: given parent (Z0,N0), compute (Z,N) for a class.
+// Each step: Z+1, N-1 (beta-minus emission).
+// Returns false if parent not set or class is not in the beta-minus chain.
+static bool ClassZN(const std::string& cls, int Z0, int N0, int& Z, int& N)
+{
+    if (Z0 <= 0 || N0 <= 0) return false;
+    if      (cls == "Parent")                { Z = Z0;   N = N0;   }
+    else if (cls == "Daughter")              { Z = Z0+1; N = N0-1; }
+    else if (cls == "Granddaughter"         ||
+             cls == "Beta-n Daughter")       { Z = Z0+2; N = N0-2; }
+    else if (cls == "Beta-n Granddaughter"  ||
+             cls == "Beta-2n Daughter")      { Z = Z0+3; N = N0-3; }
+    else if (cls == "Beta-2n Granddaughter") { Z = Z0+4; N = N0-4; }
+    else return false;
+    return (Z > 0 && N > 0);
+}
 
 // Serialize / deserialize labelClassMap_ as "iso:cls;iso:cls;..."
 static std::string SerializeLCMap(const std::map<std::string,std::string>& m)
@@ -57,6 +103,26 @@ void GammaFitGUI::LoadLabelClassMap(FitDatabase& fitdb)
         if (!e.label.empty() && !e.classification.empty()
                 && !labelClassMap_.count(e.label))
             labelClassMap_[e.label] = e.classification;
+    }
+
+    // Load parent nucleus info from __PARENT_INFO__ entry
+    isoParentIsotope_.clear(); isoParentZval_ = 0; isoParentNval_ = 0;
+    auto pit = fitdb.GetEntries().find(kParentInfoKey);
+    if (pit != fitdb.GetEntries().end()) {
+        // Format: "name=Kr-90;Z=36;N=54"
+        std::istringstream ss(pit->second.label);
+        std::string tok;
+        while (std::getline(ss, tok, ';')) {
+            auto eq = tok.find('=');
+            if (eq == std::string::npos) continue;
+            std::string k = tok.substr(0, eq), v = tok.substr(eq + 1);
+            if      (k == "name") isoParentIsotope_ = v;
+            else if (k == "Z")    try { isoParentZval_ = std::stoi(v); } catch (...) {}
+            else if (k == "N")    try { isoParentNval_ = std::stoi(v); } catch (...) {}
+        }
+        if (isoParentNameEntry_) isoParentNameEntry_->SetText(isoParentIsotope_.c_str());
+        if (isoParentZEntry_)    isoParentZEntry_->SetNumber(isoParentZval_);
+        if (isoParentNEntry_)    isoParentNEntry_->SetNumber(isoParentNval_);
     }
 }
 
@@ -102,7 +168,7 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
     }
 
     // ── Peak list ─────────────────────────────────────────────────────────────
-    TGGroupFrame* listGrp = new TGGroupFrame(p, "Peaks (sorted by label)");
+    TGGroupFrame* listGrp = new TGGroupFrame(p, "Peaks (sorted by energy)");
     p->AddFrame(listGrp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
 
     isoList_ = new TGListBox(listGrp, 960);
@@ -111,6 +177,14 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
                       new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
     isoList_->Connect("Selected(Int_t)", "GammaFitGUI", this,
                       "OnIsoListSelected(Int_t)");
+
+    {
+        TGTextButton* previewBtn = new TGTextButton(listGrp, "Preview Selected Peak");
+        listGrp->AddFrame(previewBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+        previewBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoPeakPreview()");
+        previewBtn->SetToolTipText(
+            "Zoom the main canvas to the selected peak and overlay its cached fit.");
+    }
 
     // ── Bulk action row ───────────────────────────────────────────────────────
     {
@@ -121,13 +195,34 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
         bulkRow->AddFrame(rematchBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
         rematchBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoAutoMatchAll()");
         rematchBtn->SetToolTipText(
-            "For every unlabeled peak in the cache, find the closest unused\n"
-            "DB line (greedy unique match) and apply it as the label.");
+            "For every unlabeled peak, find the closest unused DB line within\n"
+            "the match distance threshold and apply it as the label.\n"
+            "Peaks > 4 keV apart in a multi-Gaussian fit are matched individually.");
 
-        TGTextButton* clearAllBtn = new TGTextButton(bulkRow, "Clear All Labels");
+        TGTextButton* clearAllBtn = new TGTextButton(bulkRow, "Clear All Isotopes");
         bulkRow->AddFrame(clearAllBtn, new TGLayoutHints(kLHintsLeft));
         clearAllBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoClearAll()");
-        clearAllBtn->SetToolTipText("Remove label and classification from every peak in the cache");
+        clearAllBtn->SetToolTipText("Remove isotope label and classification from every peak in the cache");
+    }
+    // ── Match threshold ───────────────────────────────────────────────────────
+    {
+        TGHorizontalFrame* thrRow = new TGHorizontalFrame(p);
+        p->AddFrame(thrRow, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 4));
+        thrRow->AddFrame(new TGLabel(thrRow, "Match threshold (keV):"),
+                         new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        isoMatchThreshEntry_ = new TGNumberEntry(thrRow, 10.0, 6, -1,
+            TGNumberFormat::kNESRealOne,
+            TGNumberFormat::kNEAPositive,
+            TGNumberFormat::kNELLimitMin, 0.1);
+        thrRow->AddFrame(isoMatchThreshEntry_, new TGLayoutHints(kLHintsLeft));
+    }
+    {
+        TGTextButton* loadMatchBtn = new TGTextButton(p, "Load Matches to Histogram");
+        p->AddFrame(loadMatchBtn, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 4));
+        loadMatchBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoApplyAutoMatches()");
+        loadMatchBtn->SetToolTipText(
+            "Auto-match unlabeled peaks within threshold, save labels to cache,\n"
+            "then redraw the histogram with isotope names shown above each peak energy.");
     }
 
     // ── Edit group ────────────────────────────────────────────────────────────
@@ -137,7 +232,7 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
     {
         TGHorizontalFrame* lblRow = new TGHorizontalFrame(editGrp);
         editGrp->AddFrame(lblRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 0));
-        lblRow->AddFrame(new TGLabel(lblRow, "Label:"),
+        lblRow->AddFrame(new TGLabel(lblRow, "Isotope:"),
                          new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
         isoLabelCombo_ = new TGComboBox(lblRow, 961);
         isoLabelCombo_->AddEntry("(none)", 1);
@@ -156,55 +251,23 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
         custLblRow->AddFrame(isoCustomLabelEntry_, new TGLayoutHints(kLHintsExpandX));
     }
 
-    // Class row — class is now the LABEL's class (applies to all peaks with same label)
-    {
-        TGHorizontalFrame* clsRow = new TGHorizontalFrame(editGrp);
-        editGrp->AddFrame(clsRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 0));
-        clsRow->AddFrame(new TGLabel(clsRow, "Class:"),
-                         new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        isoClassCombo_ = new TGComboBox(clsRow, 970);
-        isoClassCombo_->AddEntry("(none)",               1);
-        isoClassCombo_->AddEntry("Parent",               2);
-        isoClassCombo_->AddEntry("Daughter",             3);
-        isoClassCombo_->AddEntry("Granddaughter",        4);
-        isoClassCombo_->AddEntry("Beta-n Daughter",      5);
-        isoClassCombo_->AddEntry("Beta-2n Daughter",     6);
-        isoClassCombo_->AddEntry("Beta-n Granddaughter", 7);
-        isoClassCombo_->AddEntry("Beta-2n Granddaughter",8);
-        isoClassCombo_->AddEntry("Background",           9);
-        isoClassCombo_->AddEntry("Custom",               10);
-        isoClassCombo_->AddEntry("X-ray",                11);
-        isoClassCombo_->Select(1, kFALSE);
-        isoClassCombo_->Resize(150, 22);
-        clsRow->AddFrame(isoClassCombo_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-        isoCustomEntry_ = new TGTextEntry(clsRow, "");
-        isoCustomEntry_->SetToolTipText("Custom class name");
-        clsRow->AddFrame(isoCustomEntry_, new TGLayoutHints(kLHintsExpandX));
-    }
-
-    TGTextButton* applyBtn = new TGTextButton(editGrp, "Apply to Selected Peak");
+    TGTextButton* applyBtn = new TGTextButton(editGrp, "Apply Isotope to Selected Peak");
     editGrp->AddFrame(applyBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 1));
     applyBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoApply()");
-    applyBtn->SetToolTipText("Save label + class to the selected peak's cache entry");
+    applyBtn->SetToolTipText("Save the chosen isotope label to the selected peak's cache entry");
 
-    TGTextButton* applyClsAllBtn = new TGTextButton(editGrp,
-        "Set Class for ALL peaks with this Label");
-    editGrp->AddFrame(applyClsAllBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
-    applyClsAllBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoApplyClassToAll()");
-    applyClsAllBtn->SetToolTipText(
-        "Apply the selected class to every peak in the cache that\n"
-        "shares the currently selected label.\n"
-        "This defines the class for the LABEL, not just this peak.");
+    TGTextButton* setLblDecayBtn = new TGTextButton(editGrp, "Set Isotope & Decay Type...");
+    editGrp->AddFrame(setLblDecayBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+    setLblDecayBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoSetLabelDecay()");
+    setLblDecayBtn->SetToolTipText(
+        "Open a dialog to assign a decay type (class) to any DB isotope.\n"
+        "No peak selection needed — assigns the class globally for that isotope\n"
+        "and propagates it to ALL peaks in the cache labeled with it.");
 
-    TGTextButton* applyAllBtn = new TGTextButton(editGrp, "Apply Label to All in Filter");
-    editGrp->AddFrame(applyAllBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
-    applyAllBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoApplyLabelAll()");
-    applyAllBtn->SetToolTipText("Apply the current label to every peak currently shown in the list");
-
-    TGTextButton* clearBtn = new TGTextButton(editGrp, "Clear Label & Class");
+    TGTextButton* clearBtn = new TGTextButton(editGrp, "Clear Isotope");
     editGrp->AddFrame(clearBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 4));
     clearBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoClear()");
-    clearBtn->SetToolTipText("Remove label and classification from the selected peak's cache entry");
+    clearBtn->SetToolTipText("Remove isotope label and classification from the selected peak's cache entry");
 
     // ── Decay schematic ───────────────────────────────────────────────────────
     TGTextButton* schemBtn = new TGTextButton(p, "Draw Decay Schematic on Canvas");
@@ -215,6 +278,45 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
         "Nodes are classes (Parent → Daughter → Granddaughter).\n"
         "Only classes with labeled peaks are shown.\n"
         "Assign classes via 'Set Class for ALL peaks with this Label'.");
+
+    // ── Parent Nucleus ────────────────────────────────────────────────────────
+    TGGroupFrame* parentGrp = new TGGroupFrame(p, "Parent Nucleus (#beta^{-} chain)");
+    p->AddFrame(parentGrp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+
+    {
+        TGHorizontalFrame* nameRow = new TGHorizontalFrame(parentGrp);
+        parentGrp->AddFrame(nameRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 2));
+        nameRow->AddFrame(new TGLabel(nameRow, "Isotope:"),
+                          new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        isoParentNameEntry_ = new TGTextEntry(nameRow, "");
+        isoParentNameEntry_->SetToolTipText("Parent isotope name, e.g. Kr-90");
+        nameRow->AddFrame(isoParentNameEntry_, new TGLayoutHints(kLHintsExpandX));
+    }
+    {
+        TGHorizontalFrame* znRow = new TGHorizontalFrame(parentGrp);
+        parentGrp->AddFrame(znRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+        znRow->AddFrame(new TGLabel(znRow, "Z:"),
+                        new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        isoParentZEntry_ = new TGNumberEntry(znRow, 0, 4, -1,
+            TGNumberFormat::kNESInteger, TGNumberFormat::kNEANonNegative,
+            TGNumberFormat::kNELLimitMin, 0.0, 118.0);
+        znRow->AddFrame(isoParentZEntry_, new TGLayoutHints(kLHintsLeft, 0, 10, 0, 0));
+        znRow->AddFrame(new TGLabel(znRow, "N:"),
+                        new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        isoParentNEntry_ = new TGNumberEntry(znRow, 0, 4, -1,
+            TGNumberFormat::kNESInteger, TGNumberFormat::kNEANonNegative,
+            TGNumberFormat::kNELLimitMin, 0.0, 300.0);
+        znRow->AddFrame(isoParentNEntry_, new TGLayoutHints(kLHintsLeft));
+    }
+    {
+        TGTextButton* setParentBtn = new TGTextButton(parentGrp, "Set Parent Info");
+        parentGrp->AddFrame(setParentBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        setParentBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoSetParent()");
+        setParentBtn->SetToolTipText(
+            "Save parent isotope name, Z, and N to the cache.\n"
+            "Daughter/granddaughter Z and N are auto-calculated\n"
+            "via beta-minus decay steps when drawing the schematic.");
+    }
 
     // ── Isotope Database browser ──────────────────────────────────────────────
     TGGroupFrame* dbGrp = new TGGroupFrame(p, "Isotope Database");
@@ -245,28 +347,6 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
     isoDbList_->Connect("Selected(Int_t)", "GammaFitGUI", this,
                         "OnIsoDbLineSelected(Int_t)");
 
-    {
-        TGHorizontalFrame* clsRow = new TGHorizontalFrame(dbGrp);
-        dbGrp->AddFrame(clsRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        clsRow->AddFrame(new TGLabel(clsRow, "Class:"),
-                         new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        isoDbClassCombo_ = new TGComboBox(clsRow, 985);
-        isoDbClassCombo_->AddEntry("(none)",               1);
-        isoDbClassCombo_->AddEntry("Parent",               2);
-        isoDbClassCombo_->AddEntry("Daughter",             3);
-        isoDbClassCombo_->AddEntry("Granddaughter",        4);
-        isoDbClassCombo_->AddEntry("Beta-n Daughter",      5);
-        isoDbClassCombo_->AddEntry("Beta-2n Daughter",     6);
-        isoDbClassCombo_->AddEntry("Beta-n Granddaughter", 7);
-        isoDbClassCombo_->AddEntry("Beta-2n Granddaughter",8);
-        isoDbClassCombo_->AddEntry("Background",           9);
-        isoDbClassCombo_->AddEntry("Custom",               10);
-        isoDbClassCombo_->AddEntry("X-ray",                11);
-        isoDbClassCombo_->Select(1, kFALSE);
-        isoDbClassCombo_->Resize(150, 22);
-        clsRow->AddFrame(isoDbClassCombo_, new TGLayoutHints(kLHintsLeft));
-    }
-
     TGTextButton* dbApplyBtn = new TGTextButton(dbGrp,
         "Apply Selected DB Line to Fitted Peak");
     dbGrp->AddFrame(dbApplyBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
@@ -280,8 +360,13 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
 
 void GammaFitGUI::PopulateIsoList(const std::string& filterLabel)
 {
+    Int_t savedScroll = 0;
+    if (TGScrollBar* vsb = isoList_->GetVScrollbar())
+        savedScroll = vsb->GetPosition();
+
     isoList_->RemoveAll();
     isoListKeys_.clear();
+    isoListGaussIdx_.clear();
     isoListAutoMatch_.clear();
     isoListDbEnergy_.clear();
 
@@ -292,40 +377,45 @@ void GammaFitGUI::PopulateIsoList(const std::string& filterLabel)
 
     struct Row {
         std::string key;
-        double energy;
-        std::string label;
+        double      energy;
+        std::string label;         // effective label (per-Gaussian if set, else entry)
         std::string classification;
+        int         gaussIdx;      // -1 = whole entry; 0..n-1 = specific Gaussian
     };
     std::vector<Row> rows;
     for (const auto& kv : fitdb.GetEntries()) {
         if (kv.first.empty() || kv.first[0] == '_') continue;
         const FitEntry& fe = kv.second;
-        if (!filterLabel.empty() && filterLabel != "All" && fe.label != filterLabel) continue;
 
         int npar = (int)fe.params.size();
         if (npar >= 5 && (npar - 2) % 3 == 0) {
             int n = (npar - 2) / 3;
             for (int i = 0; i < n; i++) {
-                double E = fe.params[3*i + 1];
-                rows.push_back({kv.first, E, fe.label, fe.classification});
+                double E        = fe.params[3*i + 1];
+                std::string lbl = fe.PeakLabel(i);
+                std::string cls = fe.PeakClass(i);
+                if (!filterLabel.empty() && filterLabel != "All" && lbl != filterLabel) continue;
+                rows.push_back({kv.first, E, lbl, cls, i});
             }
         } else {
             double E = 0.0;
             try { E = std::stod(kv.first.substr(0, kv.first.find('_'))); } catch (...) {}
-            rows.push_back({kv.first, E, fe.label, fe.classification});
+            if (!filterLabel.empty() && filterLabel != "All" && fe.label != filterLabel) continue;
+            rows.push_back({kv.first, E, fe.label, fe.classification, -1});
         }
     }
 
     std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b){
-        if (a.label != b.label) return a.label < b.label;
         return a.energy < b.energy;
     });
 
-    // ── Unique auto-matching for unlabeled peaks ──────────────────────────────
-    // Greedy: sort unlabeled peaks by energy, match each to the best unclaimed DB line.
-    std::set<std::string> claimedDbLines;  // "isotope_energy" keys already used
+    // ── Unique auto-matching for unlabeled rows ───────────────────────────────
+    // 1. Claim DB lines for already-labeled rows (prevents unlabeled stealing them).
+    // 2. For remaining unlabeled rows, assign the closest unclaimed DB line;
+    //    process in distance-first order so exact matches are claimed before
+    //    nearby peaks can steal them.
+    std::set<std::string> claimedDbLines;
 
-    // First claim DB lines for labeled peaks (don't let unlabeled steal them)
     if (dbLoaded_) {
         for (const auto& r : rows) {
             if (r.label.empty()) continue;
@@ -334,31 +424,46 @@ void GammaFitGUI::PopulateIsoList(const std::string& filterLabel)
             for (const auto& gl : db_.db) {
                 if (gl.isotope != r.label) continue;
                 double d = std::abs(gl.energy - r.energy);
-                if (d < best) {
-                    best = d;
-                    bestKey = gl.isotope + Form("_%.1f", gl.energy);
-                }
+                if (d < best) { best = d; bestKey = gl.isotope + Form("_%.1f", gl.energy); }
             }
             if (!bestKey.empty()) claimedDbLines.insert(bestKey);
         }
     }
 
-    // Pre-compute auto-match for each unlabeled peak (unique)
-    std::vector<std::string> autoMatchVec(rows.size());
-    std::vector<double>      dbEnergyVec(rows.size(), 0.0);
+    // Collect unlabeled rows ordered by distance to nearest DB line.
+    // No window cutoff here — the display column always shows the nearest line
+    // regardless of the match threshold.  Distance-first ordering ensures that
+    // exact-match rows claim their DB lines before nearby rows steal them.
+    std::vector<std::pair<double,size_t>> unlabeledOrder; // {minDist, rowIndex}
     if (dbLoaded_) {
         for (size_t i = 0; i < rows.size(); i++) {
             if (!rows[i].label.empty() || rows[i].energy <= 0) continue;
-            double fwhm = res_.FWHM(rows[i].energy);
-            auto dbM = db_.Match(rows[i].energy, fwhm);
-            for (const auto& m : dbM) {
-                std::string key = m.isotope + Form("_%.1f", m.energy);
-                if (claimedDbLines.count(key)) continue;
-                autoMatchVec[i] = m.isotope;
-                dbEnergyVec[i]  = m.energy;
-                claimedDbLines.insert(key);
-                break;
-            }
+            double minD = std::numeric_limits<double>::max();
+            for (const auto& gl : db_.db)
+                minD = std::min(minD, std::abs(gl.energy - rows[i].energy));
+            unlabeledOrder.push_back({minD, i});
+        }
+        std::sort(unlabeledOrder.begin(), unlabeledOrder.end(),
+                  [](const auto& a, const auto& b){ return a.first < b.first; });
+    }
+
+    // For each unlabeled row, assign the closest unclaimed DB line — no distance
+    // cutoff so the display always shows a suggestion even for distant matches.
+    std::vector<std::string> autoMatchVec(rows.size());
+    std::vector<double>      dbEnergyVec(rows.size(), 0.0);
+    for (const auto& [dist, i] : unlabeledOrder) {
+        double bestD  = std::numeric_limits<double>::max();
+        std::string bestIso; double bestE = 0.0;
+        for (const auto& gl : db_.db) {
+            double d = std::abs(gl.energy - rows[i].energy);
+            std::string k = gl.isotope + Form("_%.1f", gl.energy);
+            if (claimedDbLines.count(k)) continue;
+            if (d < bestD) { bestD = d; bestIso = gl.isotope; bestE = gl.energy; }
+        }
+        if (!bestIso.empty()) {
+            autoMatchVec[i] = bestIso;
+            dbEnergyVec[i]  = bestE;
+            claimedDbLines.insert(bestIso + Form("_%.1f", bestE));
         }
     }
 
@@ -366,15 +471,12 @@ void GammaFitGUI::PopulateIsoList(const std::string& filterLabel)
     for (size_t idx = 0; idx < rows.size(); idx++) {
         const auto& r = rows[idx];
 
-        // Effective label for display: confirmed > (unlabeled)
-        // No "?" suffix — auto-match only shown in DB column
         std::string displayLabel;
         double      dbEnergy = 0.0;
         double      deltaE   = 0.0;
 
         if (!r.label.empty()) {
             displayLabel = r.label;
-            // Find closest DB line for this confirmed label
             if (dbLoaded_) {
                 double best = std::numeric_limits<double>::max();
                 for (const auto& gl : db_.db) {
@@ -386,14 +488,12 @@ void GammaFitGUI::PopulateIsoList(const std::string& filterLabel)
             }
         } else {
             displayLabel = "(unlabeled)";
-            // Use the unique auto-match for the DB column
             if (dbEnergyVec[idx] > 0) {
                 dbEnergy = dbEnergyVec[idx];
                 deltaE   = r.energy - dbEnergy;
             }
         }
 
-        // DB column: "ISO 1173.24(+0.03)" or "  ---"
         std::string dbCol;
         if (dbEnergy > 0) {
             std::string isoName = !r.label.empty() ? r.label : autoMatchVec[idx];
@@ -402,15 +502,19 @@ void GammaFitGUI::PopulateIsoList(const std::string& filterLabel)
             dbCol = "---";
         }
 
-        // Wider spacing: label(16) | energy(10.2f) | db column
         std::string entry = Form("%-16s  %8.2f    %s",
                                  displayLabel.c_str(), r.energy, dbCol.c_str());
         isoList_->AddEntry(entry.c_str(), id++);
         isoListKeys_.push_back(r.key);
+        isoListGaussIdx_.push_back(r.gaussIdx);
         isoListAutoMatch_.push_back(autoMatchVec[idx]);
         isoListDbEnergy_.push_back(dbEnergy);
     }
     isoList_->MapSubwindows(); isoList_->Layout();
+    if (savedScroll > 0) {
+        if (TGScrollBar* vsb = isoList_->GetVScrollbar())
+            vsb->SetPosition(savedScroll);
+    }
 }
 
 void GammaFitGUI::RefreshIsoDisplay()
@@ -423,8 +527,10 @@ void GammaFitGUI::RefreshIsoDisplay()
 
     std::set<std::string> labels;
     for (const auto& kv : fitdb.GetEntries()) {
-        if (!kv.first.empty() && kv.first[0] != '_' && !kv.second.label.empty())
-            labels.insert(kv.second.label);
+        if (kv.first.empty() || kv.first[0] == '_') continue;
+        if (!kv.second.label.empty()) labels.insert(kv.second.label);
+        for (const auto& pl : kv.second.peakLabels)
+            if (!pl.empty()) labels.insert(pl);
     }
 
     if (isoFilterCombo_) {
@@ -465,7 +571,9 @@ void GammaFitGUI::OnIsoFilterChanged(Int_t /*id*/)
 void GammaFitGUI::OnIsoListSelected(Int_t id)
 {
     if (id < 1 || (size_t)id > isoListKeys_.size()) return;
+    isoLabelDecayPeakSel_ = id;  // keep saved selection in sync
     const std::string& key = isoListKeys_[id - 1];
+    int gaussIdx = ((size_t)(id-1) < isoListGaussIdx_.size()) ? isoListGaussIdx_[id-1] : -1;
     const std::string autoMatch = ((size_t)(id-1) < isoListAutoMatch_.size())
                                   ? isoListAutoMatch_[id - 1] : "";
 
@@ -475,11 +583,14 @@ void GammaFitGUI::OnIsoListSelected(Int_t id)
     auto it = entries.find(key);
     if (it == entries.end()) return;
 
+    // Effective label for this row: per-Gaussian if available, else entry label
+    const std::string curLabel = it->second.PeakLabel(gaussIdx);
+
     if (isoLabelCombo_) {
         isoLabelCombo_->RemoveAll();
         isoLabelCombo_->AddEntry("(none)", 1);
         int cid = 2;
-        const std::string& curLabel = it->second.label;
+        // curLabel is already per-Gaussian or entry-level
 
         if (!curLabel.empty())
             isoLabelCombo_->AddEntry(curLabel.c_str(), cid++);
@@ -511,7 +622,6 @@ void GammaFitGUI::OnIsoListSelected(Int_t id)
     }
 
     if (isoCustomLabelEntry_) {
-        const std::string& curLabel = it->second.label;
         bool inDB = false;
         if (dbLoaded_ && !curLabel.empty())
             for (const auto& gl : db_.db)
@@ -520,20 +630,22 @@ void GammaFitGUI::OnIsoListSelected(Int_t id)
     }
 
     if (isoClassCombo_) {
-        // Class comes from labelClassMap_ for the peak's label, else stored classification
-        const std::string& lbl = it->second.label;
-        std::string cls;
-        if (!lbl.empty() && labelClassMap_.count(lbl))
-            cls = labelClassMap_.at(lbl);
-        else
-            cls = it->second.classification;
+        // Class: per-Gaussian if available, else from labelClassMap_ / entry classification
+        std::string cls = it->second.PeakClass(gaussIdx);
+        if (cls.empty() && !curLabel.empty() && labelClassMap_.count(curLabel))
+            cls = labelClassMap_.at(curLabel);
         // Auto-suggest X-ray for peaks below 100 keV
-        double peakE = (it->second.params.size() >= 2) ? it->second.params[1] : 0.0;
+        int npar = (int)it->second.params.size();
+        double peakE = 0.0;
+        if (gaussIdx >= 0 && npar >= 5 && (npar-2)%3==0 && gaussIdx < (npar-2)/3)
+            peakE = it->second.params[3*gaussIdx + 1];
+        else if (npar >= 2)
+            peakE = it->second.params[1];
         if (cls.empty() && peakE > 0 && peakE < 100.0) cls = "X-ray";
         isoClassCombo_->Select(ClassToComboIndex(cls), kFALSE);
     }
     if (isoCustomEntry_) {
-        const std::string& cls = it->second.classification;
+        std::string cls = it->second.PeakClass(gaussIdx);
         if (cls.size() > 7 && cls.substr(0,7) == "Custom:")
             isoCustomEntry_->SetText(cls.substr(7).c_str());
         else
@@ -548,7 +660,9 @@ void GammaFitGUI::OnIsoApply()
     if (sel < 1 || (size_t)sel > isoListKeys_.size()) {
         AppendLog("Select a peak from the list first."); return;
     }
-    const std::string& key = isoListKeys_[sel - 1];
+    const std::string& key    = isoListKeys_[sel - 1];
+    int                gaussIdx = ((size_t)(sel-1) < isoListGaussIdx_.size())
+                                  ? isoListGaussIdx_[sel-1] : -1;
 
     FitDatabase fitdb;
     fitdb.Load(CacheFileFor(isoHistName_));
@@ -557,25 +671,73 @@ void GammaFitGUI::OnIsoApply()
     if (it == entries.end()) { AppendLog("Cache entry not found."); return; }
 
     FitEntry e = it->second;
+
+    // Determine new label
+    std::string newLabel;
     {
         std::string customLbl = isoCustomLabelEntry_ ? isoCustomLabelEntry_->GetText() : "";
         if (!customLbl.empty()) {
-            e.label = customLbl;
+            newLabel = customLbl;
         } else if (isoLabelCombo_) {
             TGLBEntry* le = isoLabelCombo_->GetSelectedEntry();
             std::string lbl = le ? le->GetTitle() : "";
-            e.label = (lbl != "(none)") ? lbl : "";
+            newLabel = (lbl != "(none)") ? lbl : "";
         }
     }
-    if (isoClassCombo_) {
-        std::string cust = isoCustomEntry_ ? isoCustomEntry_->GetText() : "";
-        e.classification = ClassToString(isoClassCombo_->GetSelected(), cust);
+
+    // Apply label: per-Gaussian for wide entries, entry-level for tight/single
+    if (gaussIdx >= 0) {
+        int npar = (int)e.params.size();
+        int n    = (npar >= 5 && (npar-2)%3==0) ? (npar-2)/3 : 1;
+        if ((int)e.peakLabels.size() < n)          e.peakLabels.resize(n);
+        if ((int)e.peakClassifications.size() < n) e.peakClassifications.resize(n);
+        e.peakLabels[gaussIdx] = newLabel;
+    } else {
+        e.label = newLabel;
+        // Whole-entry assignment clears per-Gaussian labels (they'd be stale)
+        e.peakLabels.clear();
+        e.peakClassifications.clear();
+    }
+
+    // Auto-classify
+    const std::string& appliedLabel = (gaussIdx >= 0) ? e.peakLabels[gaussIdx] : e.label;
+    if (!appliedLabel.empty()) {
+        std::string cls = AutoClassFromParent(appliedLabel);
+        if (cls.empty()) {
+            auto mapIt = labelClassMap_.find(appliedLabel);
+            if (mapIt != labelClassMap_.end()) cls = mapIt->second;
+        }
+        if (!cls.empty()) {
+            if (gaussIdx >= 0)
+                e.peakClassifications[gaussIdx] = cls;
+            else
+                e.classification = cls;
+            labelClassMap_[appliedLabel] = cls;
+        }
     }
 
     fitdb.ForceStore(key, e);
+
+    // Propagate entry-level classification to peers with same entry label
+    if (gaussIdx < 0 && !e.classification.empty() && !e.label.empty()) {
+        for (const auto& kv : fitdb.GetEntries()) {
+            if (kv.first == key || kv.first.empty() || kv.first[0] == '_') continue;
+            if (kv.second.label != e.label) continue;
+            FitEntry pe = kv.second;
+            pe.classification = e.classification;
+            fitdb.ForceStore(kv.first, pe);
+        }
+        SaveLabelClassMap(fitdb);
+    } else if (gaussIdx >= 0 && !appliedLabel.empty()) {
+        SaveLabelClassMap(fitdb);
+    }
+
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
-    AppendLog("Updated: " + key + "  label=" + e.label + "  class=" + e.classification);
+    std::string lbl = (gaussIdx >= 0) ? e.peakLabels[gaussIdx] : e.label;
+    std::string cls = (gaussIdx >= 0) ? e.peakClassifications[gaussIdx] : e.classification;
+    AppendLog("Updated: " + key + (gaussIdx >= 0 ? Form("[G%d]", gaussIdx) : "") +
+              "  label=" + lbl + "  class=" + cls);
     RefreshIsoDisplay();
 }
 
@@ -670,14 +832,24 @@ void GammaFitGUI::OnIsoClear()
     if (sel < 1 || (size_t)sel > isoListKeys_.size()) {
         AppendLog("Select a peak from the list first."); return;
     }
-    const std::string& key = isoListKeys_[sel - 1];
+    const std::string& key    = isoListKeys_[sel - 1];
+    int                gaussIdx = ((size_t)(sel-1) < isoListGaussIdx_.size())
+                                  ? isoListGaussIdx_[sel-1] : -1;
     FitDatabase fitdb;
     fitdb.Load(CacheFileFor(isoHistName_));
     auto it = fitdb.GetEntries().find(key);
     if (it == fitdb.GetEntries().end()) { AppendLog("Cache entry not found."); return; }
     FitEntry e = it->second;
-    e.label          = "";
-    e.classification = "";
+    if (gaussIdx >= 0 && gaussIdx < (int)e.peakLabels.size()) {
+        e.peakLabels[gaussIdx]          = "";
+        if (gaussIdx < (int)e.peakClassifications.size())
+            e.peakClassifications[gaussIdx] = "";
+    } else {
+        e.label          = "";
+        e.classification = "";
+        e.peakLabels.clear();
+        e.peakClassifications.clear();
+    }
     fitdb.ForceStore(key, e);
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
@@ -685,7 +857,8 @@ void GammaFitGUI::OnIsoClear()
     if (isoCustomLabelEntry_) isoCustomLabelEntry_->SetText("");
     if (isoClassCombo_)       isoClassCombo_->Select(1, kFALSE);
     if (isoCustomEntry_)      isoCustomEntry_->SetText("");
-    AppendLog("Cleared label/class for: " + key);
+    AppendLog("Cleared label/class for: " + key +
+              (gaussIdx >= 0 ? Form("[G%d]", gaussIdx) : ""));
     RefreshIsoDisplay();
 }
 
@@ -697,9 +870,12 @@ void GammaFitGUI::OnIsoClearAll()
     int n = 0;
     for (const auto& kv : fitdb.GetEntries()) {
         if (kv.first.empty() || kv.first[0] == '_') continue;
-        if (kv.second.label.empty() && kv.second.classification.empty()) continue;
+        bool hasAny = !kv.second.label.empty() || !kv.second.classification.empty()
+                      || !kv.second.peakLabels.empty() || !kv.second.peakClassifications.empty();
+        if (!hasAny) continue;
         FitEntry e = kv.second;
         e.label = ""; e.classification = "";
+        e.peakLabels.clear(); e.peakClassifications.clear();
         fitdb.ForceStore(kv.first, e);
         ++n;
     }
@@ -719,70 +895,586 @@ void GammaFitGUI::OnIsoAutoMatchAll()
     FitDatabase fitdb;
     fitdb.Load(CacheFileFor(isoHistName_));
 
-    // Collect all peaks and their energies
-    struct PeakInfo { std::string key; double energy; bool hasLabel; };
-    std::vector<PeakInfo> allPeaks;
+    // Each "match unit" is one claimable peak.  For multi-Gaussian entries:
+    //   - if all Gaussians span ≤ 4 keV → one unit (highest-amplitude Gaussian)
+    //   - if span > 4 keV               → one unit per Gaussian (each gets its own label)
+    // gaussIdx == -1 means the label goes to the entry .label field.
+    // gaussIdx >= 0 means the label goes to entry .peakLabels[gaussIdx].
+    struct MatchUnit {
+        std::string entryKey;
+        int         gaussIdx;  // -1 = whole entry, 0..n-1 = specific Gaussian
+        double      energy;
+        bool        hasLabel;
+    };
+
+    std::vector<MatchUnit> units;
     for (const auto& kv : fitdb.GetEntries()) {
         if (kv.first.empty() || kv.first[0] == '_') continue;
         const FitEntry& fe = kv.second;
         int npar = (int)fe.params.size();
+
+        // Extract per-Gaussian energies and amplitudes
+        std::vector<std::pair<double,double>> gaussians;  // {energy, amplitude}
         if (npar >= 5 && (npar - 2) % 3 == 0) {
             int n = (npar - 2) / 3;
             for (int i = 0; i < n; i++)
-                allPeaks.push_back({kv.first, fe.params[3*i+1], !fe.label.empty()});
+                gaussians.push_back({fe.params[3*i + 1], fe.params[3*i]});
+        } else if (npar >= 2) {
+            double repE = fe.params[1];
+            if (repE <= 0)
+                try { repE = std::stod(kv.first.substr(0, kv.first.find('_'))); } catch (...) {}
+            if (repE > 0) gaussians.push_back({repE, npar >= 1 ? fe.params[0] : 1.0});
+        }
+        if (gaussians.empty()) continue;
+
+        // Determine spread
+        double minE = gaussians[0].first, maxE = gaussians[0].first;
+        for (const auto& [e, a] : gaussians) { minE = std::min(minE, e); maxE = std::max(maxE, e); }
+        bool tightCluster = (maxE - minE) <= 4.0;
+
+        if (tightCluster || gaussians.size() == 1) {
+            // One unit for the whole entry — use highest-amplitude Gaussian as representative
+            double repE = gaussians[0].first, bestAmp = gaussians[0].second;
+            for (const auto& [e, a] : gaussians) if (a > bestAmp) { bestAmp = a; repE = e; }
+            bool hasLbl = !fe.label.empty();
+            units.push_back({kv.first, -1, repE, hasLbl});
         } else {
-            double E = 0.0;
-            try { E = std::stod(kv.first.substr(0, kv.first.find('_'))); } catch (...) {}
-            allPeaks.push_back({kv.first, E, !fe.label.empty()});
+            // One unit per Gaussian — each gets matched and labeled independently.
+            // Only per-Gaussian labels count here.  A legacy entry-level label (set
+            // by old single-unit matching) is intentionally ignored so that all
+            // Gaussians in the wide entry are re-matched individually.
+            int n = (int)gaussians.size();
+            for (int i = 0; i < n; i++) {
+                bool hasLbl = (i < (int)fe.peakLabels.size() && !fe.peakLabels[i].empty());
+                units.push_back({kv.first, i, gaussians[i].first, hasLbl});
+            }
         }
     }
 
-    // Claim DB lines for already-labeled peaks first
+    // Threshold from UI (default 10 keV)
+    const double matchThresh = (isoMatchThreshEntry_
+                                ? isoMatchThreshEntry_->GetNumber() : 10.0);
+
+    // Distance-only unclaimed line lookup — rejects lines beyond matchThresh
+    auto findClosestUnclaimed = [&](double energy,
+                                    const std::set<std::string>& claimed)
+        -> std::pair<std::string, double>
+    {
+        double bestDist = std::numeric_limits<double>::max();
+        std::string bestIso; double bestE = 0.0;
+        for (const auto& gl : db_.db) {
+            double dE = std::fabs(gl.energy - energy);
+            if (dE > matchThresh) continue;
+            std::string k = gl.isotope + Form("_%.1f", gl.energy);
+            if (claimed.count(k)) continue;
+            if (dE < bestDist) { bestDist = dE; bestIso = gl.isotope; bestE = gl.energy; }
+        }
+        return {bestIso, bestE};
+    };
+
+    // Pass 1: claim DB lines for already-labeled units (prevents them being stolen)
     std::set<std::string> claimedLines;
-    for (const auto& pk : allPeaks) {
-        if (!pk.hasLabel) continue;
-        const auto& e = fitdb.GetEntries().at(pk.key);
-        if (e.label.empty()) continue;
+    for (const auto& u : units) {
+        if (!u.hasLabel) continue;
+        const FitEntry& fe = fitdb.GetEntries().at(u.entryKey);
+        std::string lbl = fe.PeakLabel(u.gaussIdx);
+        if (lbl.empty()) continue;
         double best = std::numeric_limits<double>::max();
         std::string bestKey;
         for (const auto& gl : db_.db) {
-            if (gl.isotope != e.label) continue;
-            double d = std::abs(gl.energy - pk.energy);
+            if (gl.isotope != lbl) continue;
+            double d = std::fabs(gl.energy - u.energy);
             if (d < best) { best = d; bestKey = gl.isotope + Form("_%.1f", gl.energy); }
         }
         if (!bestKey.empty()) claimedLines.insert(bestKey);
     }
 
-    // Sort unlabeled peaks by energy for deterministic matching
-    std::vector<PeakInfo*> unlabeled;
-    for (auto& pk : allPeaks)
-        if (!pk.hasLabel && pk.energy > 0) unlabeled.push_back(&pk);
+    // Pass 2: sort unlabeled units within matchThresh by distance (distance-first
+    // ordering ensures exact-match units claim their lines before nearby units steal them)
+    std::vector<std::pair<double, size_t>> unlabeled;  // {minDist, unitIndex}
+    for (size_t i = 0; i < units.size(); i++) {
+        if (units[i].hasLabel) continue;
+        double minD = std::numeric_limits<double>::max();
+        for (const auto& gl : db_.db) {
+            double d = std::fabs(gl.energy - units[i].energy);
+            if (d <= matchThresh) minD = std::min(minD, d);
+        }
+        if (minD <= matchThresh)
+            unlabeled.push_back({minD, i});
+    }
     std::sort(unlabeled.begin(), unlabeled.end(),
-              [](const PeakInfo* a, const PeakInfo* b){ return a->energy < b->energy; });
+              [](const auto& a, const auto& b){ return a.first < b.first; });
 
     int nMatched = 0;
-    for (auto* pk : unlabeled) {
-        double fwhm = res_.FWHM(pk->energy);
-        auto dbM = db_.Match(pk->energy, fwhm);
-        for (const auto& m : dbM) {
-            std::string dbKey = m.isotope + Form("_%.1f", m.energy);
-            if (claimedLines.count(dbKey)) continue;
-            // Apply this match
-            auto it = fitdb.GetEntries().find(pk->key);
-            if (it == fitdb.GetEntries().end()) break;
-            FitEntry e = it->second;
-            e.label = m.isotope;
-            fitdb.ForceStore(pk->key, e);
-            claimedLines.insert(dbKey);
-            ++nMatched;
-            break;
+    for (const auto& [dist, ui] : unlabeled) {
+        const MatchUnit& u = units[ui];
+        auto [iso, dbE] = findClosestUnclaimed(u.energy, claimedLines);
+        if (iso.empty()) continue;
+
+        auto it = fitdb.GetEntries().find(u.entryKey);
+        if (it == fitdb.GetEntries().end()) continue;
+        FitEntry e = it->second;
+
+        // Auto-classify
+        std::string cls = AutoClassFromParent(iso);
+        if (cls.empty()) {
+            auto mapIt = labelClassMap_.find(iso);
+            if (mapIt != labelClassMap_.end()) cls = mapIt->second;
+        }
+
+        if (u.gaussIdx < 0) {
+            // Tight cluster or single peak — label the whole entry
+            e.label = iso;
+            if (!cls.empty()) { e.classification = cls; }
+        } else {
+            // Wide multi-Gaussian — label only this Gaussian
+            int npar = (int)e.params.size();
+            int n    = (npar >= 5 && (npar-2)%3==0) ? (npar-2)/3 : 1;
+            if ((int)e.peakLabels.size() < n)          e.peakLabels.resize(n);
+            if ((int)e.peakClassifications.size() < n) e.peakClassifications.resize(n);
+            e.peakLabels[u.gaussIdx] = iso;
+            if (!cls.empty()) e.peakClassifications[u.gaussIdx] = cls;
+        }
+        if (!cls.empty()) labelClassMap_[iso] = cls;
+
+        fitdb.ForceStore(u.entryKey, e);
+        claimedLines.insert(iso + Form("_%.1f", dbE));
+        ++nMatched;
+    }
+
+    SaveLabelClassMap(fitdb);
+    mkdir(kCacheDir, 0755);
+    fitdb.Save(CacheFileFor(isoHistName_));
+    AppendLog("Auto-matched " + std::to_string(nMatched) + " peaks (≤4 keV clusters = one unit).");
+    RefreshIsoDisplay();
+}
+
+void GammaFitGUI::OnIsoApplyAutoMatches()
+{
+    // Match labels and save to cache
+    OnIsoAutoMatchAll();
+
+    if (isoHistName_.empty() || !canvas_) return;
+
+    // Switch to the matched histogram if not already showing it
+    if (currentHist_ != isoHistName_) {
+        currentHist_ = isoHistName_;
+        bool owned = false;
+        if (rawHistOwned_ && rawHist_) { delete rawHist_; rawHist_ = nullptr; }
+        rawHist_      = LoadHistFromFile(isoHistName_, owned);
+        rawHistOwned_ = owned;
+    }
+    if (!rawHist_) return;
+
+    TCanvas* c = canvas_->GetCanvas();
+    if (histViewCombo_) OnHistViewChanged(histViewCombo_->GetSelected());
+    else                RedrawCurrent();
+    OverlayFitPeaks(isoHistName_, c);
+    AppendLog("Histogram redrawn with isotope labels for " + isoHistName_);
+}
+
+void GammaFitGUI::OnIsoSetParent()
+{
+    if (isoHistName_.empty()) { AppendLog("Refresh cache first."); return; }
+
+    isoParentIsotope_ = isoParentNameEntry_ ? std::string(isoParentNameEntry_->GetText()) : "";
+    isoParentZval_    = isoParentZEntry_    ? (int)isoParentZEntry_->GetNumber()  : 0;
+    isoParentNval_    = isoParentNEntry_    ? (int)isoParentNEntry_->GetNumber()  : 0;
+
+    // Parent is always "Parent" class
+    if (!isoParentIsotope_.empty()) labelClassMap_[isoParentIsotope_] = "Parent";
+
+    FitDatabase fitdb;
+    fitdb.Load(CacheFileFor(isoHistName_));
+
+    // Persist parent info
+    FitEntry pe;
+    pe.key     = kParentInfoKey;
+    pe.label   = Form("name=%s;Z=%d;N=%d",
+                      isoParentIsotope_.c_str(), isoParentZval_, isoParentNval_);
+    pe.chi2ndf = 0; pe.residualRMS = 0; pe.maxPull = 0;
+    fitdb.ForceStore(kParentInfoKey, pe);
+
+    // Auto-classify every labeled peak using the new parent chain
+    int nClassified = 0;
+    for (const auto& kv : fitdb.GetEntries()) {
+        if (kv.first.empty() || kv.first[0] == '_') continue;
+        const FitEntry& fe = kv.second;
+        bool changed = false;
+        FitEntry e = fe;
+
+        // Entry-level label
+        if (!e.label.empty()) {
+            std::string cls = AutoClassFromParent(e.label);
+            if (!cls.empty() && cls != e.classification) {
+                e.classification = cls;
+                labelClassMap_[e.label] = cls;
+                changed = true;
+            }
+        }
+        // Per-Gaussian labels (wide multi-peak entries)
+        for (int i = 0; i < (int)e.peakLabels.size(); i++) {
+            if (e.peakLabels[i].empty()) continue;
+            std::string cls = AutoClassFromParent(e.peakLabels[i]);
+            if (cls.empty()) continue;
+            if ((int)e.peakClassifications.size() <= i)
+                e.peakClassifications.resize(i + 1);
+            if (cls != e.peakClassifications[i]) {
+                e.peakClassifications[i] = cls;
+                labelClassMap_[e.peakLabels[i]] = cls;
+                changed = true;
+            }
+        }
+        if (changed) { fitdb.ForceStore(kv.first, e); ++nClassified; }
+    }
+
+    SaveLabelClassMap(fitdb);
+    mkdir(kCacheDir, 0755);
+    fitdb.Save(CacheFileFor(isoHistName_));
+
+    const char* sym = ElementSymbol(isoParentZval_);
+    int A = isoParentZval_ + isoParentNval_;
+    AppendLog(Form("Parent set: %s  Z=%d  N=%d  A=%d  (%s)  — auto-classified %d peaks",
+                   isoParentIsotope_.c_str(), isoParentZval_, isoParentNval_, A, sym,
+                   nClassified));
+    RefreshIsoDisplay();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Set Label & Decay dialog
+// ─────────────────────────────────────────────────────────────────────────────
+
+void GammaFitGUI::OnIsoSetLabelDecay()
+{
+    if (!dbLoaded_) { AppendLog("Load isotope DB first."); return; }
+    if (isoHistName_.empty()) { AppendLog("Refresh cache first."); return; }
+
+    // If already open, raise to front
+    if (isoLabelDecayDlg_) {
+        isoLabelDecayDlg_->RaiseWindow();
+        return;
+    }
+
+    // Save the currently selected peak — the modeless dialog steals focus and
+    // causes isoList_->GetSelected() to return -1 when Apply is clicked.
+    isoLabelDecayPeakSel_ = isoList_ ? isoList_->GetSelected() : -1;
+
+    // Create modeless popup — no WaitFor, stays open across multiple Apply clicks
+    isoLabelDecayDlg_ = new TGTransientFrame(gClient->GetRoot(), this, 390, 530);
+    isoLabelDecayDlg_->SetWindowName("Set Isotope & Decay Type");
+    isoLabelDecayDlg_->SetCleanup(kDeepCleanup);
+    // Null member pointers when closed via X or our Close button
+    isoLabelDecayDlg_->Connect("CloseWindow()", "GammaFitGUI", this,
+                               "OnIsoLabelDecayDlgClosed()");
+
+    // Search row
+    {
+        TGHorizontalFrame* sRow = new TGHorizontalFrame(isoLabelDecayDlg_);
+        isoLabelDecayDlg_->AddFrame(sRow,
+            new TGLayoutHints(kLHintsExpandX, 8, 8, 8, 2));
+        sRow->AddFrame(new TGLabel(sRow, "Search:"),
+            new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        isoLabelDecaySearch_ = new TGTextEntry(sRow, "");
+        sRow->AddFrame(isoLabelDecaySearch_, new TGLayoutHints(kLHintsExpandX, 0, 4, 0, 0));
+        TGTextButton* fBtn = new TGTextButton(sRow, "Filter");
+        sRow->AddFrame(fBtn, new TGLayoutHints(kLHintsLeft));
+        fBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoLabelDecaySearch()");
+    }
+
+    // Isotope list
+    isoLabelDecayList_ = new TGListBox(isoLabelDecayDlg_, 1100);
+    isoLabelDecayList_->Resize(370, 310);
+    isoLabelDecayDlg_->AddFrame(isoLabelDecayList_,
+        new TGLayoutHints(kLHintsExpandX, 8, 8, 2, 4));
+
+    // Populate with unique sorted DB names (append [class] when known)
+    {
+        std::set<std::string> seen;
+        std::vector<std::string> names;
+        for (const auto& gl : db_.db)
+            if (seen.insert(gl.isotope).second)
+                names.push_back(gl.isotope);
+        std::sort(names.begin(), names.end());
+        int idx = 1;
+        for (const auto& nm : names) {
+            std::string display = nm;
+            auto mapIt = labelClassMap_.find(nm);
+            if (mapIt != labelClassMap_.end() && !mapIt->second.empty())
+                display += "  [" + mapIt->second + "]";
+            isoLabelDecayList_->AddEntry(display.c_str(), idx++);
+        }
+        isoLabelDecayList_->MapSubwindows(); isoLabelDecayList_->Layout();
+    }
+
+    // Decay type row
+    {
+        TGHorizontalFrame* dtRow = new TGHorizontalFrame(isoLabelDecayDlg_);
+        isoLabelDecayDlg_->AddFrame(dtRow,
+            new TGLayoutHints(kLHintsExpandX, 8, 8, 4, 4));
+        dtRow->AddFrame(new TGLabel(dtRow, "Decay type:"),
+            new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+        isoDecayTypeCombo_ = new TGComboBox(dtRow, 1101);
+        isoDecayTypeCombo_->AddEntry("(none)",                1);
+        isoDecayTypeCombo_->AddEntry("Daughter",              2);
+        isoDecayTypeCombo_->AddEntry("Granddaughter",         3);
+        isoDecayTypeCombo_->AddEntry("Beta-n Daughter",       4);
+        isoDecayTypeCombo_->AddEntry("Beta-2n Daughter",      5);
+        isoDecayTypeCombo_->AddEntry("Beta-n Granddaughter",  6);
+        isoDecayTypeCombo_->AddEntry("Beta-2n Granddaughter", 7);
+        isoDecayTypeCombo_->AddEntry("Background",            8);
+        isoDecayTypeCombo_->AddEntry("X-ray",                 9);
+        isoDecayTypeCombo_->Select(1, kFALSE);
+        isoDecayTypeCombo_->Resize(180, 22);
+        dtRow->AddFrame(isoDecayTypeCombo_, new TGLayoutHints(kLHintsLeft));
+    }
+
+    // Buttons row — Apply keeps dialog open; Close dismisses it
+    {
+        TGHorizontalFrame* bRow = new TGHorizontalFrame(isoLabelDecayDlg_);
+        isoLabelDecayDlg_->AddFrame(bRow,
+            new TGLayoutHints(kLHintsCenterX, 8, 8, 6, 8));
+        TGTextButton* applyBtn = new TGTextButton(bRow, "  Apply  ");
+        bRow->AddFrame(applyBtn, new TGLayoutHints(kLHintsLeft, 0, 12, 0, 0));
+        applyBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoLabelDecayApply()");
+        TGTextButton* closeBtn = new TGTextButton(bRow, "  Close  ");
+        bRow->AddFrame(closeBtn, new TGLayoutHints(kLHintsLeft));
+        closeBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoLabelDecayClose()");
+    }
+
+    isoLabelDecayDlg_->MapSubwindows();
+    isoLabelDecayDlg_->Layout();
+    isoLabelDecayDlg_->MapWindow();
+    isoLabelDecayDlg_->CenterOnParent();
+    // Dialog is now open and modeless — control returns immediately
+}
+
+void GammaFitGUI::OnIsoLabelDecayApply()
+{
+    if (!isoLabelDecayList_ || !isoDecayTypeCombo_) return;
+    if (isoHistName_.empty()) return;
+
+    TGLBEntry* le = isoLabelDecayList_->GetSelectedEntry();
+    std::string isotope = le ? le->GetTitle() : "";
+    // Strip " [class]" annotation added for display
+    auto bracketPos = isotope.find("  [");
+    if (bracketPos != std::string::npos) isotope = isotope.substr(0, bracketPos);
+    if (isotope.empty()) { AppendLog("Select an isotope from the list first."); return; }
+
+    TGLBEntry* de = isoDecayTypeCombo_->GetSelectedEntry();
+    std::string dt = de ? de->GetTitle() : "";
+    std::string decayType = (dt == "(none)") ? "" : dt;
+
+    if (decayType.empty()) {
+        AppendLog("Select a decay type first."); return;
+    }
+
+    FitDatabase fitdb;
+    fitdb.Load(CacheFileFor(isoHistName_));
+
+    // Assign class to this isotope in the global map
+    labelClassMap_[isotope] = decayType;
+
+    // Propagate to ALL peaks (entry-level and per-Gaussian) labeled with this isotope
+    int nUpdated = 0;
+    for (const auto& kv : fitdb.GetEntries()) {
+        if (kv.first.empty() || kv.first[0] == '_') continue;
+        FitEntry e = kv.second;
+        bool changed = false;
+
+        if (e.label == isotope) {
+            e.classification = decayType;
+            changed = true;
+        }
+        for (int i = 0; i < (int)e.peakLabels.size(); i++) {
+            if (e.peakLabels[i] == isotope) {
+                if ((int)e.peakClassifications.size() <= i)
+                    e.peakClassifications.resize(i + 1);
+                e.peakClassifications[i] = decayType;
+                changed = true;
+            }
+        }
+        if (changed) {
+            fitdb.ForceStore(kv.first, e);
+            ++nUpdated;
         }
     }
 
+    SaveLabelClassMap(fitdb);
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
-    AppendLog("Auto-matched " + std::to_string(nMatched) + " unlabeled peaks (unique).");
+    AppendLog("Assigned decay type '" + decayType + "' to isotope '" + isotope +
+              "' — updated " + std::to_string(nUpdated) + " peaks.");
     RefreshIsoDisplay();
+    // Dialog stays open for the next assignment
+}
+
+void GammaFitGUI::OnIsoLabelDecayClose()
+{
+    // Triggered by the Close button — let CloseWindow handle deletion
+    if (isoLabelDecayDlg_) isoLabelDecayDlg_->CloseWindow();
+}
+
+void GammaFitGUI::OnIsoLabelDecayDlgClosed()
+{
+    // Triggered by the CloseWindow signal (X button or our Close button) —
+    // null member pointers before the widget tree is destroyed
+    isoLabelDecayDlg_    = nullptr;
+    isoLabelDecayList_   = nullptr;
+    isoDecayTypeCombo_   = nullptr;
+    isoLabelDecaySearch_ = nullptr;
+}
+
+void GammaFitGUI::OnIsoLabelDecaySearch()
+{
+    if (!isoLabelDecayList_ || !isoLabelDecaySearch_) return;
+    std::string filter = isoLabelDecaySearch_->GetText();
+    std::string lf = filter;
+    std::transform(lf.begin(), lf.end(), lf.begin(), ::tolower);
+
+    isoLabelDecayList_->RemoveAll();
+    std::set<std::string> seen;
+    std::vector<std::string> names;
+    for (const auto& gl : db_.db)
+        if (seen.insert(gl.isotope).second) {
+            std::string nl = gl.isotope;
+            std::transform(nl.begin(), nl.end(), nl.begin(), ::tolower);
+            if (lf.empty() || nl.find(lf) != std::string::npos)
+                names.push_back(gl.isotope);
+        }
+    std::sort(names.begin(), names.end());
+    int idx = 1;
+    for (const auto& nm : names) {
+        std::string display = nm;
+        auto mapIt = labelClassMap_.find(nm);
+        if (mapIt != labelClassMap_.end() && !mapIt->second.empty())
+            display += "  [" + mapIt->second + "]";
+        isoLabelDecayList_->AddEntry(display.c_str(), idx++);
+    }
+    isoLabelDecayList_->MapSubwindows();
+    isoLabelDecayList_->Layout();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auto-classify from parent decay chain
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Parse "44Cl", "Bi214", "K40" etc. into (A, Z, N). Returns false if unrecognised.
+static bool ParseIsotopeName(const std::string& name, int& A, int& Z, int& N)
+{
+    if (name.empty()) return false;
+
+    // Leading digits: "44Cl", "43Ar", "44S"
+    {
+        size_t i = 0;
+        while (i < name.size() && std::isdigit(name[i])) ++i;
+        if (i > 0 && i < name.size()) {
+            try {
+                int a = std::stoi(name.substr(0, i));
+                int z = SymbolToZ(name.substr(i));
+                if (z > 0 && a > z) { A=a; Z=z; N=a-z; return true; }
+            } catch (...) {}
+        }
+    }
+
+    // Trailing digits: "Bi214", "K40", "Ti208"
+    {
+        size_t j = name.size();
+        while (j > 0 && std::isdigit(name[j-1])) --j;
+        if (j < name.size() && j > 0) {
+            try {
+                int a = std::stoi(name.substr(j));
+                int z = SymbolToZ(name.substr(0, j));
+                if (z > 0 && a > z) { A=a; Z=z; N=a-z; return true; }
+            } catch (...) {}
+        }
+    }
+    return false;
+}
+
+std::string GammaFitGUI::AutoClassFromParent(const std::string& label)
+{
+    if (isoParentZval_ <= 0 || isoParentNval_ <= 0) return "";
+    int A, Z, N;
+    if (!ParseIsotopeName(label, A, Z, N)) return "";
+
+    int dZ = Z - isoParentZval_;
+    int dN = N - isoParentNval_;
+
+    // Pure beta-minus chain: each step dZ=+1, dN=-1
+    if (dZ >= 0 && dZ <= 4 && dZ == -dN) {
+        switch (dZ) {
+        case 0: return "Parent";
+        case 1: return "Daughter";
+        case 2: return "Granddaughter";
+        case 3: return "Beta-n Granddaughter";
+        case 4: return "Beta-2n Granddaughter";
+        }
+    }
+    return "";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Preview selected peak on canvas
+// ─────────────────────────────────────────────────────────────────────────────
+
+void GammaFitGUI::OnIsoPeakPreview()
+{
+    if (!isoList_) return;
+    Int_t sel = isoList_->GetSelected();
+    if (sel < 1 || (size_t)sel > isoListKeys_.size()) {
+        AppendLog("Select a peak first."); return;
+    }
+    if (isoHistName_.empty()) return;
+
+    const std::string& key = isoListKeys_[sel - 1];
+    FitDatabase fitdb;
+    fitdb.Load(CacheFileFor(isoHistName_));
+    auto it = fitdb.GetEntries().find(key);
+    if (it == fitdb.GetEntries().end()) return;
+
+    // Find the highest-amplitude peak energy in this entry
+    const FitEntry& fe = it->second;
+    double peakE = 0.0;
+    int npar = (int)fe.params.size();
+    if (npar >= 5 && (npar - 2) % 3 == 0) {
+        int n = (npar - 2) / 3;
+        double bestAmp = -1.0;
+        for (int i = 0; i < n; i++) {
+            if (fe.params[3*i] > bestAmp) {
+                bestAmp = fe.params[3*i];
+                peakE   = fe.params[3*i + 1];
+            }
+        }
+    }
+    if (peakE <= 0.0 && npar >= 2) peakE = fe.params[1];
+    if (peakE <= 0.0) {
+        try { peakE = std::stod(key.substr(0, key.find('_'))); } catch (...) {}
+    }
+    if (peakE <= 0.0) { AppendLog("Cannot determine peak energy."); return; }
+
+    // Switch histogram if needed
+    if (currentHist_ != isoHistName_) {
+        currentHist_ = isoHistName_;
+        bool owned = false;
+        if (rawHistOwned_ && rawHist_) { delete rawHist_; rawHist_ = nullptr; }
+        rawHist_      = LoadHistFromFile(isoHistName_, owned);
+        rawHistOwned_ = owned;
+    }
+    if (!rawHist_) { AppendLog("Could not load histogram: " + isoHistName_); return; }
+
+    // Zoom to ±6σ (at least 20 keV) around the peak
+    double sigma = res_.Sigma(peakE);
+    double halfW = std::max(6.0 * sigma, 20.0);
+    viewXmin_ = std::max(peakE - halfW, rawHist_->GetXaxis()->GetXmin());
+    viewXmax_ = std::min(peakE + halfW, rawHist_->GetXaxis()->GetXmax());
+
+    if (histViewCombo_) OnHistViewChanged(histViewCombo_->GetSelected());
+    else                RedrawCurrent();
+
+    OverlayFitPeaks(currentHist_, canvas_->GetCanvas());
+    canvas_->GetCanvas()->Modified();
+    canvas_->GetCanvas()->Update();
+    AppendLog(Form("Preview: %.2f keV  [%s]", peakE, key.c_str()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -848,6 +1540,7 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
         int col;
         std::vector<std::pair<std::string,int>> isos;  // {name, peak count}
         double xc = 0, yc = 0, h = 0;  // center x/y and height (NDC)
+        std::string nucInfo;  // e.g. "^{90}Kr  (Z=36, N=54)"
     };
     std::vector<Node> nodes;
     for (auto& [cls, col] : kClassLayout) {
@@ -858,6 +1551,12 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
         for (auto& [iso, cnt] : it->second)
             nd.isos.push_back({iso, cnt});
         std::sort(nd.isos.begin(), nd.isos.end());
+        // Compute nuclear identity from beta-minus chain
+        int ZZ = 0, NN = 0;
+        if (ClassZN(cls, isoParentZval_, isoParentNval_, ZZ, NN) && ZZ > 0 && NN > 0) {
+            int A = ZZ + NN;
+            nd.nucInfo = Form("^{%d}%s  (Z=%d, N=%d)", A, ElementSymbol(ZZ), ZZ, NN);
+        }
         nodes.push_back(nd);
     }
 
@@ -882,9 +1581,10 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
     for (auto& nd : nodes) byCols[nd.col].push_back(&nd);
 
     for (auto& [col, ndlist] : byCols) {
-        // Height of each node depends on number of isotope lines
+        // Height of each node: class header + optional nucInfo line + isotope lines
         for (auto* nd : ndlist)
-            nd->h = (nd->isos.size() + 1) * lineH + 2 * padV;
+            nd->h = ((int)nd->isos.size() + 1 + (nd->nucInfo.empty() ? 0 : 1)) * lineH
+                    + 2 * padV;
         // Total height needed
         double totalH = 0;
         for (auto* nd : ndlist) totalH += nd->h;
@@ -918,6 +1618,13 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
         tx.SetTextSize(0.030); tx.SetTextColor(kBlack);
         double ty = y2 - padV - lineH * 0.5;
         tx.DrawLatex(nd.xc, ty, nd.cls.c_str());
+
+        // Nuclear identity line (^{A}El, Z, N) if parent is set
+        if (!nd.nucInfo.empty()) {
+            ty -= lineH;
+            tx.SetTextSize(0.026); tx.SetTextColor(kRed + 1);
+            tx.DrawLatex(nd.xc, ty, nd.nucInfo.c_str());
+        }
 
         // Isotope lines
         tx.SetTextSize(0.025); tx.SetTextColor(kBlue + 1);
@@ -953,12 +1660,31 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
         arr->SetFillColor(kBlack);
         arr->SetLineWidth(2);
         arr->Draw();
+
+        // β⁻ label above the arrow midpoint
+        TLatex* bmlbl = new TLatex((ax1 + ax2) / 2.0, ay + 0.018, "#beta^{-}");
+        bmlbl->SetNDC(kTRUE);
+        bmlbl->SetTextSize(0.022);
+        bmlbl->SetTextAlign(22);
+        bmlbl->SetTextColor(kMagenta + 1);
+        bmlbl->Draw();
     }
 
     // Title
-    tx.SetTextSize(0.035); tx.SetTextColor(kBlack); tx.SetTextAlign(22);
-    tx.DrawLatex(0.50, 0.97,
-        Form("Decay Schematic: %s", isoHistName_.c_str()));
+    tx.SetTextSize(0.032); tx.SetTextColor(kBlack); tx.SetTextAlign(22);
+    if (!isoParentIsotope_.empty() && isoParentZval_ > 0) {
+        int A = isoParentZval_ + isoParentNval_;
+        tx.DrawLatex(0.50, 0.97,
+            Form("Decay Schematic: %s   |   Parent: %s (^{%d}%s, Z=%d, N=%d)",
+                 isoHistName_.c_str(),
+                 isoParentIsotope_.c_str(), A,
+                 ElementSymbol(isoParentZval_),
+                 isoParentZval_, isoParentNval_));
+    } else {
+        tx.DrawLatex(0.50, 0.97,
+            Form("Decay Schematic: %s   |   Parent not set",
+                 isoHistName_.c_str()));
+    }
 
     c->Modified(); c->Update();
 }
@@ -1055,7 +1781,7 @@ void GammaFitGUI::OnIsoDbApply()
     fitdb.Save(CacheFileFor(isoHistName_));
 
     double fittedE = (e.params.size() >= 2) ? e.params[1] : 0.0;
-    AppendLog("Matched: " + key + "  →  " + gl.isotope +
+    AppendLog("Matched: " + key + "  ->  " + gl.isotope +
               Form("  DB: %.2f keV  dE=%+.2f keV", gl.energy, fittedE - gl.energy) +
               (newCls.empty() ? "" : "  [" + newCls + "]"));
     RefreshIsoDisplay();

@@ -3,7 +3,10 @@
     "allow": [
       "Bash(make gui *)",
       "Bash(awk 'NR>=2290 && NR<=2295' /home/macwheeler/Research/AutoGammaFit/gui/GammaFitGUI.cpp)",
-      "Bash(awk 'NR>=2430 && NR<=2450' /home/macwheeler/Research/AutoGammaFit/gui/GammaFitGUI.cpp)"
+      "Bash(awk 'NR>=2430 && NR<=2450' /home/macwheeler/Research/AutoGammaFit/gui/GammaFitGUI.cpp)",
+      "Bash(xargs cat -n)",
+      "Bash(awk '$2 >= 505 && $2 <= 520' /home/macwheeler/Research/AutoGammaFit/Isotope_energys.txt)",
+      "Bash(awk '$2 >= 490 && $2 <= 525' /home/macwheeler/Research/AutoGammaFit/Isotope_energys.txt)"
     ]
   }
 }

@@ -57,25 +57,41 @@ void GammaFitGUI::BuildFWHMTab(TGCompositeFrame* p)
     TGGroupFrame* pg = new TGGroupFrame(p, "Resolution Model Parameters");
     p->AddFrame(pg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
 
-    auto addRow = [&](TGGroupFrame* grp, const char* lbl,
-                      TGNumberEntry*& entry, double val,
-                      double lo, double hi)
+    // Helper: one row showing  "Label   [value]   lo:[lo]  to  [hi]"
+    auto addParRow = [&](TGGroupFrame* grp, const char* lbl,
+                         TGNumberEntry*& val, double vDef,
+                         TGNumberEntry*& lo,  double loDef,
+                         TGNumberEntry*& hi,  double hiDef)
     {
         TGHorizontalFrame* row = new TGHorizontalFrame(grp);
-        grp->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 0));
+        grp->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 1));
         TGLabel* l = new TGLabel(row, lbl);
-        row->AddFrame(l, new TGLayoutHints(kLHintsLeft | kLHintsCenterY, 0, 6, 0, 0));
-        l->SetWidth(80);
-        entry = new TGNumberEntry(row, val, 10, -1,
-            TGNumberFormat::kNESReal,
-            TGNumberFormat::kNEAAnyNumber,
-            TGNumberFormat::kNELLimitMinMax, lo, hi);
-        row->AddFrame(entry, new TGLayoutHints(kLHintsRight | kLHintsExpandX));
+        l->SetWidth(64);
+        row->AddFrame(l, new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+
+        val = new TGNumberEntry(row, vDef, 9, -1,
+            TGNumberFormat::kNESReal, TGNumberFormat::kNEAAnyNumber,
+            TGNumberFormat::kNELNoLimits);
+        row->AddFrame(val, new TGLayoutHints(kLHintsLeft, 0, 6, 0, 0));
+
+        row->AddFrame(new TGLabel(row, "lo:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+        lo = new TGNumberEntry(row, loDef, 7, -1,
+            TGNumberFormat::kNESReal, TGNumberFormat::kNEAAnyNumber,
+            TGNumberFormat::kNELNoLimits);
+        row->AddFrame(lo, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+
+        row->AddFrame(new TGLabel(row, "hi:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+        hi = new TGNumberEntry(row, hiDef, 7, -1,
+            TGNumberFormat::kNESReal, TGNumberFormat::kNEAAnyNumber,
+            TGNumberFormat::kNELNoLimits);
+        row->AddFrame(hi, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
     };
 
-    addRow(pg, "a (keV^2)", mFwhmA_, 0.5,  1e-6, 1000.0);
-    addRow(pg, "b (keV)",   mFwhmB_, 0.02, 0.0,    10.0);
-    addRow(pg, "c",         mFwhmC_, 1e-8, 0.0,     0.1);
+    addParRow(pg, "a (keV^2)", mFwhmA_, 0.5,   mFwhmAlo_, 1e-4,  mFwhmAhi_, 1000.0);
+    addParRow(pg, "b (keV)",   mFwhmB_, 0.02,  mFwhmBlo_, 0.0,   mFwhmBhi_,   10.0);
+    addParRow(pg, "c",         mFwhmC_, 0.0,   mFwhmClo_, 0.0,   mFwhmChi_,    0.1);
 
     TGTextButton* fitBtn = new TGTextButton(pg, "Fit Model to Data");
     pg->AddFrame(fitBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 6, 2));
@@ -90,7 +106,7 @@ void GammaFitGUI::BuildFWHMTab(TGCompositeFrame* p)
     p->AddFrame(dg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
 
     fwhmStatLineChk_ = new TGCheckButton(dg,
-        "Show Fano limit  [2.344#sqrt{FwE},  F=0.12,  w=2.96 eV (Ge)]");
+        "Show Fano limit  [2.344*sqrt(F*w*E),  F=0.12,  w=2.96 eV (Ge)]");
     fwhmStatLineChk_->SetState(kButtonDown);
     dg->AddFrame(fwhmStatLineChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 2, 1));
     fwhmStatLineChk_->Connect("Clicked()", "GammaFitGUI", this, "OnFWHMRedisplay()");
@@ -470,18 +486,56 @@ void GammaFitGUI::OnFitFWHM()
 
     double xhi = *std::max_element(xIn.begin(), xIn.end()) * 1.15;
 
+    // Auto-seed from data so the fit starts close to the correct answer.
+    // The dominant term is b*E (charge-carrier statistics): b ≈ FWHM²/E.
+    // Take the median across all included points so outliers don't skew it.
+    // Noise floor: a ≈ FWHM²_lowest - b * E_lowest, clamped ≥ 0.
+    // Charge-trapping term c starts at 0 (usually tiny for good detectors).
+    double aSeed, bSeed, cSeed;
+    {
+        std::vector<std::pair<double,double>> pts;
+        for (size_t i = 0; i < xIn.size(); i++)
+            pts.push_back({xIn[i], yIn[i]});
+        std::sort(pts.begin(), pts.end());
+
+        std::vector<double> bEsts;
+        for (const auto& [E, fwhm] : pts)
+            if (E > 10.0) bEsts.push_back(fwhm * fwhm / E);
+        std::sort(bEsts.begin(), bEsts.end());
+        bSeed = bEsts.empty() ? mFwhmB_->GetNumber()
+                              : bEsts[bEsts.size() / 2];
+
+        double E0   = pts.front().first;
+        double fw0  = pts.front().second;
+        aSeed = std::max(1e-4, fw0 * fw0 - bSeed * E0);
+        cSeed = 0.0;
+    }
+
     // Fit on a temporary graph owned here (not drawn to canvas)
     TGraphErrors grFit((Int_t)xIn.size(), xIn.data(), yIn.data(),
                         exIn.data(), eyIn.data());
 
+    // Read user-editable bounds (fall back to defaults if widgets not ready)
+    double aLo = mFwhmAlo_ ? mFwhmAlo_->GetNumber() : 1e-4;
+    double aHi = mFwhmAhi_ ? mFwhmAhi_->GetNumber() : 1000.0;
+    double bLo = mFwhmBlo_ ? mFwhmBlo_->GetNumber() : 0.0;
+    double bHi = mFwhmBhi_ ? mFwhmBhi_->GetNumber() : 10.0;
+    double cLo = mFwhmClo_ ? mFwhmClo_->GetNumber() : 0.0;
+    double cHi = mFwhmChi_ ? mFwhmChi_->GetNumber() : 0.1;
+    if (aLo >= aHi) { AppendLog("Invalid a bounds (lo >= hi)."); return; }
+    if (bLo >= bHi) { AppendLog("Invalid b bounds (lo >= hi)."); return; }
+
     delete fwhmTF1_;
     fwhmTF1_ = new TF1("fwhm_model", "sqrt([0]+[1]*x+[2]*x*x)", 0.0, xhi);
-    fwhmTF1_->SetParameter(0, mFwhmA_->GetNumber());
-    fwhmTF1_->SetParameter(1, mFwhmB_->GetNumber());
-    fwhmTF1_->SetParameter(2, mFwhmC_->GetNumber());
-    fwhmTF1_->SetParLimits(0, 1e-4, 1000.0);
-    fwhmTF1_->SetParLimits(1,  0.0,   10.0);
-    fwhmTF1_->SetParLimits(2,  0.0,    0.1);
+    fwhmTF1_->SetParameter(0, std::max(aSeed, aLo));
+    fwhmTF1_->SetParameter(1, std::max(bSeed, bLo));
+    fwhmTF1_->SetParameter(2, cSeed);
+    fwhmTF1_->SetParLimits(0, aLo, aHi);
+    fwhmTF1_->SetParLimits(1, bLo, bHi);
+    if (cLo < cHi)
+        fwhmTF1_->SetParLimits(2, cLo, cHi);
+    else
+        fwhmTF1_->FixParameter(2, cLo);
 
     grFit.Fit(fwhmTF1_, "R Q B");
 

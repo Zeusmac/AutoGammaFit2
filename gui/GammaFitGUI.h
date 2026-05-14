@@ -120,8 +120,17 @@ public:
     void OnIsoClear();
     void OnIsoClearAll();
     void OnIsoAutoMatchAll();
+    void OnIsoApplyAutoMatches();
     void OnIsoDrawSchematic();
     void OnIsoApplyClassToAll();
+    void OnIsoSetParent();
+    void OnIsoSetLabelDecay();
+    void OnIsoLabelDecayApply();
+    void OnIsoLabelDecaySearch();
+    void OnIsoLabelDecayClose();
+    void OnIsoLabelDecayDlgClosed();
+    std::string AutoClassFromParent(const std::string& label);  // beta-minus chain classification
+    void OnIsoPeakPreview();
     void OnIsoDbSearch();
     void OnIsoDbClear();
     void OnIsoDbLineSelected(Int_t id);
@@ -143,6 +152,7 @@ public:
     void OnSeedParams();
     void OnPreview();
     void OnManualFit();
+    void OnShowCompToggled();
     void OnAcceptFit();
     void OnRejectFit();
     void OnClearPeaks();
@@ -153,6 +163,10 @@ public:
     void OnSetRangeFromCanvas();
     void OnClearFitRange();
     void OnParameterScan();
+    void OnShowFitParams();
+    void OnFitParamClose();
+    void OnSeedBoundsFromModel();
+    void OnTransferCache();
 
     // ── Peak navigation ───────────────────────────────────────────────────────
     void OnPrevPeak();
@@ -198,6 +212,7 @@ private:
     std::vector<TF1*> fitComponents_;  // bg + individual Gaussian components, owned here
     double       clickEnergy_     = 500.0;
     double       lastManualChi2ndf_ = -1.0;  // chi2/ndf from last OnManualFit run
+    double       lastManualEdm_     = -1.0;  // EDM from last OnManualFit run
 
     // Histogram classification: "Gamma" | "Decay" | "2D"
     std::map<std::string, std::string> histClass_;
@@ -249,13 +264,31 @@ private:
     TGTextEntry*   isoCustomLabelEntry_ = nullptr;  // free-text custom label (overrides combo)
     TGComboBox*    isoClassCombo_       = nullptr;
     TGTextEntry*   isoCustomEntry_      = nullptr;
+    TGNumberEntry* isoMatchThreshEntry_ = nullptr;  // auto-match max distance (keV)
     // parallel arrays: one entry per isoList_ item
     std::vector<std::string> isoListKeys_;       // FitEntry keys matching each row
+    std::vector<int>         isoListGaussIdx_;   // Gaussian index in entry (-1 = whole entry)
     std::vector<std::string> isoListAutoMatch_;  // best DB match isotope (may be empty)
     std::vector<double>      isoListDbEnergy_;   // matched DB line energy (0 if none)
     std::string              isoHistName_;  // histogram whose cache is shown
     // Label → class mapping (label name → class string, e.g. "Co-60" → "Parent")
     std::map<std::string, std::string> labelClassMap_;
+    // Parent nucleus info (set by user in Isotopes tab)
+    std::string isoParentIsotope_;
+    int         isoParentZval_ = 0;
+    int         isoParentNval_ = 0;
+    // Parent entry widgets
+    TGTextEntry*   isoParentNameEntry_ = nullptr;
+    TGNumberEntry* isoParentZEntry_    = nullptr;
+    TGNumberEntry* isoParentNEntry_    = nullptr;
+    // Set Label & Decay dialog (created lazily, nullptr when closed)
+    TGTransientFrame* isoLabelDecayDlg_    = nullptr;
+    TGListBox*        isoLabelDecayList_   = nullptr;
+    TGComboBox*       isoDecayTypeCombo_   = nullptr;
+    TGTextEntry*      isoLabelDecaySearch_ = nullptr;
+    std::string       isoLabelDecaySelected_;  // isotope name chosen in dialog
+    std::string       isoDecayTypeSelected_;   // decay type chosen in dialog
+    Int_t             isoLabelDecayPeakSel_ = -1;  // isoList_ selection saved at dialog open
     // Isotope DB browser
     TGListBox*     isoDbList_      = nullptr;
     TGTextEntry*   isoDbSearch_    = nullptr;
@@ -284,6 +317,13 @@ private:
     TGNumberEntry* mBg0_         = nullptr;
     TGNumberEntry* mBg1_         = nullptr;
     TGNumberEntry* mRange_       = nullptr;
+    // Fit bounds (editable via Fit Parameters popup)
+    TGNumberEntry* mEnergyWin_   = nullptr;  // ± keV window for E
+    TGNumberEntry* mAmpLoFrac_   = nullptr;  // A lower = val * frac
+    TGNumberEntry* mAmpHiFrac_   = nullptr;  // A upper = val * frac
+    TGNumberEntry* mSigLoFrac_   = nullptr;  // sigma lower = model * frac
+    TGNumberEntry* mSigHiFrac_   = nullptr;  // sigma upper = model * frac
+    TGMainFrame*   fitParamDlg_  = nullptr;
     TGLabel*       mResultLbl_   = nullptr;
     TGTextView*    mFitParamsView_ = nullptr;  // per-parameter values + uncertainties
     TGTextView*    peakStatsView_  = nullptr;  // derived statistics per fitted peak
@@ -302,6 +342,8 @@ private:
     TGCheckButton*       mFitLogLikChk_ = nullptr;
     TGCheckButton*       mFitImprovChk_ = nullptr;
     TGCheckButton*       mFitMinosChk_  = nullptr;
+    TGCheckButton*       mBgFlatChk_    = nullptr;  // flat (constant) background
+    TGCheckButton*       mShowCompChk_  = nullptr;  // show BG + individual Gaussian components
 
     // Background region
     TGNumberEntry*       mBgLo_        = nullptr;
@@ -355,6 +397,12 @@ private:
     TGNumberEntry* mFwhmA_            = nullptr;
     TGNumberEntry* mFwhmB_            = nullptr;
     TGNumberEntry* mFwhmC_            = nullptr;
+    TGNumberEntry* mFwhmAlo_          = nullptr;
+    TGNumberEntry* mFwhmAhi_          = nullptr;
+    TGNumberEntry* mFwhmBlo_          = nullptr;
+    TGNumberEntry* mFwhmBhi_          = nullptr;
+    TGNumberEntry* mFwhmClo_          = nullptr;
+    TGNumberEntry* mFwhmChi_          = nullptr;
     TGLabel*       fwhmResultLbl_     = nullptr;
     TGCheckButton* fwhmShowSigmaChk_  = nullptr;
     TGCheckButton* fwhmStatLineChk_   = nullptr;
@@ -457,6 +505,10 @@ private:
     void ShowFitResult(const std::string& hname);
     TH1* MakeBgSubHist(TH1* raw, bool doSubtract = false, int iterations = 14);
     void OverlayFitPeaks(const std::string& hname, TCanvas* c);
+
+    // Peak stats snapshot for before/after Run Fit comparison
+    std::vector<std::string> peakStatsCurrent_;
+    std::vector<std::string> peakStatsOld_;
 
     // FWHM helpers
     void RedrawFWHM();

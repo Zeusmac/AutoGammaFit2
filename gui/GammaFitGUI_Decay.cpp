@@ -62,14 +62,14 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
 
         TGHorizontalFrame* row = new TGHorizontalFrame(grp);
         grp->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        row->AddFrame(new TGLabel(row, "σ window:"),
+        row->AddFrame(new TGLabel(row, "sigma window:"),
                       new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
         decaySigRangeEntry_ = new TGNumberEntry(row, 1.0, 5, -1,
                                                 TGNumberFormat::kNESRealTwo,
                                                 TGNumberFormat::kNEAPositive);
         decaySigRangeEntry_->SetWidth(60);
         row->AddFrame(decaySigRangeEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-        row->AddFrame(new TGLabel(row, "σ"), new TGLayoutHints(kLHintsCenterY, 0, 8, 0, 0));
+        row->AddFrame(new TGLabel(row, "sigma"), new TGLayoutHints(kLHintsCenterY, 0, 8, 0, 0));
 
         TGTextButton* refreshBtn = new TGTextButton(row, "Refresh");
         row->AddFrame(refreshBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
@@ -109,22 +109,7 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
         decayLabelEntry_->SetWidth(120);
         lblRow->AddFrame(decayLabelEntry_, new TGLayoutHints(kLHintsLeft, 0, 8, 0, 0));
 
-        lblRow->AddFrame(new TGLabel(lblRow, "Class:"),
-                         new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        decayLabelClassCombo_ = new TGComboBox(lblRow, 805);
-        decayLabelClassCombo_->AddEntry("(none)",               1);
-        decayLabelClassCombo_->AddEntry("Parent",               2);
-        decayLabelClassCombo_->AddEntry("Daughter",             3);
-        decayLabelClassCombo_->AddEntry("Granddaughter",        4);
-        decayLabelClassCombo_->AddEntry("Beta-n Daughter",      5);
-        decayLabelClassCombo_->AddEntry("Beta-2n Daughter",     6);
-        decayLabelClassCombo_->AddEntry("Beta-n Granddaughter", 7);
-        decayLabelClassCombo_->AddEntry("Beta-2n Granddaughter",8);
-        decayLabelClassCombo_->AddEntry("Background",           9);
-        decayLabelClassCombo_->AddEntry("X-ray",               10);
-        decayLabelClassCombo_->Select(1, kFALSE);
-        decayLabelClassCombo_->Resize(130, 22);
-        lblRow->AddFrame(decayLabelClassCombo_, new TGLayoutHints(kLHintsLeft));
+        // Class is managed via Isotopes tab "Set Label & Decay"; not assigned here.
 
         TGTextButton* applyLblBtn = new TGTextButton(grp, "Apply Label to Peak");
         grp->AddFrame(applyLblBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
@@ -276,7 +261,6 @@ void GammaFitGUI::OnDecayTh2Changed(Int_t /*id*/)
     decayPeakList_->MapSubwindows();
     decayPeakList_->Layout();
     if (decayLabelEntry_) decayLabelEntry_->SetText("");
-    if (decayLabelClassCombo_) decayLabelClassCombo_->Select(1, kFALSE);
 }
 
 void GammaFitGUI::OnDecayModelChanged(Int_t id)
@@ -318,19 +302,6 @@ void GammaFitGUI::OnLoadDecayCache()
     SetStatus("Decay cache loaded: " + decayTh2Name_);
 }
 
-static int ClassToDecayComboIdx(const std::string& cls)
-{
-    if (cls == "Parent")               return 2;
-    if (cls == "Daughter")             return 3;
-    if (cls == "Granddaughter")        return 4;
-    if (cls == "Beta-n Daughter"  || cls == "Beta-n")  return 5;
-    if (cls == "Beta-2n Daughter" || cls == "Beta-2n") return 6;
-    if (cls == "Beta-n Granddaughter")  return 7;
-    if (cls == "Beta-2n Granddaughter") return 8;
-    if (cls == "Background")           return 9;
-    if (cls == "X-ray")                return 10;
-    return 1;
-}
 
 void GammaFitGUI::OnDecayPeakSelected(Int_t id)
 {
@@ -345,9 +316,6 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
     if (it != entries.end()) {
         if (decayLabelEntry_)
             decayLabelEntry_->SetText(it->second.label.c_str());
-        if (decayLabelClassCombo_)
-            decayLabelClassCombo_->Select(
-                ClassToDecayComboIdx(it->second.classification), kFALSE);
     }
 
     // Restore stored decay fit half-lives, label and class for this peak
@@ -369,8 +337,6 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
         // Restore label/class from decay cache (overrides gamma proj cache)
         if (!r.label.empty() && decayLabelEntry_)
             decayLabelEntry_->SetText(r.label.c_str());
-        if (!r.classification.empty() && decayLabelClassCombo_)
-            decayLabelClassCombo_->Select(ClassToDecayComboIdx(r.classification), kFALSE);
         // Restore sigma window
         if (r.Nsig > 0 && decaySigRangeEntry_)
             decaySigRangeEntry_->SetNumber(r.Nsig);
@@ -406,7 +372,7 @@ void GammaFitGUI::OnRefreshDecayPeaks()
             decayPeakEs_.push_back(Ep);
             decayPeakSigs_.push_back(sig);
             decayPeakKeys_.push_back(kv.first);
-            std::string lbl = Form("%.2f keV  (σ=%.3f)", Ep, sig);
+            std::string lbl = Form("%.2f keV  (sig=%.3f)", Ep, sig);
             if (!e.label.empty()) lbl = e.label + "  " + lbl;
             if (!e.classification.empty()) lbl += "  [" + e.classification + "]";
             decayPeakList_->AddEntry(lbl.c_str(), listIdx++);
@@ -586,14 +552,14 @@ void GammaFitGUI::OnFitDecay()
 
     // ── Report ────────────────────────────────────────────────────────────────
     decayResultView_->Clear();
-    decayResultView_->AddLine(Form("Peak: %.2f keV  window: ±%.1fσ  [%.2f, %.2f]",
+    decayResultView_->AddLine(Form("Peak: %.2f keV  window: +/-%.1f sigma  [%.2f, %.2f]",
                                    E, Nsig, eMin, eMax));
     double chi2ndf = (fitRes.Get() && fitRes->Ndf() > 0)
                      ? fitRes->Chi2() / fitRes->Ndf() : -1.0;
     decayResultView_->AddLine(Form("Chi2/NDF: %.4g  status: %d",
                                    chi2ndf, fitRes.Get() ? fitRes->Status() : -1));
     for (int i = 0; i < fDecay->GetNpar(); i++) {
-        decayResultView_->AddLine(Form("  %-16s = %11.5g  ±  %.4g",
+        decayResultView_->AddLine(Form("  %-16s = %11.5g +/- %.4g",
             fDecay->GetParName(i), fDecay->GetParameter(i), fDecay->GetParError(i)));
     }
     // Store fit result in memory + save to disk
@@ -613,20 +579,13 @@ void GammaFitGUI::OnFitDecay()
             r.label          = existing->second.label;
             r.classification = existing->second.classification;
         }
-        // Overwrite with whatever is shown in the decay label/class widgets
+        // Overwrite label from widget; class auto-populated from labelClassMap_
         if (decayLabelEntry_) {
             std::string lbl = decayLabelEntry_->GetText();
-            if (!lbl.empty()) r.label = lbl;
-        }
-        if (decayLabelClassCombo_) {
-            static const char* kClsNames[] = {
-                "", "Parent", "Daughter", "Granddaughter",
-                "Beta-n Daughter", "Beta-2n Daughter",
-                "Beta-n Granddaughter", "Beta-2n Granddaughter",
-                "Background", "X-ray"
-            };
-            int ci = decayLabelClassCombo_->GetSelected() - 1;
-            if (ci >= 1 && ci <= 9) r.classification = kClsNames[ci];
+            if (!lbl.empty()) {
+                r.label = lbl;
+                if (labelClassMap_.count(lbl)) r.classification = labelClassMap_.at(lbl);
+            }
         }
         int np = fDecay->GetNpar();
         r.params.resize(np); r.errors.resize(np);
@@ -644,10 +603,6 @@ void GammaFitGUI::OnFitDecay()
         std::string suggestedCls = (modelId >= 1 && modelId <= 4) ? kModelCls[modelId] : "";
 
         if (!suggestedCls.empty()) {
-            // Update class combo
-            if (decayLabelClassCombo_)
-                decayLabelClassCombo_->Select(ClassToDecayComboIdx(suggestedCls), kFALSE);
-
             // Save to gamma projection cache automatically
             if (!decayGammaProjName_.empty() && peakSel >= 1 &&
                 (size_t)peakSel <= decayPeakKeys_.size()) {
@@ -809,7 +764,7 @@ void GammaFitGUI::OnPreviewDecay()
     c->Modified(); c->Update();
     gSystem->ProcessEvents();
 
-    SetStatus(Form("Preview: %.2f keV  ±%.1fσ  [%.2f, %.2f]", E, Nsig, eMin, eMax));
+    SetStatus(Form("Preview: %.2f keV  +/-%.1f sigma  [%.2f, %.2f]", E, Nsig, eMin, eMax));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -836,18 +791,9 @@ void GammaFitGUI::OnDecayApplyLabel()
         std::string lbl = decayLabelEntry_->GetText();
         if (!lbl.empty()) e.label = lbl;
     }
-    if (decayLabelClassCombo_) {
-        int sel = decayLabelClassCombo_->GetSelected();
-        // Map this combo's indices to classification strings
-        static const char* kClsNames[] = {
-            "", "Parent", "Daughter", "Granddaughter",
-            "Beta-n Daughter", "Beta-2n Daughter",
-            "Beta-n Granddaughter", "Beta-2n Granddaughter",
-            "Background", "X-ray"
-        };
-        if (sel >= 2 && sel <= 10)
-            e.classification = kClsNames[sel - 1];
-    }
+    // Auto-populate classification from labelClassMap_ (set via Isotopes tab)
+    if (!e.label.empty() && labelClassMap_.count(e.label))
+        e.classification = labelClassMap_.at(e.label);
     fdb.ForceStore(key, e);
     mkdir(kCacheDir, 0755);
     fdb.Save(CacheFileFor(decayGammaProjName_));
@@ -965,7 +911,7 @@ void GammaFitGUI::OnMakePeakCountVsTime()
     int N = (int)tCenter.size();
     TGraphErrors* gr = new TGraphErrors(N);
     gr->SetName(Form("peakCounts_%.2fkeV", E));
-    gr->SetTitle(Form("Peak counts vs time  (%.2f keV  ±%.1f#sigma);Time (ms);Peak counts", E, Nsig));
+    gr->SetTitle(Form("Peak counts vs time  (%.2f keV  #pm%.1f#sigma);Time (ms);Peak counts", E, Nsig));
     for (int i = 0; i < N; i++) {
         gr->SetPoint(i, tCenter[i], counts[i]);
         gr->SetPointError(i, 0.5*sliceW, countsErr[i]);
