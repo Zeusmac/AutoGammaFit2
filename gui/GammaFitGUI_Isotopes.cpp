@@ -167,6 +167,16 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
                                  "OnIsoFilterChanged(Int_t)");
     }
 
+    // ── Active histogram indicator ────────────────────────────────────────────
+    {
+        TGHorizontalFrame* histRow = new TGHorizontalFrame(p);
+        p->AddFrame(histRow, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 2));
+        histRow->AddFrame(new TGLabel(histRow, "Histogram:"),
+                          new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        isoHistLabel_ = new TGLabel(histRow, "(none — click Refresh)");
+        histRow->AddFrame(isoHistLabel_, new TGLayoutHints(kLHintsLeft));
+    }
+
     // ── Peak list ─────────────────────────────────────────────────────────────
     TGGroupFrame* listGrp = new TGGroupFrame(p, "Peaks (sorted by energy)");
     p->AddFrame(listGrp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
@@ -555,6 +565,7 @@ void GammaFitGUI::OnIsoRefresh()
 {
     isoHistName_ = currentHist_;
     if (isoHistName_.empty()) { AppendLog("Load a histogram first."); return; }
+    if (isoHistLabel_) isoHistLabel_->SetText(isoHistName_.c_str());
     RefreshIsoDisplay();
     AppendLog("Isotopes: loaded cache for " + isoHistName_ +
               "  (" + std::to_string(isoListKeys_.size()) + " peaks)");

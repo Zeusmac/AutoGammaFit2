@@ -324,25 +324,25 @@ void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine
         modelDraw->Draw("same");
 
         // ── Fit info pave (upper right) ───────────────────────────────────────
-        TPaveText* pt = new TPaveText(0.52, 0.60, 0.93, 0.93, "NDC");
+        TPaveText* pt = new TPaveText(0.58, 0.62, 0.93, 0.91, "NDC");
         pt->SetFillColor(0);
         pt->SetFillStyle(1001);
         pt->SetBorderSize(1);
-        pt->SetTextSize(0.030);
+        pt->SetTextSize(0.024);
         pt->SetTextAlign(12);
 
         // Equation line — mode-dependent label
         if (showResolution) {
-            pt->AddText("R(%) = 100 #cdot #sqrt{a + b#cdot E + c#cdot E^{2}} / E");
+            pt->AddText("R(%) = 100 #frac{#sqrt{a + bE + cE^{2}}}{E}");
         } else if (showSigma) {
-            pt->AddText("#sigma = #sqrt{a + b#cdot E + c#cdot E^{2}} / 2.355");
+            pt->AddText("#sigma = #frac{#sqrt{a + bE + cE^{2}}}{2.355}");
         } else {
-            pt->AddText("FWHM = #sqrt{a + b#cdot E + c#cdot E^{2}}");
+            pt->AddText("FWHM = #sqrt{a + bE + cE^{2}}");
         }
 
-        pt->AddText(Form("a = %.5g  keV^{2}", a));
-        pt->AddText(Form("b = %.5g  keV",     b));
-        pt->AddText(Form("c = %.5g",           cv));
+        pt->AddText(Form("a = %.4g keV^{2}", a));
+        pt->AddText(Form("b = %.4g keV",     b));
+        pt->AddText(Form("c = %.4g",          cv));
 
         if (fwhmChi2Ndf_ >= 0) {
             pt->AddText(Form("#chi^{2}/ndf = %.2f  (ndf = %d)",
@@ -352,7 +352,7 @@ void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine
             pt->AddText(Form("p-value = %.4f", fwhmPValue_));
         }
         if (fwhmResidRMS_ >= 0) {
-            pt->AddText(Form("Residual RMS = %.3f", fwhmResidRMS_));
+            pt->AddText(Form("RMS_{res} = %.3f", fwhmResidRMS_));
         }
 
         pt->Draw();

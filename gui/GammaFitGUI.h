@@ -258,6 +258,7 @@ private:
     TGTextEntry*   th2YLabelEntry_ = nullptr;  // axis label for TH2 Y axis (main file)
 
     // ── Isotopes tab widgets ──────────────────────────────────────────────────
+    TGLabel*       isoHistLabel_   = nullptr;  // shows isoHistName_ in the tab
     TGListBox*     isoList_        = nullptr;
     TGComboBox*    isoFilterCombo_ = nullptr;
     TGComboBox*    isoLabelCombo_       = nullptr;  // DB-match combo for label
