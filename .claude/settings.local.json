@@ -6,7 +6,14 @@
       "Bash(awk 'NR>=2430 && NR<=2450' /home/macwheeler/Research/AutoGammaFit/gui/GammaFitGUI.cpp)",
       "Bash(xargs cat -n)",
       "Bash(awk '$2 >= 505 && $2 <= 520' /home/macwheeler/Research/AutoGammaFit/Isotope_energys.txt)",
-      "Bash(awk '$2 >= 490 && $2 <= 525' /home/macwheeler/Research/AutoGammaFit/Isotope_energys.txt)"
+      "Bash(awk '$2 >= 490 && $2 <= 525' /home/macwheeler/Research/AutoGammaFit/Isotope_energys.txt)",
+      "Bash(tree -L 3 /home/macwheeler/Desktop/gnuscope 2>/dev/null || find /home/macwheeler/Desktop/gnuscope -type f -o -type d | sort)",
+      "Read(//home/macwheeler/Desktop/gnuscope/**)",
+      "Bash(xargs ls -lh)",
+      "Bash(find /home/macwheeler -name \"peakfit.c\" -o -name \"peakfit.h\" -o -name \"analysis.c\" 2>/dev/null | head -20)",
+      "Read(//home/macwheeler/**)",
+      "Bash(cmake --build build)",
+      "Bash(make -j4)"
     ]
   }
 }

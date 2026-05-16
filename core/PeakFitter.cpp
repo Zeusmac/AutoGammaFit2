@@ -157,6 +157,47 @@ void PeakFitter::FitHistogram(TH1* h,
         out << "=====================================\n";
 
         // -------------------------------------------------
+        // S/N pre-screen: skip groups with insufficient signal-to-noise.
+        // Computed on the bg-subtracted working histogram as:
+        //   SN = Σ(peak window ±2σ) / √(scaled sideband |counts|)
+        // References: gnuScope GetSumFF; Helmer & McCullagh 1979
+        // -------------------------------------------------
+        if (bg.snMinRatio > 0.0) {
+            double groupSN = 0.0;
+            for (double E : group.energies) {
+                double sigma  = AdaptiveFitter::Sigma_(res, E);
+                int bPlo = h_work->FindBin(E - 2.0*sigma);
+                int bPhi = h_work->FindBin(E + 2.0*sigma);
+                int bSlo1 = h_work->FindBin(E - 7.0*sigma);
+                int bSlo2 = h_work->FindBin(E - 4.0*sigma);
+                int bShi1 = h_work->FindBin(E + 4.0*sigma);
+                int bShi2 = h_work->FindBin(E + 7.0*sigma);
+
+                double sumPeak = 0.0;
+                for (int b = bPlo; b <= bPhi; b++)
+                    sumPeak += std::max(h_work->GetBinContent(b), 0.0);
+
+                double sumSB = 0.0; int nSB = 0;
+                for (int b = bSlo1; b <= bSlo2; b++) { sumSB += std::abs(h_work->GetBinContent(b)); nSB++; }
+                for (int b = bShi1; b <= bShi2; b++) { sumSB += std::abs(h_work->GetBinContent(b)); nSB++; }
+
+                int nPeak = bPhi - bPlo + 1;
+                double noise = (nSB > 0 && nPeak > 0)
+                    ? std::sqrt(sumSB / nSB * nPeak)
+                    : std::sqrt(std::max(sumPeak, 1.0));
+                double sn = (noise > 0.0) ? sumPeak / noise : 0.0;
+                groupSN = std::max(groupSN, sn);
+            }
+            if (groupSN < bg.snMinRatio) {
+                out << "  [S/N=" << groupSN << " < " << bg.snMinRatio << "] group skipped\n";
+                Debug::Log(Debug::PEAKFITTER, "Group " + std::to_string(g)
+                    + " skipped: S/N=" + std::to_string(groupSN)
+                    + " < " + std::to_string(bg.snMinRatio));
+                continue;
+            }
+        }
+
+        // -------------------------------------------------
         // Adaptive fit
         // -------------------------------------------------
         TFitResultPtr fitResult;

@@ -17,6 +17,7 @@ ClassImp(GammaFitGUI)
 #include "TF1.h"
 #include "TLine.h"
 #include "TLatex.h"
+#include "TPaveText.h"
 #include "TROOT.h"
 #include "TSystem.h"
 #include "TFitResult.h"
@@ -87,7 +88,17 @@ GammaFitGUI::GammaFitGUI(const TGWindow* p, UInt_t w, UInt_t h)
         TGTextButton* clearCacheBtn = new TGTextButton(btnRow, "  Clear Cache  ");
         btnRow->AddFrame(clearCacheBtn, new TGLayoutHints(kLHintsRight, 2, 2, 1, 1));
         clearCacheBtn->Connect("Clicked()", "GammaFitGUI", this, "OnClearHistCache()");
-        clearCacheBtn->SetToolTipText("Delete ALL cache entries for the currently displayed histogram");
+        clearCacheBtn->SetToolTipText("Delete the live cache for the current histogram (archive is preserved)");
+
+        TGTextButton* restoreArchBtn = new TGTextButton(btnRow, "  Restore Archive  ");
+        btnRow->AddFrame(restoreArchBtn, new TGLayoutHints(kLHintsRight, 2, 2, 1, 1));
+        restoreArchBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRestoreArchivedCache()");
+        restoreArchBtn->SetToolTipText("Restore a previously archived cache for the current histogram");
+
+        TGTextButton* archiveCacheBtn = new TGTextButton(btnRow, "  Archive Cache  ");
+        btnRow->AddFrame(archiveCacheBtn, new TGLayoutHints(kLHintsRight, 2, 2, 1, 1));
+        archiveCacheBtn->Connect("Clicked()", "GammaFitGUI", this, "OnArchiveHistCache()");
+        archiveCacheBtn->SetToolTipText("Copy the current cache to fit_caches/archive/ with a timestamp");
 
         TGTextButton* savePlotBtn = new TGTextButton(btnRow, "  Save Plot  ");
         btnRow->AddFrame(savePlotBtn, new TGLayoutHints(kLHintsRight, 2, 2, 1, 1));
@@ -147,8 +158,14 @@ GammaFitGUI::~GammaFitGUI()
 // ─────────────────────────────────────────────────────────────────────────────
 // BuildAutoFitTab
 // ─────────────────────────────────────────────────────────────────────────────
-void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* p)
+void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
 {
+    // ── Scrollable wrapper ─────────────────────────────────────────────────────
+    TGCanvas* scroller = new TGCanvas(tab, 10, 600, kSunkenFrame);
+    tab->AddFrame(scroller, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 0, 0, 0, 0));
+    TGCompositeFrame* p = new TGCompositeFrame(scroller->GetViewPort(), 1, 1, kVerticalFrame);
+    scroller->SetContainer(p);
+
     // ── File ──────────────────────────────────────────────────────────────────
     TGGroupFrame* fg = new TGGroupFrame(p, "File");
     p->AddFrame(fg, new TGLayoutHints(kLHintsExpandX, 4, 4, 4, 2));
@@ -157,6 +174,23 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* p)
     fg->AddFrame(openBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
     openBtn->Connect("Clicked()", "GammaFitGUI", this, "OnOpenFile()");
     openBtn->SetToolTipText("Browse for a ROOT file containing TH1 gamma spectra");
+
+    // Recent files row
+    {
+        TGHorizontalFrame* rr = new TGHorizontalFrame(fg);
+        fg->AddFrame(rr, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+        recentCombo_ = new TGComboBox(rr, 950);
+        recentCombo_->AddEntry("(no recent files)", 1);
+        recentCombo_->Select(1, kFALSE);
+        recentCombo_->Resize(185, 22);
+        rr->AddFrame(recentCombo_, new TGLayoutHints(kLHintsExpandX, 0, 4, 0, 0));
+        TGTextButton* recentBtn = new TGTextButton(rr, "Open");
+        rr->AddFrame(recentBtn, new TGLayoutHints(kLHintsRight));
+        recentBtn->Connect("Clicked()", "GammaFitGUI", this, "OnOpenRecent()");
+        recentBtn->SetToolTipText("Open the selected recent ROOT file");
+        LoadRecentFiles();
+        RefreshRecentCombo();
+    }
 
     fileLbl_ = new TGLabel(fg, "No file loaded");
     fg->AddFrame(fileLbl_, new TGLayoutHints(kLHintsLeft, 4, 4, 0, 4));
@@ -183,12 +217,13 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* p)
     {
         TGHorizontalFrame* cr = new TGHorizontalFrame(hg);
         hg->AddFrame(cr, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        cr->AddFrame(new TGLabel(cr, "Class:"),
+        cr->AddFrame(new TGLabel(cr, "Histogram Type:"),
                      new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
         histClassCombo_ = new TGComboBox(cr, 900);
         histClassCombo_->AddEntry("Gamma Spectrum", 1);
         histClassCombo_->AddEntry("Decay Curve",    2);
         histClassCombo_->AddEntry("2D Histogram",   3);
+        histClassCombo_->AddEntry("Background",     4);
         histClassCombo_->Select(1, kFALSE);
         histClassCombo_->Resize(140, 22);
         cr->AddFrame(histClassCombo_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
@@ -196,6 +231,20 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* p)
         cr->AddFrame(setClassBtn, new TGLayoutHints(kLHintsLeft));
         setClassBtn->Connect("Clicked()", "GammaFitGUI", this, "OnHistClassSet()");
         setClassBtn->SetToolTipText("Assign the chosen classification to the selected histogram");
+    }
+
+    // Delete histogram row
+    {
+        TGHorizontalFrame* dr = new TGHorizontalFrame(hg);
+        hg->AddFrame(dr, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 4));
+        TGTextButton* delBtn = new TGTextButton(dr, "Delete Selected from File");
+        delBtn->SetForegroundColor(0xCC0000);
+        dr->AddFrame(delBtn, new TGLayoutHints(kLHintsExpandX));
+        delBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDeleteHistogram()");
+        delBtn->SetToolTipText(
+            "Permanently removes the selected histogram from the ROOT file.\n"
+            "Virtual histograms (projections, bg-subtracted) are removed from\n"
+            "the session only — they are not stored in the file.");
     }
 
     // ── Fit options ───────────────────────────────────────────────────────────
@@ -324,7 +373,17 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* p)
     TGTextButton* clearCacheAutoFit = new TGTextButton(rg, "Clear Cache  (selected)");
     rg->AddFrame(clearCacheAutoFit, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
     clearCacheAutoFit->Connect("Clicked()", "GammaFitGUI", this, "OnClearHistCache()");
-    clearCacheAutoFit->SetToolTipText("Delete ALL cache entries for the currently displayed histogram");
+    clearCacheAutoFit->SetToolTipText("Delete the live cache for the selected histogram (archive is preserved)");
+
+    TGTextButton* archiveCacheAutoFit = new TGTextButton(rg, "Archive Cache  (selected)");
+    rg->AddFrame(archiveCacheAutoFit, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+    archiveCacheAutoFit->Connect("Clicked()", "GammaFitGUI", this, "OnArchiveHistCache()");
+    archiveCacheAutoFit->SetToolTipText("Copy the selected histogram's cache to fit_caches/archive/ with a timestamp");
+
+    TGTextButton* restoreArchAutoFit = new TGTextButton(rg, "Restore Archived Cache...");
+    rg->AddFrame(restoreArchAutoFit, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+    restoreArchAutoFit->Connect("Clicked()", "GammaFitGUI", this, "OnRestoreArchivedCache()");
+    restoreArchAutoFit->SetToolTipText("Restore a previously archived cache for the selected histogram");
 
     TGTextButton* transferBtn = new TGTextButton(rg, "Transfer Cache From...");
     rg->AddFrame(transferBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
@@ -381,6 +440,154 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* p)
         r4->AddFrame(addBtn, new TGLayoutHints(kLHintsRight));
         addBtn->Connect("Clicked()", "GammaFitGUI", this, "OnAddCustomProjection()");
         addBtn->SetToolTipText("Create this projection and add it to the histogram list");
+    }
+
+    // ── Background Histogram Subtraction ─────────────────────────────────────
+    TGGroupFrame* bsg = new TGGroupFrame(p, "Background Subtraction (Histogram)");
+    p->AddFrame(bsg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
+
+    // Row: source histogram
+    {
+        TGHorizontalFrame* r1 = new TGHorizontalFrame(bsg);
+        bsg->AddFrame(r1, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 1));
+        r1->AddFrame(new TGLabel(r1, "Source:"),
+                     new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        bgSubSrcCombo_ = new TGComboBox(r1, 930);
+        bgSubSrcCombo_->Resize(200, 22);
+        r1->AddFrame(bgSubSrcCombo_, new TGLayoutHints(kLHintsExpandX));
+    }
+    // Row: background histogram (only Background-typed)
+    {
+        TGHorizontalFrame* r2 = new TGHorizontalFrame(bsg);
+        bsg->AddFrame(r2, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+        r2->AddFrame(new TGLabel(r2, "Background:"),
+                     new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        bgSubBgCombo_ = new TGComboBox(r2, 931);
+        bgSubBgCombo_->Resize(200, 22);
+        r2->AddFrame(bgSubBgCombo_, new TGLayoutHints(kLHintsExpandX));
+    }
+    // Row: scale factor + result name
+    {
+        TGHorizontalFrame* r3 = new TGHorizontalFrame(bsg);
+        bsg->AddFrame(r3, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+        r3->AddFrame(new TGLabel(r3, "Scale:"),
+                     new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        bgSubScaleEntry_ = new TGNumberEntry(r3, 1.0, 6, -1,
+            TGNumberFormat::kNESRealThree,
+            TGNumberFormat::kNEAPositive,
+            TGNumberFormat::kNELLimitMin, 0.0);
+        bgSubScaleEntry_->SetWidth(70);
+        r3->AddFrame(bgSubScaleEntry_, new TGLayoutHints(kLHintsLeft, 0, 8, 0, 0));
+        r3->AddFrame(new TGLabel(r3, "Name:"),
+                     new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        bgSubNameEntry_ = new TGTextEntry(r3, "subtracted");
+        bgSubNameEntry_->SetWidth(100);
+        r3->AddFrame(bgSubNameEntry_, new TGLayoutHints(kLHintsExpandX));
+    }
+    {
+        TGTextButton* subBtn = new TGTextButton(bsg, "Create Subtracted Histogram");
+        bsg->AddFrame(subBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        subBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSubtractHistogram()");
+        subBtn->SetToolTipText(
+            "Creates: result = source - scale * background\n"
+            "Sumw2() is applied so error bars are correctly propagated.\n"
+            "Tag source histograms as 'Background' type to populate the background list.");
+    }
+
+    // ── Rebin Histogram ───────────────────────────────────────────────────────
+    TGGroupFrame* rbg = new TGGroupFrame(p, "Rebin Histogram");
+    p->AddFrame(rbg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
+
+    {
+        TGHorizontalFrame* r1 = new TGHorizontalFrame(rbg);
+        rbg->AddFrame(r1, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+        r1->AddFrame(new TGLabel(r1, "Rebin Factor:"),
+                     new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+        rebinEntry_ = new TGNumberEntry(r1, 1, 4, -1,
+            TGNumberFormat::kNESInteger,
+            TGNumberFormat::kNEAPositive,
+            TGNumberFormat::kNELLimitMinMax, 1, 1000);
+        rebinEntry_->SetWidth(60);
+        r1->AddFrame(rebinEntry_, new TGLayoutHints(kLHintsLeft));
+        rebinEntry_->GetNumberEntry()->SetToolTipText(
+            "Merge N bins into one. 1 = no rebin. Stored per histogram in metadata.");
+    }
+    {
+        TGHorizontalFrame* r2 = new TGHorizontalFrame(rbg);
+        rbg->AddFrame(r2, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 4));
+        TGTextButton* prevBtn = new TGTextButton(r2, " Preview ");
+        r2->AddFrame(prevBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        prevBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRebinPreview()");
+        prevBtn->SetToolTipText("Show rebinned histogram on canvas without storing the factor");
+        TGTextButton* applyBtn = new TGTextButton(r2, " Apply ");
+        r2->AddFrame(applyBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        applyBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRebinApply()");
+        applyBtn->SetToolTipText("Store this rebin factor for the selected histogram (saved to cache metadata)");
+        TGTextButton* resetBtn = new TGTextButton(r2, " Reset ");
+        r2->AddFrame(resetBtn, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
+        resetBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRebinReset()");
+        resetBtn->SetToolTipText("Remove stored rebin factor and redisplay at original binning");
+    }
+
+    // ── S/N Pre-screen ────────────────────────────────────────────────────────
+    TGGroupFrame* sng = new TGGroupFrame(p, "S/N Pre-screen (AutoFit)");
+    p->AddFrame(sng, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
+
+    {
+        TGHorizontalFrame* r = new TGHorizontalFrame(sng);
+        sng->AddFrame(r, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        r->AddFrame(new TGLabel(r, "Min S/N ratio:"),
+                    new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+        snThreshEntry_ = new TGNumberEntry(r, 0.0, 6, -1,
+            TGNumberFormat::kNESRealOne,
+            TGNumberFormat::kNEAAnyNumber,
+            TGNumberFormat::kNELLimitMin, 0.0);
+        r->AddFrame(snThreshEntry_, new TGLayoutHints(kLHintsLeft));
+        snThreshEntry_->GetNumberEntry()->SetToolTipText(
+            "Minimum S/N for a peak group to be fitted (0 = all groups fitted).\n"
+            "S/N = signal in peak window / sqrt(scaled sideband noise).\n"
+            "Set to 3-5 to suppress weak/spurious peaks.");
+    }
+
+    // ── Efficiency Correction ─────────────────────────────────────────────────
+    TGGroupFrame* effg = new TGGroupFrame(p, "Efficiency Correction");
+    p->AddFrame(effg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
+
+    {
+        TGLabel* effLbl = new TGLabel(effg, "ln(ε) = a − b·ln(E) + c·ln(E)² − d/E²");
+        effg->AddFrame(effLbl, new TGLayoutHints(kLHintsLeft, 4, 4, 2, 2));
+    }
+    {
+        TGHorizontalFrame* ra = new TGHorizontalFrame(effg);
+        effg->AddFrame(ra, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 1));
+        ra->AddFrame(new TGLabel(ra, "a:"), new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        effA_ = new TGNumberEntry(ra, 0.0, 8, -1,
+            TGNumberFormat::kNESRealThree, TGNumberFormat::kNEAAnyNumber);
+        effA_->SetWidth(80); ra->AddFrame(effA_, new TGLayoutHints(kLHintsLeft));
+        ra->AddFrame(new TGLabel(ra, "  b:"), new TGLayoutHints(kLHintsCenterY, 4, 4, 0, 0));
+        effB_ = new TGNumberEntry(ra, 0.0, 8, -1,
+            TGNumberFormat::kNESRealThree, TGNumberFormat::kNEAAnyNumber);
+        effB_->SetWidth(80); ra->AddFrame(effB_, new TGLayoutHints(kLHintsLeft));
+    }
+    {
+        TGHorizontalFrame* rb = new TGHorizontalFrame(effg);
+        effg->AddFrame(rb, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+        rb->AddFrame(new TGLabel(rb, "c:"), new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        effC_ = new TGNumberEntry(rb, 0.0, 8, -1,
+            TGNumberFormat::kNESRealThree, TGNumberFormat::kNEAAnyNumber);
+        effC_->SetWidth(80); rb->AddFrame(effC_, new TGLayoutHints(kLHintsLeft));
+        rb->AddFrame(new TGLabel(rb, "  d:"), new TGLayoutHints(kLHintsCenterY, 4, 4, 0, 0));
+        effD_ = new TGNumberEntry(rb, 0.0, 8, -1,
+            TGNumberFormat::kNESRealThree, TGNumberFormat::kNEAAnyNumber);
+        effD_->SetWidth(80); rb->AddFrame(effD_, new TGLayoutHints(kLHintsLeft));
+    }
+    {
+        TGTextButton* applyEffBtn = new TGTextButton(effg, "Apply (update peak stats)");
+        effg->AddFrame(applyEffBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        applyEffBtn->Connect("Clicked()", "GammaFitGUI", this, "OnApplyEfficiency()");
+        applyEffBtn->SetToolTipText(
+            "Store efficiency parameters. Corrected area = raw area / eps(E) will\n"
+            "appear in peak statistics after the next manual fit.");
     }
 
     // ── Debug toggles ─────────────────────────────────────────────────────────
@@ -607,6 +814,51 @@ void GammaFitGUI::BuildSourceTab(TGCompositeFrame* p)
     fwhmBtn->Connect("Clicked()", "GammaFitGUI", this, "OnShowSourceFWHM()");
     fwhmBtn->SetToolTipText("Load FWHM data from cache and draw FWHM vs Energy on the shared canvas");
 
+    // ── Channel → keV Calibration ─────────────────────────────────────────────
+    TGGroupFrame* calg = new TGGroupFrame(p, "Channel → keV Calibration");
+    p->AddFrame(calg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
+
+    {
+        TGLabel* calLbl = new TGLabel(calg, "E(ch) = a + b·ch + c·ch²");
+        calg->AddFrame(calLbl, new TGLayoutHints(kLHintsLeft, 4, 4, 2, 2));
+    }
+    {
+        TGHorizontalFrame* ra = new TGHorizontalFrame(calg);
+        calg->AddFrame(ra, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+        ra->AddFrame(new TGLabel(ra, "a (offset):"),
+                     new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        calibA_ = new TGNumberEntry(ra, 0.0, 9, -1,
+            TGNumberFormat::kNESRealThree, TGNumberFormat::kNEAAnyNumber);
+        calibA_->SetWidth(90); ra->AddFrame(calibA_, new TGLayoutHints(kLHintsLeft));
+    }
+    {
+        TGHorizontalFrame* rb = new TGHorizontalFrame(calg);
+        calg->AddFrame(rb, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+        rb->AddFrame(new TGLabel(rb, "b (keV/ch): "),
+                     new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        calibB_ = new TGNumberEntry(rb, 1.0, 9, -1,
+            TGNumberFormat::kNESRealThree, TGNumberFormat::kNEAAnyNumber);
+        calibB_->SetWidth(90); rb->AddFrame(calibB_, new TGLayoutHints(kLHintsLeft));
+    }
+    {
+        TGHorizontalFrame* rc = new TGHorizontalFrame(calg);
+        calg->AddFrame(rc, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+        rc->AddFrame(new TGLabel(rc, "c (keV/ch²):"),
+                     new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        calibC_ = new TGNumberEntry(rc, 0.0, 9, -1,
+            TGNumberFormat::kNESRealThree, TGNumberFormat::kNEAAnyNumber);
+        calibC_->SetWidth(90); rc->AddFrame(calibC_, new TGLayoutHints(kLHintsLeft));
+    }
+    {
+        TGTextButton* applyCalibBtn = new TGTextButton(calg, "Apply to Selected Histogram");
+        calg->AddFrame(applyCalibBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        applyCalibBtn->Connect("Clicked()", "GammaFitGUI", this, "OnApplyCalibration()");
+        applyCalibBtn->SetToolTipText(
+            "Rescale the x-axis of the selected histogram using E = a + b·ch + c·ch².\n"
+            "Creates a clone named '<hist>_cal' with the calibrated axis.\n"
+            "Coefficients can be read from the Energy Calibration residual plot.");
+    }
+
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -712,8 +964,53 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
         clearBgBtn->SetToolTipText("Clear the background fit and reset Lo/Hi to zero");
     }
     mBgFlatChk_ = new TGCheckButton(bgGrp, "Flat background  (constant, BG slope = 0)");
-    bgGrp->AddFrame(mBgFlatChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 2, 4));
+    bgGrp->AddFrame(mBgFlatChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 2, 2));
     mBgFlatChk_->SetToolTipText("Fix the linear BG slope to zero — use a flat (constant) background");
+
+    // BG anchor regions — two off-peak regions used to seed bg0 and bg1
+    bgGrp->AddFrame(new TGLabel(bgGrp, "Anchor regions (seed BG from two off-peak areas):"),
+                    new TGLayoutHints(kLHintsLeft, 2, 2, 4, 1));
+    {
+        TGHorizontalFrame* ar1 = new TGHorizontalFrame(bgGrp);
+        bgGrp->AddFrame(ar1, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+        ar1->AddFrame(new TGLabel(ar1, "Left  Lo:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+        mBgAnch1Lo_ = new TGNumberEntry(ar1, 0.0, 7, -1,
+            TGNumberFormat::kNESRealOne, TGNumberFormat::kNEAAnyNumber,
+            TGNumberFormat::kNELLimitMinMax, 0.0, 10000.0);
+        ar1->AddFrame(mBgAnch1Lo_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        ar1->AddFrame(new TGLabel(ar1, "Hi:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+        mBgAnch1Hi_ = new TGNumberEntry(ar1, 0.0, 7, -1,
+            TGNumberFormat::kNESRealOne, TGNumberFormat::kNEAAnyNumber,
+            TGNumberFormat::kNELLimitMinMax, 0.0, 10000.0);
+        ar1->AddFrame(mBgAnch1Hi_, new TGLayoutHints(kLHintsLeft));
+    }
+    {
+        TGHorizontalFrame* ar2 = new TGHorizontalFrame(bgGrp);
+        bgGrp->AddFrame(ar2, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+        ar2->AddFrame(new TGLabel(ar2, "Right Lo:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+        mBgAnch2Lo_ = new TGNumberEntry(ar2, 0.0, 7, -1,
+            TGNumberFormat::kNESRealOne, TGNumberFormat::kNEAAnyNumber,
+            TGNumberFormat::kNELLimitMinMax, 0.0, 10000.0);
+        ar2->AddFrame(mBgAnch2Lo_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        ar2->AddFrame(new TGLabel(ar2, "Hi:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+        mBgAnch2Hi_ = new TGNumberEntry(ar2, 0.0, 7, -1,
+            TGNumberFormat::kNESRealOne, TGNumberFormat::kNEAAnyNumber,
+            TGNumberFormat::kNELLimitMinMax, 0.0, 10000.0);
+        ar2->AddFrame(mBgAnch2Hi_, new TGLayoutHints(kLHintsLeft));
+    }
+    {
+        TGTextButton* anchBtn = new TGTextButton(bgGrp, "Apply Anchors → seed bg0, bg1");
+        bgGrp->AddFrame(anchBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        anchBtn->Connect("Clicked()", "GammaFitGUI", this, "OnApplyBgAnchors()");
+        anchBtn->SetToolTipText(
+            "Compute mean counts in each anchor region and fit a line through the\n"
+            "two region centres. Seeds bg0 and bg1 for the next manual fit.\n"
+            "Anchor regions should be off-peak (no gamma lines).");
+    }
 
     // ── Fit range (2-click canvas selection) ─────────────────────────────────
     TGGroupFrame* rangeGrp = new TGGroupFrame(p, "Fit Range");
@@ -783,6 +1080,26 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
     peakNavLbl_ = new TGLabel(navGrp, "No peaks loaded");
     navGrp->AddFrame(peakNavLbl_, new TGLayoutHints(kLHintsLeft, 4, 4, 0, 2));
 
+    // X range row — manual zoom to a specific energy range
+    {
+        TGHorizontalFrame* xrRow = new TGHorizontalFrame(navGrp);
+        navGrp->AddFrame(xrRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+        xrRow->AddFrame(new TGLabel(xrRow, "X range:"),
+                        new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        navXMinEntry_ = new TGNumberEntry(xrRow, 0.0, 7, -1,
+            TGNumberFormat::kNESReal, TGNumberFormat::kNEAAnyNumber);
+        xrRow->AddFrame(navXMinEntry_, new TGLayoutHints(kLHintsLeft, 0, 2, 0, 0));
+        xrRow->AddFrame(new TGLabel(xrRow, "–"),
+                        new TGLayoutHints(kLHintsCenterY, 2, 2, 0, 0));
+        navXMaxEntry_ = new TGNumberEntry(xrRow, 0.0, 7, -1,
+            TGNumberFormat::kNESReal, TGNumberFormat::kNEAAnyNumber);
+        xrRow->AddFrame(navXMaxEntry_, new TGLayoutHints(kLHintsLeft, 2, 4, 0, 0));
+        TGTextButton* goBtn = new TGTextButton(xrRow, " Go ");
+        goBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNavXRangeGo()");
+        goBtn->SetToolTipText("Zoom to the specified x range");
+        xrRow->AddFrame(goBtn, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
+    }
+
     // Fit selector dropdown — selecting a fit zooms and draws exactly like Prev/Next
     {
         TGHorizontalFrame* resRow = new TGHorizontalFrame(navGrp);
@@ -814,8 +1131,9 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
     addPeakChk_->SetToolTipText("When checked, each canvas click adds to the peak list.\nWhen unchecked, each click replaces the previous peak.");
     addPeakChk_->Connect("Toggled(Bool_t)", "GammaFitGUI", this, "OnClearPeaks()");
 
-    TGTextButton* clrBtn = new TGTextButton(pkRow, "Clear All");
+    TGTextButton* clrBtn = new TGTextButton(pkRow, "Clear Clicks");
     pkRow->AddFrame(clrBtn, new TGLayoutHints(kLHintsRight, 0, 2, 0, 0));
+    clrBtn->SetToolTipText("Clear peak list and remove all click markers from the canvas");
     clrBtn->Connect("Clicked()", "GammaFitGUI", this, "OnClearPeaks()");
 
     TGTextButton* rmBtn = new TGTextButton(pkRow, "Remove");
@@ -869,11 +1187,39 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
     mFitMinosChk_->SetToolTipText("Compute asymmetric MINOS errors (slower, more accurate near parameter boundaries)");
 
     mShowCompChk_ = new TGCheckButton(statsGrp, "Show fit components  (BG + Gaussians)");
-    statsGrp->AddFrame(mShowCompChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 4));
+    statsGrp->AddFrame(mShowCompChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 2));
     mShowCompChk_->SetToolTipText("Overlay the background (green dashed) and individual Gaussian components (blue dashed) when fit is drawn");
     mShowCompChk_->Connect("Toggled(Bool_t)", "GammaFitGUI", this, "OnShowCompToggled()");
 
-    // Peak label
+    showIsoLabelsChk_ = new TGCheckButton(statsGrp, "Show isotope matches on peaks");
+    showIsoLabelsChk_->SetState(kButtonDown);
+    statsGrp->AddFrame(showIsoLabelsChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 4));
+    showIsoLabelsChk_->SetToolTipText(
+        "Show the matched isotope name above each peak energy label.\n"
+        "Uncheck to display energy values only.");
+    showIsoLabelsChk_->Connect("Clicked()", "GammaFitGUI", this, "OnToggleIsoLabels()");
+
+    mBgQuadChk_ = new TGCheckButton(statsGrp, "Quadratic background  (B0 + B1·x + B2·x²)");
+    statsGrp->AddFrame(mBgQuadChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 0));
+    mBgQuadChk_->SetToolTipText(
+        "Add a quadratic (parabolic) background term B2·x².\n"
+        "Useful when the Compton continuum has visible curvature under the peak.");
+
+    mComptonStepChk_ = new TGCheckButton(statsGrp, "Compton step  (Erfc term per peak)");
+    statsGrp->AddFrame(mComptonStepChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 0));
+    mComptonStepChk_->SetToolTipText(
+        "Add an Erfc step function for each Gaussian: step_i·erfc((x-E_i)/(sig_i·√2)).\n"
+        "Models photons scattered into the continuum below the full-energy peak.\n"
+        "Ref: Helmer & McCullagh, Nucl. Instrum. Methods 168 (1979) 593.");
+
+    mTieWidthsChk_ = new TGCheckButton(statsGrp, "Tie widths to resolution model");
+    statsGrp->AddFrame(mTieWidthsChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 4));
+    mTieWidthsChk_->SetToolTipText(
+        "Fix each Gaussian sigma to the FWHM-model prediction σ(E).\n"
+        "Enforces physically consistent detector resolution for doublet fits.\n"
+        "Requires a valid FWHM model — load from FWHM tab first.");
+
+    // Peak label + label-pick mode
     {
         TGHorizontalFrame* lblRow = new TGHorizontalFrame(statsGrp);
         statsGrp->AddFrame(lblRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
@@ -884,6 +1230,21 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
         mPeakLabelCombo_->Select(1, kFALSE);
         mPeakLabelCombo_->Resize(200, 22);
         lblRow->AddFrame(mPeakLabelCombo_, new TGLayoutHints(kLHintsExpandX));
+    }
+    {
+        TGHorizontalFrame* pickRow = new TGHorizontalFrame(statsGrp);
+        statsGrp->AddFrame(pickRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 4));
+        labelPickChk_ = new TGCheckButton(pickRow, "Label Pick Mode");
+        labelPickChk_->SetToolTipText(
+            "When checked, clicking on the canvas selects the nearest cached peak.\n"
+            "Change its label in the combo above then click Apply Label.");
+        pickRow->AddFrame(labelPickChk_, new TGLayoutHints(kLHintsCenterY, 0, 8, 0, 0));
+        applyLabelBtn_ = new TGTextButton(pickRow, "Apply Label");
+        applyLabelBtn_->Connect("Clicked()", "GammaFitGUI", this, "OnApplyPickedLabel()");
+        applyLabelBtn_->SetToolTipText("Write the selected label to the picked peak's cache entry");
+        pickRow->AddFrame(applyLabelBtn_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        labelPickInfo_ = new TGLabel(pickRow, "(no peak picked)");
+        pickRow->AddFrame(labelPickInfo_, new TGLayoutHints(kLHintsCenterY | kLHintsLeft));
     }
 
     // Accept / Reject / Load Cache / Parameter Scan
@@ -938,11 +1299,15 @@ void GammaFitGUI::OnOpenFile()
         return;
     }
 
+    AddToRecentFiles(inputPath_);
+
     histNames_.clear();
     th2Names_.clear();
     projParent_.clear();
     histClass_.clear();
     customProjDefs_.clear();
+    bgSubtractDefs_.clear();
+    rebinFactors_.clear();
     TIter next(inputFile_->GetListOfKeys());
     TKey* key;
     while ((key = (TKey*)next())) {
@@ -965,6 +1330,7 @@ void GammaFitGUI::OnOpenFile()
     LoadMetadata();
     PopulateHistWidgets();
     PopulateCustProjTh2Combo();
+    PopulateBgSubCombos();
 
     // Pre-populate Fit Results list with any histogram that already has a cache
     fittedHists_.clear();
@@ -1029,6 +1395,7 @@ void GammaFitGUI::PopulateHistWidgets()
         bool isTH2   = th2Names_.count(name) > 0;
         bool isProj  = projParent_.find(name) != projParent_.end();
         bool isCProj = customProjDefs_.find(name) != customProjDefs_.end();
+        bool isBgSub = bgSubtractDefs_.count(name) > 0;
         if (isTH2) {
             display = "[2D] " + name;
         } else if (isCProj) {
@@ -1037,9 +1404,18 @@ void GammaFitGUI::PopulateHistWidgets()
             auto& pp = projParent_.at(name);
             bool isX = name.size() >= 3 && name.substr(name.size()-3) == "_px";
             display = (isX ? "[ProjX] " : "[ProjY] ") + pp;
+        } else if (isBgSub) {
+            display = "[BgSub] " + name;
         } else {
             std::string cls = ClassOf(name);
-            if (cls == "Decay") display = "[Decay] " + name;
+            if      (cls == "Decay")      display = "[Decay] " + name;
+            else if (cls == "Background") display = "[BG] " + name;
+        }
+        // Prepend rebin label when factor > 1
+        {
+            auto rbit = rebinFactors_.find(name);
+            if (rbit != rebinFactors_.end() && rbit->second > 1)
+                display = "[Rb:" + std::to_string(rbit->second) + "] " + display;
         }
         histList_->AddEntry(display.c_str(), (Int_t)i + 1);
         if (!isTH2) {
@@ -1057,6 +1433,7 @@ void GammaFitGUI::OnHistogramSelected(Int_t id)
 {
     if (!inputFile_ || id < 1 || (size_t)id > histNames_.size()) return;
     currentHist_ = histNames_[id - 1];
+    schematicDrawn_ = false;  // new histogram — don't auto-redraw schematic
 
     if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
     rawHist_ = LoadHistFromFile(currentHist_, rawHistOwned_);
@@ -1064,9 +1441,16 @@ void GammaFitGUI::OnHistogramSelected(Int_t id)
     // Sync classification combo
     if (histClassCombo_) {
         std::string cls = ClassOf(currentHist_);
-        if      (cls == "Decay") histClassCombo_->Select(2, kFALSE);
-        else if (cls == "2D")    histClassCombo_->Select(3, kFALSE);
-        else                     histClassCombo_->Select(1, kFALSE);
+        if      (cls == "Decay")      histClassCombo_->Select(2, kFALSE);
+        else if (cls == "2D")         histClassCombo_->Select(3, kFALSE);
+        else if (cls == "Background") histClassCombo_->Select(4, kFALSE);
+        else                          histClassCombo_->Select(1, kFALSE);
+    }
+
+    // Sync rebin entry to stored factor for this histogram
+    if (rebinEntry_) {
+        auto rbit = rebinFactors_.find(currentHist_);
+        rebinEntry_->SetNumber(rbit != rebinFactors_.end() ? rbit->second : 1);
     }
 
     DrawOnCanvas(rawHist_);
@@ -1209,9 +1593,32 @@ void GammaFitGUI::OnDebugAllOff()
     AppendLog("Debug: all sections disabled");
 }
 
+std::string GammaFitGUI::CacheDirFor() const
+{
+    if (inputPath_.empty()) return std::string(kCacheDir);
+    std::string fname = inputPath_;
+    auto slash = fname.find_last_of("/\\");
+    if (slash != std::string::npos)
+        fname = fname.substr(slash + 1);
+    for (char& c : fname)
+        if (!std::isalnum((unsigned char)c) && c != '.') c = '_';
+    return std::string(kCacheDir) + "/" + fname;
+}
+
+std::string GammaFitGUI::ArchiveDirFor() const
+{
+    return CacheDirFor() + "/archive";
+}
+
+void GammaFitGUI::EnsureCacheDir() const
+{
+    ::mkdir(kCacheDir, 0755);
+    ::mkdir(CacheDirFor().c_str(), 0755);
+}
+
 std::string GammaFitGUI::CacheFileFor(const std::string& hname) const
 {
-    return std::string(kCacheDir) + "/fit_cache_" + hname + ".dat";
+    return CacheDirFor() + "/fit_cache_" + hname + ".dat";
 }
 
 TH1* GammaFitGUI::LoadProjection(TFile* f,
@@ -1248,34 +1655,72 @@ TH1* GammaFitGUI::LoadHistFromFile(const std::string& hname, bool& owned) const
     owned = false;
     if (!inputFile_) return nullptr;
 
-    // Custom projection with user-defined cut range
-    auto cit = customProjDefs_.find(hname);
-    if (cit != customProjDefs_.end()) {
-        const CustomProjDef& def = cit->second;
-        TH2* h2 = (TH2*)inputFile_->Get(def.th2Name.c_str());
-        if (!h2) return nullptr;
-        TH1* proj = nullptr;
-        if (def.projX) {
-            int b1 = h2->GetYaxis()->FindBin(def.lo);
-            int b2 = h2->GetYaxis()->FindBin(def.hi);
-            proj = h2->ProjectionX(hname.c_str(), b1, b2);
-        } else {
-            int b1 = h2->GetXaxis()->FindBin(def.lo);
-            int b2 = h2->GetXaxis()->FindBin(def.hi);
-            proj = h2->ProjectionY(hname.c_str(), b1, b2);
+    TH1* result = nullptr;
+
+    // Background-subtracted virtual histogram
+    auto bsit = bgSubtractDefs_.find(hname);
+    if (bsit != bgSubtractDefs_.end()) {
+        const BgSubtractDef& bsd = bsit->second;
+        bool srcOwned = false, bgOwned = false;
+        TH1* src = LoadHistFromFile(bsd.srcName, srcOwned);
+        TH1* bg  = LoadHistFromFile(bsd.bgName,  bgOwned);
+        if (src && bg) {
+            result = (TH1*)src->Clone(hname.c_str());
+            result->SetDirectory(nullptr);
+            result->Sumw2();
+            result->Add(bg, -bsd.scale);
+            owned = true;
         }
-        if (proj) { proj->SetDirectory(nullptr); owned = true; }
-        return proj;
+        if (srcOwned) delete src;
+        if (bgOwned)  delete bg;
+    }
+    // Custom projection with user-defined cut range
+    else {
+        auto cit = customProjDefs_.find(hname);
+        if (cit != customProjDefs_.end()) {
+            const CustomProjDef& def = cit->second;
+            TH2* h2 = (TH2*)inputFile_->Get(def.th2Name.c_str());
+            if (h2) {
+                if (def.projX) {
+                    int b1 = h2->GetYaxis()->FindBin(def.lo);
+                    int b2 = h2->GetYaxis()->FindBin(def.hi);
+                    result = h2->ProjectionX(hname.c_str(), b1, b2);
+                } else {
+                    int b1 = h2->GetXaxis()->FindBin(def.lo);
+                    int b2 = h2->GetXaxis()->FindBin(def.hi);
+                    result = h2->ProjectionY(hname.c_str(), b1, b2);
+                }
+                if (result) { result->SetDirectory(nullptr); owned = true; }
+            }
+        }
+        // Auto projection (full axis)
+        else if (projParent_.find(hname) != projParent_.end()) {
+            result = LoadProjection(inputFile_, hname, projParent_, nullptr, nullptr);
+            owned = (result != nullptr);
+        }
+        // Plain histogram from file
+        else {
+            result = (TH1*)inputFile_->Get(hname.c_str());
+        }
     }
 
-    // Auto projection (full axis)
-    if (projParent_.find(hname) != projParent_.end()) {
-        TH1* h = LoadProjection(inputFile_, hname, projParent_, nullptr, nullptr);
-        owned = (h != nullptr);
-        return h;
+    // Apply stored rebin factor (1D only)
+    if (result && !result->InheritsFrom("TH2")) {
+        auto rbit = rebinFactors_.find(hname);
+        if (rbit != rebinFactors_.end() && rbit->second > 1) {
+            int n = rbit->second;
+            if (!owned) {
+                result = (TH1*)result->Clone((hname + "_rb").c_str());
+                result->SetDirectory(nullptr);
+                owned = true;
+            }
+            // Sumw2 before Rebin ensures Poisson errors add in quadrature
+            result->Sumw2();
+            result->Rebin(n);
+        }
     }
 
-    return (TH1*)inputFile_->Get(hname.c_str());
+    return result;
 }
 
 void GammaFitGUI::OnApplyTh2Labels()
@@ -1342,7 +1787,7 @@ void GammaFitGUI::RunFitOnHistogram(const std::string& hname,
     }
 
     SyncDebugToggles();
-    mkdir(kCacheDir, 0755);
+    EnsureCacheDir();
 
     bool useSeeds = useSeedsChk_->IsOn();
 
@@ -1410,6 +1855,7 @@ void GammaFitGUI::RunFitOnHistogram(const std::string& hname,
         bgOpts.tspecThresh      = tspecThreshEntry_ ? tspecThreshEntry_->GetNumber() : 0.02;
         bgOpts.useLogLikelihood = autoLogLikChk_ ? autoLogLikChk_->IsOn() : true;
         bgOpts.useImprove       = autoImprovChk_ ? autoImprovChk_->IsOn() : false;
+        bgOpts.snMinRatio       = snThreshEntry_  ? snThreshEntry_->GetNumber() : 0.0;
         AppendLog("Running AutoFit: " + hname +
                   (useSeeds ? "  [seeds on]" : "  [fresh start]") +
                   "  sigma=" + Fmt(bgOpts.tspecSigma, 1) +
@@ -1614,7 +2060,7 @@ void GammaFitGUI::OnCanvasEvent(Int_t event, Int_t px, Int_t py, TObject* /*obj*
                 for (size_t ei = 0; ei < fwhmExcluded_.size(); ei++)
                     if (fwhmExcluded_[ei]) eExcl.params.push_back(fwhmAllX_[ei]);
                 edb.ForceStore(kExcludedFwhmKey, eExcl);
-                mkdir(kCacheDir, 0755);
+                EnsureCacheDir();
                 edb.Save(CacheFileFor(fwhmHistName_));
             }
         }
@@ -1698,6 +2144,58 @@ void GammaFitGUI::OnCanvasEvent(Int_t event, Int_t px, Int_t py, TObject* /*obj*
         return;
     }
 
+    // ── Label pick mode — click to select nearest cached Gaussian ────────────
+    if (labelPickChk_ && labelPickChk_->IsOn()) {
+        FitDatabase fitdb;
+        if (!fitdb.Load(CacheFileFor(currentHist_))) {
+            AppendLog("No cache for this histogram — run a fit first.");
+            return;
+        }
+        double bestDist = 1e9;
+        std::string bestKey;
+        int bestGi = -1;
+        for (const auto& kv : fitdb.GetEntries()) {
+            if (kv.first.empty() || kv.first[0] == '_') continue;
+            const FitEntry& fe = kv.second;
+            int npar = (int)fe.params.size();
+            if (npar < 5 || (npar-2)%3 != 0) continue;
+            int n = (npar-2)/3;
+            for (int gi = 0; gi < n; gi++) {
+                double E = fe.params[3*gi+1];
+                double dist = std::fabs(E - energy);
+                if (dist < bestDist) { bestDist = dist; bestKey = kv.first; bestGi = (n>1) ? gi : -1; }
+            }
+        }
+        if (bestKey.empty() || bestDist > 20.0) {
+            AppendLog(Form("No cached peak within 20 keV of %.1f — click closer to a peak.", energy));
+            return;
+        }
+        labelPickKey_      = bestKey;
+        labelPickGaussIdx_ = bestGi;
+        const FitEntry& picked = fitdb.GetEntries().at(bestKey);
+        std::string curLabel = (bestGi >= 0) ? picked.PeakLabel(bestGi) : picked.label;
+        double pickedE = picked.params[3*(bestGi>=0?bestGi:0)+1];
+
+        // Populate combo and pre-select current label
+        if (mPeakLabelCombo_ && dbLoaded_) {
+            mPeakLabelCombo_->RemoveAll();
+            mPeakLabelCombo_->AddEntry("(none)", 1);
+            int cid = 2;
+            if (!curLabel.empty()) mPeakLabelCombo_->AddEntry(curLabel.c_str(), cid++);
+            for (const auto& gl : db_.db) {
+                if (gl.isotope == curLabel) continue;
+                mPeakLabelCombo_->AddEntry(gl.isotope.c_str(), cid++);
+            }
+            mPeakLabelCombo_->Select(curLabel.empty() ? 1 : 2, kFALSE);
+            mPeakLabelCombo_->MapSubwindows(); mPeakLabelCombo_->Layout();
+        }
+        std::string info = Form("%.1f keV", pickedE);
+        if (!curLabel.empty()) info += " [" + curLabel + "]";
+        if (labelPickInfo_) labelPickInfo_->SetText(info.c_str());
+        AppendLog("Label pick: " + info + (bestGi>=0 ? Form("  Gaussian %d", bestGi+1) : ""));
+        return;
+    }
+
     // ── Peak placement ────────────────────────────────────────────────────────
     clickEnergy_ = energy;
     mEnergy_->SetNumber(energy);
@@ -1705,6 +2203,12 @@ void GammaFitGUI::OnCanvasEvent(Int_t event, Int_t px, Int_t py, TObject* /*obj*
     if (!addPeakChk_->IsOn()) {
         manualPeaks_.clear();
         peakListBox_->RemoveAll();
+        peakListBox_->MapSubwindows(); peakListBox_->Layout();
+        if (rawHist_) {
+            RedrawView();
+            ylo = targetPad->GetUymin();
+            yhi = targetPad->GetUymax() * 0.95;
+        }
     }
 
     manualPeaks_.push_back(energy);
@@ -1763,10 +2267,15 @@ void GammaFitGUI::OnPreview()
         xmax = manualPeaks_.back()  + nSig * res_.Sigma(manualPeaks_.back());
     }
 
+    bool previewQuad  = mBgQuadChk_      && mBgQuadChk_->IsDown();
+    bool previewStep  = mComptonStepChk_ && mComptonStepChk_->IsDown();
+
     delete manualTF1_;
     for (TF1* fc : fitComponents_) delete fc;
     fitComponents_.clear();
-    manualTF1_ = new TF1("manual_preview", BuildNGaussFormula(n).c_str(), xmin, xmax);
+    manualTF1_ = new TF1("manual_preview",
+                         BuildNGaussFormulaEx(n, previewQuad, previewStep).c_str(),
+                         xmin, xmax);
 
     for (int i = 0; i < n; i++) {
         double E   = manualPeaks_[i];
@@ -1781,6 +2290,15 @@ void GammaFitGUI::OnPreview()
         manualTF1_->SetParameter(3*n+1, 0.0);
     else
         manualTF1_->SetParameter(3*n+1, bg1);
+    if (previewQuad)
+        manualTF1_->SetParameter(3*n+2, 0.0);
+    if (previewStep) {
+        int nbg = NBgPars(previewQuad);
+        for (int i = 0; i < n; i++) {
+            double A = std::max(rawHist_->GetBinContent(rawHist_->FindBin(manualPeaks_[i])), 1.0);
+            manualTF1_->SetParameter(3*n + nbg + i, 0.05 * A);
+        }
+    }
     manualTF1_->SetLineColor(kOrange + 1);
     manualTF1_->SetLineStyle(2);
     manualTF1_->SetLineWidth(2);
@@ -1827,31 +2345,43 @@ void GammaFitGUI::OnManualFit()
     }
     TH1* fitHist = viewHist_ ? viewHist_ : rawHist_;
 
+    bool useQuadBG    = mBgQuadChk_      && mBgQuadChk_->IsDown();
+    bool useCompStep  = mComptonStepChk_ && mComptonStepChk_->IsDown();
+    bool useTieWidths = mTieWidthsChk_   && mTieWidthsChk_->IsDown();
+
     delete manualTF1_;
     for (TF1* fc : fitComponents_) delete fc;
     fitComponents_.clear();
-    manualTF1_ = new TF1("manual_fit", BuildNGaussFormula(n).c_str(), xmin, xmax);
+    manualTF1_ = new TF1("manual_fit",
+                         BuildNGaussFormulaEx(n, useQuadBG, useCompStep).c_str(),
+                         xmin, xmax);
+
+    double ampLo  = mAmpLoFrac_  ? mAmpLoFrac_ ->GetNumber() : 0.01;
+    double ampHi  = mAmpHiFrac_  ? mAmpHiFrac_ ->GetNumber() : 20.0;
+    double sigLo  = mSigLoFrac_  ? mSigLoFrac_ ->GetNumber() : 0.2;
+    double sigHi  = mSigHiFrac_  ? mSigHiFrac_ ->GetNumber() : 4.0;
+    double eWin   = mEnergyWin_  ? mEnergyWin_ ->GetNumber() : 8.0;
 
     for (int i = 0; i < n; i++) {
         double E        = manualPeaks_[i];
-        double sigModel = res_.Sigma(E);   // resolution-model prediction
+        double sigModel = res_.Sigma(E);
         double sig      = sigModel;
         double A        = std::max(fitHist->GetBinContent(fitHist->FindBin(E)), 1.0);
         manualTF1_->SetParName(3*i,   Form("A_%d",   i+1));
         manualTF1_->SetParName(3*i+1, Form("E_%d",   i+1));
         manualTF1_->SetParName(3*i+2, Form("sig_%d", i+1));
-        double ampLo  = mAmpLoFrac_  ? mAmpLoFrac_ ->GetNumber() : 0.01;
-        double ampHi  = mAmpHiFrac_  ? mAmpHiFrac_ ->GetNumber() : 20.0;
-        double sigLo  = mSigLoFrac_  ? mSigLoFrac_ ->GetNumber() : 0.2;
-        double sigHi  = mSigHiFrac_  ? mSigHiFrac_ ->GetNumber() : 4.0;
-        double eWin   = mEnergyWin_  ? mEnergyWin_ ->GetNumber() : 8.0;
 
         manualTF1_->SetParameter(3*i,     A);
         manualTF1_->SetParLimits(3*i,     std::max(A * ampLo, 1.0), A * ampHi);
         manualTF1_->SetParameter(3*i+1,   E);
         manualTF1_->SetParLimits(3*i+1,   E - eWin, E + eWin);
-        manualTF1_->SetParameter(3*i+2,   sig);
-        manualTF1_->SetParLimits(3*i+2,   sigModel * sigLo, sigModel * sigHi);
+        if (useTieWidths) {
+            manualTF1_->SetParameter(3*i+2, sigModel);
+            manualTF1_->FixParameter(3*i+2, sigModel);
+        } else {
+            manualTF1_->SetParameter(3*i+2,   sig);
+            manualTF1_->SetParLimits(3*i+2,   sigModel * sigLo, sigModel * sigHi);
+        }
     }
     manualTF1_->SetParName(3*n,   "bg0");
     manualTF1_->SetParName(3*n+1, "bg1");
@@ -1859,6 +2389,24 @@ void GammaFitGUI::OnManualFit()
     manualTF1_->SetParameter(3*n+1, bg1);
     if (mBgFlatChk_ && mBgFlatChk_->IsDown())
         manualTF1_->FixParameter(3*n+1, 0.0);
+    if (useQuadBG) {
+        manualTF1_->SetParName(3*n+2, "bg2");
+        manualTF1_->SetParameter(3*n+2, 0.0);
+        double bg2Lim = (xmax > xmin)
+            ? std::max(std::abs(bg0) / ((xmax-xmin)*(xmax-xmin)), 1e-8)
+            : 1e-6;
+        manualTF1_->SetParLimits(3*n+2, -bg2Lim*10.0, bg2Lim*10.0);
+    }
+    if (useCompStep) {
+        int nbg = NBgPars(useQuadBG);
+        for (int i = 0; i < n; i++) {
+            int sIdx = 3*n + nbg + i;
+            double A = manualTF1_->GetParameter(3*i);
+            manualTF1_->SetParName(sIdx, Form("step_%d", i+1));
+            manualTF1_->SetParameter(sIdx, 0.05 * A);
+            manualTF1_->SetParLimits(sIdx, 0.0, A);
+        }
+    }
 
     // Snapshot old stats before fitting so UpdatePeakStats can show old vs new
     peakStatsOld_ = peakStatsCurrent_;
@@ -1878,6 +2426,15 @@ void GammaFitGUI::OnManualFit()
     // We redraw explicitly afterward so the zoom and view mode are preserved.
     TFitResultPtr r = fitHist->Fit(manualTF1_, fitOpts.c_str());
     lastManualEdm_ = (r.Get() && r->IsValid()) ? r->Edm() : -1.0;
+
+    // Clamp background so it never goes negative over the fit window
+    {
+        double bg0   = manualTF1_->GetParameter(3*n);
+        double bg1   = manualTF1_->GetParameter(3*n+1);
+        double bgMin = std::min(bg0 + bg1 * xmin, bg0 + bg1 * xmax);
+        if (bgMin < 0.0)
+            manualTF1_->SetParameter(3*n, bg0 - bgMin);
+    }
 
     // Check whether any parameter hit its bound — zero errors are a symptom
     {
@@ -2228,6 +2785,11 @@ void GammaFitGUI::OnAcceptFit()
     e.chi2ndf     = (lastManualChi2ndf_ > 0.0) ? lastManualChi2ndf_ : rm.rms * rm.rms;
     e.xlo         = xlo;
     e.xhi         = xhi;
+    if (fitHist) {
+        int midBin = fitHist->FindBin(0.5 * (xlo + xhi));
+        double bw  = fitHist->GetBinWidth(midBin);
+        if (bw > 0.0) e.binWidth = bw;
+    }
 
     // Record which fit method was used
     {
@@ -2259,7 +2821,7 @@ void GammaFitGUI::OnAcceptFit()
     // Force-store: manual fits always win regardless of score comparison.
     fitdb.ForceStore(key, e);
     fitdb.rootFile = inputPath_;
-    mkdir(kCacheDir, 0755);
+    EnsureCacheDir();
     fitdb.Save(cacheFile);
 
     // Append to the Gamma_fits text report
@@ -2317,7 +2879,68 @@ void GammaFitGUI::OnClearPeaks()
     manualPeaks_.clear();
     peakListBox_->RemoveAll();
     peakListBox_->MapSubwindows(); peakListBox_->Layout();
-    AppendLog("Peak list cleared.");
+    if (rawHist_) RedrawView();
+    AppendLog("Peak list and click markers cleared.");
+}
+
+// Lightweight redraw — reuses existing viewHist_ rather than rerunning MakeBgSubHist.
+// Use this instead of OnHistViewChanged when only click markers need clearing.
+void GammaFitGUI::RedrawView()
+{
+    if (!rawHist_) return;
+    TCanvas* c = canvas_->GetCanvas();
+    c->Clear();
+    c->cd();
+
+    TH1* h = viewHist_ ? viewHist_ : rawHist_;
+    ApplyHistStyle(h, currentHist_.empty() ? nullptr : currentHist_.c_str());
+    if (!currentHist_.empty() && ClassOf(currentHist_) == "Decay")
+        h->GetXaxis()->SetTitle("Time (ms)");
+    h->SetLineColor(kBlack);
+    h->SetMarkerSize(0);
+    h->SetStats(0);
+    if (viewXmin_ < viewXmax_)
+        h->GetXaxis()->SetRangeUser(viewXmin_, viewXmax_);
+    else
+        h->GetXaxis()->UnZoom();
+    SetYMaxFromVisible(h);
+    h->Draw("hist");
+    h->Draw("E1 same");
+
+    Int_t mode = histViewCombo_ ? histViewCombo_->GetSelected() : 1;
+    if (mode == 3 && !currentHist_.empty())
+        OverlayFitPeaks(currentHist_, c);
+
+    if (manualTF1_) {
+        bool showComp = mShowCompChk_ && mShowCompChk_->IsDown();
+        manualTF1_->SetLineColor(kRed);
+        manualTF1_->SetLineWidth(2);
+        DrawFitComponents(c, manualTF1_);
+        if (!showComp)
+            manualTF1_->Draw("same");
+        DrawPeakLabels(manualTF1_);
+    }
+
+    // Integral statistics overlay
+    {
+        TPaveText* pt = new TPaveText(0.55, 0.75, 0.98, 0.98, "NDC");
+        pt->SetBorderSize(1);
+        pt->SetFillColor(kWhite);
+        pt->SetFillStyle(1001);
+        pt->SetTextAlign(12);
+        pt->SetTextSize(0.030);
+        pt->SetBit(kCanDelete);
+        pt->AddText(Form("Integral = %.0f", h->Integral()));
+        pt->AddText(Form("Entries  = %.0f", h->GetEntries()));
+        pt->AddText(Form("Mean     = %.2f keV", h->GetMean()));
+        pt->AddText(Form("RMS      = %.2f keV", h->GetRMS()));
+        auto rbit = rebinFactors_.find(currentHist_);
+        if (rbit != rebinFactors_.end() && rbit->second > 1)
+            pt->AddText(Form("Rebin x%d", rbit->second));
+        pt->Draw();
+    }
+
+    c->Modified(); c->Update();
 }
 
 void GammaFitGUI::OnRemovePeak()
@@ -2424,6 +3047,140 @@ TH1* GammaFitGUI::MakeBgSubHist(TH1* raw, bool doSubtract, int iterations)
     return h;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Staggered peak labels — shared by OverlayFitPeaks and DrawPeakLabels
+// ─────────────────────────────────────────────────────────────────────────────
+namespace {
+struct PkLblData {
+    double E;
+    double peakY;       // data y at peak (fit or histogram)
+    std::string iso;    // isotope name, may be empty
+    std::string ekeV;   // energy string e.g. "1234.5"
+};
+
+void DrawStaggedLabels(const std::vector<PkLblData>& in, TVirtualPad* pad)
+{
+    if (in.empty() || !pad) return;
+
+    std::vector<const PkLblData*> pts;
+    for (auto& p : in) pts.push_back(&p);
+    std::sort(pts.begin(), pts.end(), [](auto* a, auto* b){ return a->E < b->E; });
+
+    double xlo   = pad->GetUxmin(), xhi = pad->GetUxmax();
+    double xSpan = xhi - xlo;
+    if (xSpan <= 0) return;
+
+    double ylo = pad->GetUymin(), yhi = pad->GetUymax();
+    bool   logY = (pad->GetLogy() != 0);
+
+    // Peak y → NDC fraction (0 = bottom, 1 = top of pad)
+    auto toNDC = [&](double dataY) -> double {
+        if (logY) {
+            if (dataY <= 0) return 0.0;
+            double lmin = (ylo > 0) ? std::log10(ylo) : -1.0;
+            double lmax = std::log10(yhi);
+            return (std::log10(dataY) - lmin) / (lmax - lmin);
+        }
+        return (yhi > ylo) ? (dataY - ylo) / (yhi - ylo) : 0.0;
+    };
+
+    // NDC fraction → data y (for drawing TLatex / TLine)
+    auto fromNDC = [&](double f) -> double {
+        f = std::max(0.0, std::min(f, 0.999));
+        if (logY) {
+            double lmin = (ylo > 0) ? std::log10(ylo) : -1.0;
+            double lmax = std::log10(yhi);
+            return std::pow(10.0, lmin + f * (lmax - lmin));
+        }
+        return ylo + f * (yhi - ylo);
+    };
+
+    // NDC constants
+    // kRowH: vertical space (NDC) reserved for one text row (textSize + leading).
+    // kMinGap: clearance from peak top to bottom of energy label.
+    // kXConf: NDC x-fraction within which two labels can conflict vertically.
+    const double kRowH   = 0.032;
+    const double kMinGap = 0.018;
+    const double kXConf  = 0.10;
+    const double kMaxY   = 0.96;
+
+    // Greedy y-assignment: process left-to-right, tracking placed label extents.
+    struct Placed { double xNDC, yBot, yTop; };
+    std::vector<Placed>  placed;
+    std::vector<double>  yBotVec(pts.size(), -1.0);
+
+    for (int i = 0; i < (int)pts.size(); i++) {
+        double E = pts[i]->E;
+        if (E < xlo || E > xhi) continue;
+
+        double xNDC  = (E - xlo) / xSpan;
+        double pNDC  = toNDC(pts[i]->peakY);
+        bool   hasIso = !pts[i]->iso.empty();
+        double lblH  = hasIso ? 2.0 * kRowH : kRowH;
+
+        // Start the label just above the peak
+        double yBot = pNDC + kMinGap;
+
+        // Push up until no overlap with any nearby placed label
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (auto& pl : placed) {
+                if (std::abs(pl.xNDC - xNDC) > kXConf) continue;
+                double myTop = yBot + lblH;
+                if (myTop > pl.yBot && yBot < pl.yTop) {
+                    yBot    = pl.yTop + kMinGap * 0.4;
+                    changed = true;
+                }
+            }
+        }
+
+        // Clamp to pad top
+        if (yBot + lblH > kMaxY) yBot = kMaxY - lblH;
+        yBot = std::max(yBot, kMinGap);
+
+        yBotVec[i] = yBot;
+        placed.push_back({xNDC, yBot, yBot + lblH});
+    }
+
+    TLatex lbl;
+    lbl.SetTextSize(0.022);
+    lbl.SetTextAlign(21);  // centre-bottom
+
+    for (int i = 0; i < (int)pts.size(); i++) {
+        double E = pts[i]->E;
+        if (E < xlo || E > xhi || yBotVec[i] < 0) continue;
+
+        double yBot   = yBotVec[i];
+        double peakTp = pts[i]->peakY;
+
+        // Dotted stem from just above peak top to just below energy label
+        if (peakTp > 0) {
+            double stemBot = fromNDC(toNDC(peakTp) + 0.004);
+            double stemTop = fromNDC(yBot - 0.004);
+            if (stemBot < stemTop) {
+                TLine* stem = new TLine(E, stemBot, E, stemTop);
+                stem->SetLineColor(kGray + 1);
+                stem->SetLineWidth(1);
+                stem->SetLineStyle(3);
+                stem->SetBit(kCanDelete);
+                stem->Draw("same");
+            }
+        }
+
+        // Energy label (bottom row)
+        lbl.SetTextColor(kBlack);
+        lbl.DrawLatex(E, fromNDC(yBot), pts[i]->ekeV.c_str());
+
+        // Isotope label (row above)
+        if (!pts[i]->iso.empty()) {
+            lbl.SetTextColor(kAzure + 2);
+            lbl.DrawLatex(E, fromNDC(yBot + kRowH), pts[i]->iso.c_str());
+        }
+    }
+}
+} // namespace
+
 void GammaFitGUI::OverlayFitPeaks(const std::string& hname, TCanvas* c)
 {
     FitDatabase fitdb;
@@ -2461,13 +3218,10 @@ void GammaFitGUI::OverlayFitPeaks(const std::string& hname, TCanvas* c)
 
     TH1* dispH = viewHist_ ? viewHist_ : rawHist_;
 
-    TLatex lbl;
-    lbl.SetTextSize(0.022);
-    lbl.SetTextAlign(21);
-
     // Global set of already-labeled energies — prevents two labels within 1 FWHM
     // of each other regardless of which cache group they come from.
     std::vector<double> labeledEs;
+    std::vector<PkLblData> pkLabels;
 
     auto labelTooClose = [&](double E) {
         double sep = res_.FWHM(E);
@@ -2570,42 +3324,37 @@ void GammaFitGUI::OverlayFitPeaks(const std::string& hname, TCanvas* c)
             double yLabel = f ? f->Eval(E)
                               : (dispH ? dispH->GetBinContent(dispH->FindBin(E)) : 0.0);
             if (yLabel <= 0.0) continue;
-            if (labelTooClose(E)) continue;   // another label is already within 1 FWHM
+            if (labelTooClose(E)) continue;
             labeledEs.push_back(E);
+
+            // Centroid uncertainty from fit parameter error (0 if no fit)
+            double eErr = 0.0;
+            if (f) {
+                int npar = f->GetNpar();
+                if (npar == 7)
+                    eErr = f->GetParError(1);
+                else if (npar >= 5 && (npar - 2) % 3 == 0)
+                    eErr = f->GetParError(3*gi + 1);
+            }
 
             // Prefer per-Gaussian label, then entry-level label, then DB match
             std::string isoName;
-            if (gi < (int)cand.entry->peakLabels.size() && !cand.entry->peakLabels[gi].empty())
-                isoName = cand.entry->peakLabels[gi];
-            else if (!cand.entry->label.empty())
-                isoName = cand.entry->label;
-            else if (dbLoaded_) {
-                auto matches = db_.Match(E, res_.FWHM(E));
-                if (!matches.empty()) isoName = matches[0].isotope;
+            if (showIsoLabels_) {
+                if (gi < (int)cand.entry->peakLabels.size() && !cand.entry->peakLabels[gi].empty())
+                    isoName = cand.entry->peakLabels[gi];
+                else if (!cand.entry->label.empty())
+                    isoName = cand.entry->label;
+                else if (dbLoaded_) {
+                    auto matches = db_.Match(E, res_.FWHM(E));
+                    if (!matches.empty()) isoName = matches[0].isotope;
+                }
             }
 
-            std::string energyLabel = Form("%.1f", E);
-            if (!isoName.empty()) {
-                // Class for this Gaussian
-                std::string cls;
-                if (gi < (int)cand.entry->peakClassifications.size()
-                        && !cand.entry->peakClassifications[gi].empty())
-                    cls = cand.entry->peakClassifications[gi];
-                else if (!cand.entry->classification.empty())
-                    cls = cand.entry->classification;
-
-                std::string topLabel = isoName;
-                if (!cls.empty()) topLabel += " (" + cls + ")";
-
-                // Draw isotope name above, energy below
-                lbl.DrawLatex(E, yLabel * 1.16, topLabel.c_str());
-                lbl.DrawLatex(E, yLabel * 1.08, energyLabel.c_str());
-            } else {
-                lbl.DrawLatex(E, yLabel * 1.08, energyLabel.c_str());
-            }
+            pkLabels.push_back({E, yLabel, isoName, NNDCFormat(E, eErr)});
         }
         // f is now owned by the pad (kCanDelete) — do NOT delete here
     }
+    DrawStaggedLabels(pkLabels, c->cd());
     c->Modified(); c->Update();
 }
 
@@ -2693,9 +3442,9 @@ void GammaFitGUI::OnTransferCache()
     }
     const std::string destHist = histNames_[selId - 1];
 
-    // Scan fit_caches/ for available .dat files (excluding the destination)
+    // Scan this file's cache dir for available .dat files (excluding the destination)
     std::vector<std::string> available;
-    DIR* dir = opendir(kCacheDir);
+    DIR* dir = opendir(CacheDirFor().c_str());
     if (dir) {
         struct dirent* ent;
         const std::string prefix = "fit_cache_";
@@ -2715,7 +3464,7 @@ void GammaFitGUI::OnTransferCache()
     std::sort(available.begin(), available.end());
 
     if (available.empty()) {
-        AppendLog("No other cache files found in " + std::string(kCacheDir));
+        AppendLog("No other cache files found in " + CacheDirFor());
         return;
     }
 
@@ -2809,7 +3558,7 @@ void GammaFitGUI::OnTransferCache()
         ++nCopied;
     }
 
-    mkdir(kCacheDir, 0755);
+    EnsureCacheDir();
     dstDb.Save(CacheFileFor(destHist));
     AppendLog(Form("Transfer from '%s' -> '%s': copied %d entries, skipped %d (merge=%s)",
                    srcHist.c_str(), destHist.c_str(), nCopied, nSkipped,
@@ -3226,6 +3975,74 @@ void GammaFitGUI::OnZoomOut()
     OnHistViewChanged(histViewCombo_->GetSelected());
 }
 
+void GammaFitGUI::OnApplyPickedLabel()
+{
+    if (labelPickKey_.empty()) {
+        AppendLog("No peak picked — enable Label Pick Mode and click a peak first.");
+        return;
+    }
+    if (!mPeakLabelCombo_) return;
+
+    TGLBEntry* le = mPeakLabelCombo_->GetSelectedEntry();
+    std::string newLabel = le ? le->GetTitle() : "";
+    if (newLabel == "(none)") newLabel = "";
+
+    std::string cacheFile = CacheFileFor(currentHist_);
+    FitDatabase fitdb;
+    fitdb.Load(cacheFile);
+    if (!fitdb.GetEntries().count(labelPickKey_)) {
+        AppendLog("Picked entry no longer in cache — refresh and re-pick.");
+        return;
+    }
+    FitEntry e = fitdb.GetEntries().at(labelPickKey_);  // mutable copy
+
+    if (labelPickGaussIdx_ >= 0) {
+        int n = ((int)e.params.size() - 2) / 3;
+        if ((int)e.peakLabels.size() < n) e.peakLabels.resize(n);
+        e.peakLabels[labelPickGaussIdx_] = newLabel;
+        if (!newLabel.empty() && labelClassMap_.count(newLabel)) {
+            if ((int)e.peakClassifications.size() < n) e.peakClassifications.resize(n);
+            e.peakClassifications[labelPickGaussIdx_] = labelClassMap_.at(newLabel);
+        }
+    } else {
+        e.label = newLabel;
+        if (!newLabel.empty() && labelClassMap_.count(newLabel))
+            e.classification = labelClassMap_.at(newLabel);
+    }
+
+    fitdb.ForceStore(labelPickKey_, e);
+    EnsureCacheDir();
+    fitdb.Save(cacheFile);
+
+    // Refresh label info and redraw
+    std::string info = Form("%.1f keV", e.params[3*(labelPickGaussIdx_>=0?labelPickGaussIdx_:0)+1]);
+    if (!newLabel.empty()) info += " [" + newLabel + "]";
+    if (labelPickInfo_) labelPickInfo_->SetText(info.c_str());
+
+    OnHistViewChanged(histViewCombo_ ? histViewCombo_->GetSelected() : 1);
+    if (schematicDrawn_) DrawDecaySchematic(canvas_->GetCanvas());
+    AppendLog("Label applied: " + (newLabel.empty() ? "(cleared)" : newLabel) +
+              "  →  peak at " + info);
+}
+
+void GammaFitGUI::OnNavXRangeGo()
+{
+    if (!rawHist_ || !navXMinEntry_ || !navXMaxEntry_) return;
+    double lo = navXMinEntry_->GetNumber();
+    double hi = navXMaxEntry_->GetNumber();
+    if (lo == 0.0 && hi == 0.0) {
+        viewXmin_ = 0.0;
+        viewXmax_ = 0.0;
+        AppendLog("X range reset to full spectrum.");
+    } else {
+        if (lo >= hi) { AppendLog("X range: low must be less than high."); return; }
+        viewXmin_ = std::max(lo, rawHist_->GetXaxis()->GetXmin());
+        viewXmax_ = std::min(hi, rawHist_->GetXaxis()->GetXmax());
+        AppendLog(Form("X range set: [%.1f, %.1f] keV", viewXmin_, viewXmax_));
+    }
+    OnHistViewChanged(histViewCombo_->GetSelected());
+}
+
 void GammaFitGUI::OnDeleteCacheEntry()
 {
     if (currentHist_.empty()) { AppendLog("Load a histogram first."); return; }
@@ -3294,6 +4111,128 @@ void GammaFitGUI::OnClearHistCache()
 
     AppendLog("[ClearCache] Cleared cache for " + currentHist_);
     SetStatus("Cache cleared: " + currentHist_);
+}
+
+void GammaFitGUI::OnArchiveHistCache()
+{
+    if (currentHist_.empty()) { AppendLog("No histogram selected."); return; }
+
+    std::string cacheFile = CacheFileFor(currentHist_);
+    struct stat st;
+    if (stat(cacheFile.c_str(), &st) != 0) {
+        AppendLog("[Archive] No cache file for " + currentHist_);
+        return;
+    }
+
+    EnsureCacheDir();
+    mkdir(ArchiveDirFor().c_str(), 0755);
+
+    // Timestamp: YYYYMMDD_HHMMSS
+    time_t now = time(nullptr);
+    struct tm* tm_info = localtime(&now);
+    char ts[20];
+    strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", tm_info);
+
+    std::string destFile = ArchiveDirFor() + "/fit_cache_" + currentHist_ + "_" + ts + ".dat";
+
+    if (gSystem->CopyFile(cacheFile.c_str(), destFile.c_str(), kTRUE) != 0) {
+        AppendLog("[Archive] ERROR: could not write " + destFile);
+        return;
+    }
+
+    AppendLog("[Archive] Saved cache to " + destFile);
+    SetStatus("Archived: " + currentHist_ + " (" + ts + ")");
+}
+
+void GammaFitGUI::OnRestoreArchivedCache()
+{
+    if (currentHist_.empty()) { AppendLog("No histogram selected."); return; }
+
+    // Scan archive directory for files matching this histogram
+    std::vector<std::string> archives;
+    DIR* dir = opendir(ArchiveDirFor().c_str());
+    if (dir) {
+        struct dirent* ent;
+        const std::string prefix = "fit_cache_" + currentHist_ + "_";
+        const std::string suffix = ".dat";
+        while ((ent = readdir(dir)) != nullptr) {
+            std::string fname = ent->d_name;
+            if (fname.size() <= prefix.size() + suffix.size()) continue;
+            if (fname.substr(0, prefix.size()) != prefix) continue;
+            if (fname.substr(fname.size() - suffix.size()) != suffix) continue;
+            archives.push_back(fname);
+        }
+        closedir(dir);
+    }
+    std::sort(archives.rbegin(), archives.rend()); // newest first
+
+    if (archives.empty()) {
+        AppendLog("[Restore] No archived caches found for " + currentHist_);
+        return;
+    }
+
+    // Build picker dialog
+    TGTransientFrame* dlg = new TGTransientFrame(gClient->GetRoot(), this, 460, 10, kVerticalFrame);
+    dlg->SetWindowName("Restore Archived Cache");
+    dlg->SetCleanup(kDeepCleanup);
+
+    dlg->AddFrame(new TGLabel(dlg, Form("Histogram: %s", currentHist_.c_str())),
+                  new TGLayoutHints(kLHintsLeft, 8, 8, 8, 2));
+    dlg->AddFrame(new TGLabel(dlg, "Select archive to restore (newest first):"),
+                  new TGLayoutHints(kLHintsLeft, 8, 8, 0, 4));
+
+    TGComboBox* archCombo = new TGComboBox(dlg, 600);
+    archCombo->Resize(430, 22);
+    dlg->AddFrame(archCombo, new TGLayoutHints(kLHintsExpandX, 8, 8, 0, 4));
+    for (int i = 0; i < (int)archives.size(); i++) {
+        // Strip prefix and suffix to show just the timestamp
+        const std::string prefix = "fit_cache_" + currentHist_ + "_";
+        std::string ts = archives[i].substr(prefix.size(),
+                                            archives[i].size() - prefix.size() - 4);
+        archCombo->AddEntry(ts.c_str(), i + 1);
+    }
+    archCombo->Select(1, kFALSE);
+
+    dlg->AddFrame(new TGLabel(dlg, "This will overwrite the current live cache."),
+                  new TGLayoutHints(kLHintsLeft, 8, 8, 0, 4));
+
+    TGHorizontalFrame* btnRow = new TGHorizontalFrame(dlg);
+    dlg->AddFrame(btnRow, new TGLayoutHints(kLHintsCenterX, 8, 8, 4, 8));
+    TGTextButton* okBtn  = new TGTextButton(btnRow, "  Restore  ");
+    TGTextButton* canBtn = new TGTextButton(btnRow, "  Cancel  ");
+    btnRow->AddFrame(okBtn,  new TGLayoutHints(kLHintsLeft, 0, 8, 0, 0));
+    btnRow->AddFrame(canBtn, new TGLayoutHints(kLHintsLeft));
+    okBtn ->Connect("Clicked()", "TGFrame", dlg, "UnmapWindow()");
+    canBtn->Connect("Clicked()", "TGFrame", dlg, "UnmapWindow()");
+    canBtn->SetUserData((void*)1);
+
+    dlg->MapSubwindows();
+    dlg->Resize(dlg->GetDefaultSize());
+    dlg->CenterOnParent();
+    dlg->MapWindow();
+
+    gClient->WaitForUnmap(dlg);
+
+    Int_t selId = archCombo->GetSelected();
+    bool  cancelled = (canBtn->GetUserData() != nullptr);
+    dlg->DeleteWindow();
+
+    if (cancelled || selId < 1 || (size_t)selId > archives.size()) return;
+
+    std::string srcFile  = ArchiveDirFor() + "/" + archives[selId - 1];
+    std::string destFile = CacheFileFor(currentHist_);
+
+    EnsureCacheDir();
+    if (gSystem->CopyFile(srcFile.c_str(), destFile.c_str(), kTRUE) != 0) {
+        AppendLog("[Restore] ERROR: could not restore " + srcFile);
+        return;
+    }
+
+    AppendLog("[Restore] Restored " + archives[selId - 1] + " → " + destFile);
+
+    // Reload the restored cache onto the canvas
+    OnLoadCache();
+    SetStatus("Cache restored: " + currentHist_);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3542,7 +4481,7 @@ void GammaFitGUI::DrawFitComponents(TCanvas* /*c*/, TF1* f)
 
 void GammaFitGUI::DrawPeakLabels(TF1* f)
 {
-    if (!f) return;
+    if (!f || !gPad) return;
     int npar = f->GetNpar();
 
     std::vector<double> peakEs;
@@ -3557,18 +4496,10 @@ void GammaFitGUI::DrawPeakLabels(TF1* f)
         return;
     }
 
-    // Sort by amplitude descending so the tallest peak wins when two labels
-    // would land within 1 FWHM of each other.
-    std::sort(peakEs.begin(), peakEs.end(), [&](double a, double b){
-        return f->Eval(a) > f->Eval(b);
-    });
-
-    TLatex lbl;
-    lbl.SetTextSize(0.022);
-    lbl.SetTextAlign(21);
-
+    std::vector<PkLblData> pkLabels;
     std::vector<double> drawn;
-    for (double E : peakEs) {
+    for (int i = 0; i < (int)peakEs.size(); i++) {
+        double E = peakEs[i];
         double sep = res_.FWHM(E);
         bool tooClose = false;
         for (double de : drawn)
@@ -3576,19 +4507,19 @@ void GammaFitGUI::DrawPeakLabels(TF1* f)
         if (tooClose) continue;
         drawn.push_back(E);
 
+        // Centroid uncertainty from fit parameter
+        int parIdx = isDG ? 1 : 3*i + 1;
+        double eErr = f->GetParError(parIdx);
+
         double yTop = f->Eval(E);
-        std::string energyLabel = Form("%.1f", E);
-        if (dbLoaded_) {
+        std::string isoName;
+        if (showIsoLabels_ && dbLoaded_) {
             auto matches = db_.Match(E, res_.FWHM(E));
-            if (!matches.empty()) {
-                // Draw isotope name above energy
-                lbl.DrawLatex(E, yTop * 1.16, matches[0].isotope.c_str());
-                lbl.DrawLatex(E, yTop * 1.08, energyLabel.c_str());
-                continue;
-            }
+            if (!matches.empty()) isoName = matches[0].isotope;
         }
-        lbl.DrawLatex(E, yTop * 1.08, energyLabel.c_str());
+        pkLabels.push_back({E, yTop, isoName, NNDCFormat(E, eErr)});
     }
+    DrawStaggedLabels(pkLabels, gPad);
 }
 
 void GammaFitGUI::UpdatePeakStats(TF1* f, TH1* h, double xlo, double xhi)
@@ -3599,8 +4530,16 @@ void GammaFitGUI::UpdatePeakStats(TF1* f, TH1* h, double xlo, double xhi)
         std::vector<std::string> lines;
         if (!tf || !th) return lines;
         int npar = tf->GetNpar();
-        int n    = (npar - 2) / 3;
-        if (n < 1 || npar != 3*n + 2) { lines.push_back("Invalid fit model"); return lines; }
+        // Detect model layout: standard (3n+2), quadBG (3n+3), comptonStep (4n+2), both (4n+3)
+        int n = -1; bool hasQuadBG = false;
+        for (int nc = 1; nc <= 12; nc++) {
+            if      (npar == 3*nc + 2) { n = nc; break; }
+            else if (npar == 3*nc + 3) { n = nc; hasQuadBG = true; break; }
+            else if (npar == 4*nc + 2) { n = nc; break; }               // compton step only
+            else if (npar == 4*nc + 3) { n = nc; hasQuadBG = true; break; } // compton + quad
+        }
+        if (n < 1) { lines.push_back("Invalid fit model"); return lines; }
+        int bgBase = 3*n;
 
         // Chi2/ndf and p-value from histogram residuals
         double chi2 = 0.0; int cnt = 0;
@@ -3626,10 +4565,44 @@ void GammaFitGUI::UpdatePeakStats(TF1* f, TH1* h, double xlo, double xhi)
                 spectrumCounts += rawHist_->GetBinContent(b);
         }
 
-        double bg0    = tf->GetParameter(3*n);
-        double bg1    = tf->GetParameter(3*n+1);
-        double bg0err = tf->GetParError(3*n);
-        double bg1err = tf->GetParError(3*n+1);
+        double bg0    = tf->GetParameter(bgBase);
+        double bg1    = tf->GetParameter(bgBase+1);
+        double bg0err = tf->GetParError(bgBase);
+        double bg1err = tf->GetParError(bgBase+1);
+        double bg2    = hasQuadBG ? tf->GetParameter(bgBase+2) : 0.0;
+        double bg2err = hasQuadBG ? tf->GetParError(bgBase+2)  : 0.0;
+
+        // ── Area ratio: fitted Gaussian integral vs observed counts above BG ──
+        {
+            double obsAboveBg = 0.0;
+            for (int b = b1; b <= b2; b++) {
+                double x = th->GetBinCenter(b);
+                obsAboveBg += th->GetBinContent(b) - (bg0 + bg1*x + bg2*x*x);
+            }
+
+            double totalFitArea = 0.0;
+            for (int i = 0; i < n; i++) {
+                double A   = tf->GetParameter(3*i);
+                double E   = tf->GetParameter(3*i+1);
+                double sig = tf->GetParameter(3*i+2);
+                double bw  = th->GetBinWidth(th->FindBin(E));
+                if (bw <= 0.0) bw = 1.0;
+                totalFitArea += A * sig * std::sqrt(2.0 * TMath::Pi()) / bw;
+            }
+
+            if (obsAboveBg > 1.0) {
+                double ratio = totalFitArea / obsAboveBg;
+                const char* grade =
+                    (ratio >= 0.90 && ratio <= 1.10) ? "GOOD" :
+                    (ratio >= 0.70 && ratio <= 1.30) ? "fair" : "*** POOR ***";
+                lines.push_back(Form("  Area ratio (fit/obs) = %.3f  %s", ratio, grade));
+                lines.push_back(Form("    fit area = %.0f   obs above BG = %.0f",
+                                     totalFitArea, obsAboveBg));
+            } else {
+                lines.push_back("  Area ratio (fit/obs) = n/a  (obs counts too low)");
+            }
+            lines.push_back("  ----------------------------------------");
+        }
 
         for (int i = 0; i < n; i++) {
             double A    = tf->GetParameter(3*i);
@@ -3641,16 +4614,20 @@ void GammaFitGUI::UpdatePeakStats(TF1* f, TH1* h, double xlo, double xhi)
 
             double fwhm    = 2.3548 * sig;
             double fwhmerr = 2.3548 * serr;
-            // Peak area = integral of Gaussian = A * sigma * sqrt(2*pi)
-            double peakArea = A * sig * std::sqrt(2.0 * TMath::Pi());
-            // Background counts under ±2.5 sigma of the peak (5*sigma wide window)
-            double bgUnder = std::abs((bg0 + bg1 * E) * 5.0 * sig);
+            // bin-width correction: ROOT fits counts/bin so area needs /binWidth
+            double binWidth = th->GetBinWidth(th->FindBin(E));
+            if (binWidth <= 0.0) binWidth = 1.0;
+            double peakArea = A * sig * std::sqrt(2.0 * TMath::Pi()) / binWidth;
+            double areaErr  = (A > 0 && sig > 0)
+                ? peakArea * std::sqrt(std::pow(Aerr/A, 2) + std::pow(serr/sig, 2))
+                : 0.0;
+            // Background counts under ±2.5 sigma of the peak (uses full model)
+            double bgAtE  = bg0 + bg1*E + bg2*E*E;
+            double bgUnder = std::abs(bgAtE / binWidth * 5.0 * sig);
             // SNR = peak area / sqrt(background counts in peak region)
-            double snr        = (bgUnder > 0) ? peakArea / std::sqrt(bgUnder) : 0.0;
-            // Local P/T: peak / total in fit window (shows peak prominence vs local BG)
-            double ptLocal    = (windowCounts  > 0) ? peakArea / windowCounts  : 0.0;
-            // Global P/T: peak / total in full spectrum (detector figure of merit)
-            double ptGlobal   = (spectrumCounts > 0) ? peakArea / spectrumCounts : 0.0;
+            double snr      = (bgUnder > 0) ? peakArea / std::sqrt(bgUnder) : 0.0;
+            double ptLocal  = (windowCounts  > 0) ? peakArea / windowCounts  : 0.0;
+            double ptGlobal = (spectrumCounts > 0) ? peakArea / spectrumCounts : 0.0;
 
             if (n > 1)
                 lines.push_back(Form("--- Peak %d (%.2f keV) ---", i+1, E));
@@ -3658,13 +4635,40 @@ void GammaFitGUI::UpdatePeakStats(TF1* f, TH1* h, double xlo, double xhi)
             lines.push_back(Form("  E (keV)       = %.4f +/- %.4f", E,    Eerr));
             lines.push_back(Form("  sigma (keV)   = %.4f +/- %.4f", sig,  serr));
             lines.push_back(Form("  FWHM (keV)    = %.4f +/- %.4f", fwhm, fwhmerr));
-            lines.push_back(Form("  Peak area     = %.1f counts",    peakArea));
+            lines.push_back(Form("  Peak area     = %.1f +/- %.1f counts", peakArea, areaErr));
+            if (spectrumCounts > 0 && peakArea > spectrumCounts)
+                lines.push_back("  *** WARNING: area > spectrum total — fit likely bad ***");
+            else if (peakArea < 0)
+                lines.push_back("  *** WARNING: negative area — check amplitude/sigma ***");
             lines.push_back(Form("  SNR (Np/sqrtNbg) = %.2f",        snr));
-            lines.push_back(Form("  P/T (window)  = %.4f  [Np/Nwin]",  ptLocal));
-            lines.push_back(Form("  P/T (all)     = %.4f  [Np/Nspec]", ptGlobal));
+            lines.push_back(Form("  P/T (window)  = %.4f  [%.0f / %.0f]", ptLocal,  peakArea, windowCounts));
+            lines.push_back(Form("  P/T (all)     = %.4f  [%.0f / %.0f]", ptGlobal, peakArea, spectrumCounts));
+
+            // Efficiency-corrected area (if parameters are loaded)
+            if (effB_ || effC_ || effD_) {
+                double ea = effA_ ? effA_->GetNumber() : 0.0;
+                double eb = effB_ ? effB_->GetNumber() : 0.0;
+                double ec = effC_ ? effC_->GetNumber() : 0.0;
+                double ed = effD_ ? effD_->GetNumber() : 0.0;
+                if (eb != 0.0 || ec != 0.0 || ed != 0.0) {
+                    double lnE   = (E > 0) ? std::log(E) : 0.0;
+                    double lnEps = ea - eb*lnE + ec*lnE*lnE - (E > 0 ? ed/(E*E) : 0.0);
+                    double eps   = std::exp(lnEps);
+                    if (eps > 0 && std::isfinite(eps)) {
+                        double corrArea = peakArea / eps;
+                        double corrErr  = areaErr  / eps;
+                        lines.push_back(Form("  Eff-corr area = %.1f +/- %.1f  (eps=%.4e)",
+                                             corrArea, corrErr, eps));
+                    }
+                }
+            }
         }
 
-        if (bg1 != 0.0) {
+        if (hasQuadBG) {
+            lines.push_back(Form("  bg0           = %.4g +/- %.4g", bg0, bg0err));
+            lines.push_back(Form("  bg1           = %.5g +/- %.5g", bg1, bg1err));
+            lines.push_back(Form("  bg2           = %.5g +/- %.5g  (quadratic)", bg2, bg2err));
+        } else if (bg1 != 0.0) {
             lines.push_back(Form("  bg0           = %.4g +/- %.4g", bg0, bg0err));
             lines.push_back(Form("  bg1           = %.5g +/- %.5g", bg1, bg1err));
         } else {
@@ -3712,7 +4716,32 @@ void GammaFitGUI::DrawOnCanvas(TH1* h, TF1* fit)
             h->GetXaxis()->SetTitle(th2XLabelEntry_->GetText());
         if (th2YLabelEntry_ && std::string(th2YLabelEntry_->GetText()).size())
             h->GetYaxis()->SetTitle(th2YLabelEntry_->GetText());
-        h->Draw("COLZ");
+
+        // Downsample for display: COLZ draws every bin as a rectangle.
+        // A 2000×2000 TH2 = 4M rectangles, which freezes the GUI.
+        // Rebin to at most kMaxAxis bins per dimension before painting.
+        TH2* h2 = (TH2*)h;
+        int nX = h2->GetNbinsX(), nY = h2->GetNbinsY();
+        const int kMaxAxis = 500;
+        int rx = std::max(1, nX / kMaxAxis);
+        int ry = std::max(1, nY / kMaxAxis);
+
+        if (rx > 1 || ry > 1) {
+            // Downsample for display speed — original data is untouched.
+            TH2* disp = (TH2*)h2->Clone("_th2_disp_tmp");
+            disp->SetDirectory(nullptr);
+            disp->Rebin2D(rx, ry);
+            disp->SetBit(kCanDelete);
+            // Title makes the downsampling impossible to miss
+            disp->SetTitle(Form("%s  [DISPLAY ONLY: %dx%d rebin — original %dx%d bins]",
+                                h->GetName(), rx, ry, nX, nY));
+            disp->Draw("COLZ");
+            SetStatus(Form("WARNING: %s displayed at %dx%d rebin (original %d x %d bins)",
+                           h->GetName(), rx, ry, nX, nY));
+        } else {
+            h->Draw("COLZ");
+        }
+
         c->Modified(); c->Update();
         return;
     }
@@ -3722,6 +4751,8 @@ void GammaFitGUI::DrawOnCanvas(TH1* h, TF1* fit)
         h->GetXaxis()->SetTitle("Time (ms)");
     h->SetLineColor(kBlack);
     h->SetMarkerSize(0);
+    h->SetStats(0);
+    SetYMaxFromVisible(h);
     h->Draw("hist");
     h->Draw("E1 same");
     if (fit) {
@@ -3729,6 +4760,26 @@ void GammaFitGUI::DrawOnCanvas(TH1* h, TF1* fit)
         fit->SetLineWidth(2);
         fit->Draw("same");
     }
+
+    // Integral statistics overlay (top-right corner)
+    {
+        TPaveText* pt = new TPaveText(0.55, 0.75, 0.98, 0.98, "NDC");
+        pt->SetBorderSize(1);
+        pt->SetFillColor(kWhite);
+        pt->SetFillStyle(1001);
+        pt->SetTextAlign(12);
+        pt->SetTextSize(0.030);
+        pt->SetBit(kCanDelete);
+        pt->AddText(Form("Integral = %.0f", h->Integral()));
+        pt->AddText(Form("Entries  = %.0f", h->GetEntries()));
+        pt->AddText(Form("Mean     = %.2f keV", h->GetMean()));
+        pt->AddText(Form("RMS      = %.2f keV", h->GetRMS()));
+        auto rbit = rebinFactors_.find(currentHist_);
+        if (rbit != rebinFactors_.end() && rbit->second > 1)
+            pt->AddText(Form("Rebin x%d", rbit->second));
+        pt->Draw();
+    }
+
     c->Modified();
     c->Update();
 }
@@ -3960,30 +5011,129 @@ void GammaFitGUI::OnResetBgSub()
     if (bgSubtractChk_) bgSubtractChk_->SetState(kButtonDown);
     if (bgIterEntry_)   bgIterEntry_->SetNumber(14);
 
-    Int_t id = histList_->GetSelected();
-    if (!inputFile_ || id < 1 || (size_t)id > histNames_.size()) {
+    // Discard any bg-subtracted view and redraw the raw histogram that is
+    // already stored in rawHist_.  Loading a fresh copy and then deleting it
+    // caused a dangling pointer inside the canvas, producing a blank display.
+    delete viewHist_; viewHist_ = nullptr;
+
+    if (rawHist_) {
+        RedrawView();
+        AppendLog("BG sub reset — showing raw histogram: " + currentHist_);
+        SetStatus("Raw: " + currentHist_);
+    } else {
         AppendLog("Background subtraction reset to defaults (14 iterations, enabled).");
-        return;
     }
-    const std::string& hname = histNames_[id - 1];
-    bool owned = false;
-    TH1* raw = LoadHistFromFile(hname, owned);
-    if (!raw) { AppendLog("Histogram not found: " + hname); return; }
+}
 
-    ApplyHistStyle(raw, hname.c_str());
-    if (ClassOf(hname) == "Decay") raw->GetXaxis()->SetTitle("Time (ms)");
-    TCanvas* c = canvas_->GetCanvas();
-    c->Clear(); c->cd();
-    raw->SetLineColor(kBlack);
-    raw->SetMarkerSize(0);
-    SetYMaxFromVisible(raw);
-    raw->Draw("hist");
-    raw->Draw("E1 same");
-    c->Modified(); c->Update();
+void GammaFitGUI::OnDeleteHistogram()
+{
+    Int_t id = histList_->GetSelected();
+    if (id < 1 || (size_t)id > histNames_.size()) {
+        AppendLog("[Delete] Select a histogram first."); return;
+    }
+    const std::string name = histNames_[id - 1];
 
-    if (owned) delete raw;
-    AppendLog("BG sub preview cleared — showing raw histogram: " + hname);
-    SetStatus("Raw: " + hname);
+    // Virtual histograms (projections, bg-subtracted) live only in the session.
+    bool isVirtual = customProjDefs_.count(name) || projParent_.count(name)
+                     || bgSubtractDefs_.count(name);
+
+    // Confirm — this is destructive for file-backed histograms.
+    Int_t ret = kMBNo;
+    std::string msg = isVirtual
+        ? "Remove '" + name + "' from this session?\n(It is not stored in the file.)"
+        : "Permanently delete '" + name + "' from the ROOT file?\n\nThis cannot be undone.";
+    new TGMsgBox(gClient->GetRoot(), this,
+                 isVirtual ? "Remove Virtual Histogram" : "Delete from File",
+                 msg.c_str(),
+                 isVirtual ? kMBIconQuestion : kMBIconExclamation,
+                 kMBYes | kMBNo, &ret);
+    if (ret != kMBYes) return;
+
+    // ── Delete from file (real histograms only) ──────────────────────────────
+    if (!isVirtual) {
+        if (!inputFile_) { AppendLog("[Delete] No file open."); return; }
+        std::string path = inputFile_->GetName();
+
+        // Close READ handle, reopen for UPDATE
+        inputFile_->Close(); delete inputFile_; inputFile_ = nullptr;
+        TFile* uf = TFile::Open(path.c_str(), "UPDATE");
+        if (!uf || uf->IsZombie()) {
+            AppendLog("[Delete] Cannot open file for writing: " + path);
+            // Reopen read-only so the session remains usable
+            inputFile_ = TFile::Open(path.c_str(), "READ");
+            return;
+        }
+
+        // Delete all cycles of the key
+        uf->Delete((name + ";*").c_str());
+        uf->Purge();   // reclaim disk space
+        uf->Close(); delete uf;
+
+        // Reopen in READ mode
+        inputFile_ = TFile::Open(path.c_str(), "READ");
+        if (!inputFile_ || inputFile_->IsZombie()) {
+            AppendLog("[Delete] Re-open failed after deletion: " + path);
+            inputFile_ = nullptr;
+        }
+
+        // Also remove auto-generated projection siblings (name_px / name_py)
+        // if this was a TH2
+        if (th2Names_.count(name)) {
+            for (const std::string& sibling : {name + "_px", name + "_py"}) {
+                histNames_.erase(std::remove(histNames_.begin(), histNames_.end(), sibling), histNames_.end());
+                projParent_.erase(sibling);
+                histClass_.erase(sibling);
+            }
+            th2Names_.erase(name);
+        }
+
+        AppendLog("[Delete] Removed '" + name + "' from " + path);
+    } else {
+        // Remove derived definitions
+        customProjDefs_.erase(name);
+        projParent_.erase(name);
+        bgSubtractDefs_.erase(name);
+        AppendLog("[Delete] Removed virtual histogram '" + name + "' from session.");
+    }
+
+    // ── Clean up session state ───────────────────────────────────────────────
+    histNames_.erase(std::remove(histNames_.begin(), histNames_.end(), name), histNames_.end());
+    histClass_.erase(name);
+    rebinFactors_.erase(name);
+
+    // Also remove any virtual histograms that depended on this one
+    std::vector<std::string> toRemove;
+    for (const auto& kv : bgSubtractDefs_)
+        if (kv.second.srcName == name || kv.second.bgName == name)
+            toRemove.push_back(kv.first);
+    for (const auto& kv : customProjDefs_)
+        if (kv.second.th2Name == name)
+            toRemove.push_back(kv.first);
+    for (const auto& dep : toRemove) {
+        histNames_.erase(std::remove(histNames_.begin(), histNames_.end(), dep), histNames_.end());
+        bgSubtractDefs_.erase(dep);
+        customProjDefs_.erase(dep);
+        histClass_.erase(dep);
+        rebinFactors_.erase(dep);
+        AppendLog("[Delete] Also removed dependent histogram '" + dep + "'.");
+    }
+
+    // Clear canvas if the deleted histogram was on display
+    if (currentHist_ == name) {
+        if (rawHistOwned_) { delete rawHist_; rawHistOwned_ = false; }
+        rawHist_ = nullptr;
+        delete viewHist_; viewHist_ = nullptr;
+        currentHist_.clear();
+        canvas_->GetCanvas()->Clear();
+        canvas_->GetCanvas()->Modified();
+        canvas_->GetCanvas()->Update();
+    }
+
+    SaveMetadata();
+    PopulateHistWidgets();
+    PopulateBgSubCombos();
+    PopulateCustProjTh2Combo();
+    SetStatus("Deleted: " + name);
 }
 
 // Source tab — helpers and slot implementations
@@ -4283,13 +5433,13 @@ void GammaFitGUI::PopulateSrcHistCombo()
 
 std::string GammaFitGUI::SourceAnalysisFileFor(const std::string& hname) const
 {
-    return std::string(kCacheDir) + "/fit_cache_" + hname + "_source.root";
+    return CacheDirFor() + "/fit_cache_" + hname + "_source.root";
 }
 
 void GammaFitGUI::SaveSourceAnalysis()
 {
     if (srcHist_.empty()) return;
-    mkdir(kCacheDir, 0755);
+    EnsureCacheDir();
     std::string fname = SourceAnalysisFileFor(srcHist_);
     TFile* fout = TFile::Open(fname.c_str(), "RECREATE");
     if (!fout || fout->IsZombie()) {
@@ -4644,6 +5794,16 @@ void GammaFitGUI::SetStatus(const std::string& msg)
 std::string GammaFitGUI::ClassOf(const std::string& name) const
 {
     if (th2Names_.count(name)) return "2D";
+    if (bgSubtractDefs_.count(name)) {
+        // Background-subtracted histograms inherit their source's class unless
+        // the user has explicitly overridden it
+        auto it = histClass_.find(name);
+        if (it != histClass_.end()) return it->second;
+        // Default to the source histogram's class
+        const std::string& src = bgSubtractDefs_.at(name).srcName;
+        auto sit = histClass_.find(src);
+        return (sit != histClass_.end()) ? sit->second : "Gamma";
+    }
     auto it = histClass_.find(name);
     return (it != histClass_.end()) ? it->second : "Gamma";
 }
@@ -4651,18 +5811,14 @@ std::string GammaFitGUI::ClassOf(const std::string& name) const
 std::string GammaFitGUI::MetadataFileFor() const
 {
     if (inputPath_.empty()) return "";
-    // Sanitise path: replace non-alphanumeric with '_'
-    std::string tag = inputPath_;
-    for (char& c : tag)
-        if (!std::isalnum((unsigned char)c) && c != '.') c = '_';
-    return std::string(kCacheDir) + "/metadata_" + tag + ".txt";
+    return CacheDirFor() + "/metadata.txt";
 }
 
 void GammaFitGUI::SaveMetadata() const
 {
     std::string path = MetadataFileFor();
     if (path.empty()) return;
-    mkdir(kCacheDir, 0755);
+    EnsureCacheDir();
     std::ofstream out(path);
     if (!out.is_open()) return;
     out << "# classifications\n";
@@ -4676,6 +5832,17 @@ void GammaFitGUI::SaveMetadata() const
             << "\t" << std::fixed << std::setprecision(6) << d.lo
             << "\t" << d.hi << "\n";
     }
+    out << "# background subtractions\n";
+    for (const auto& kv : bgSubtractDefs_) {
+        const auto& d = kv.second;
+        out << "bgsub\t" << kv.first << "\t" << d.srcName
+            << "\t" << d.bgName
+            << "\t" << std::fixed << std::setprecision(6) << d.scale << "\n";
+    }
+    out << "# rebin factors\n";
+    for (const auto& kv : rebinFactors_)
+        if (kv.second > 1)
+            out << "rebin\t" << kv.first << "\t" << kv.second << "\n";
 }
 
 void GammaFitGUI::LoadMetadata()
@@ -4683,7 +5850,12 @@ void GammaFitGUI::LoadMetadata()
     std::string path = MetadataFileFor();
     if (path.empty()) return;
     std::ifstream in(path);
-    if (!in.is_open()) return;
+    if (!in.is_open()) {
+        AppendLog("[Metadata] No metadata file found — no virtual histograms restored.");
+        AppendLog("[Metadata]   (looked for: " + path + ")");
+        return;
+    }
+    int nClasses = 0, nProj = 0, nBgSub = 0, nRebin = 0;
     std::string line;
     while (std::getline(in, line)) {
         if (line.empty() || line[0] == '#') continue;
@@ -4693,7 +5865,7 @@ void GammaFitGUI::LoadMetadata()
         if (tag == "class") {
             std::string name, cls;
             ss >> name >> cls;
-            if (!name.empty() && !cls.empty()) histClass_[name] = cls;
+            if (!name.empty() && !cls.empty()) { histClass_[name] = cls; nClasses++; }
         } else if (tag == "cproj") {
             std::string name, th2name;
             int pxFlag = 1;
@@ -4706,12 +5878,35 @@ void GammaFitGUI::LoadMetadata()
                 def.lo      = lo;
                 def.hi      = hi;
                 customProjDefs_[name] = def;
-                // Re-add to histNames_ if not already present
                 if (std::find(histNames_.begin(), histNames_.end(), name) == histNames_.end())
                     histNames_.push_back(name);
+                nProj++;
+            }
+        } else if (tag == "bgsub") {
+            std::string name, srcName, bgName;
+            double scale = 1.0;
+            ss >> name >> srcName >> bgName >> scale;
+            if (!name.empty() && !srcName.empty() && !bgName.empty()) {
+                BgSubtractDef def;
+                def.srcName = srcName;
+                def.bgName  = bgName;
+                def.scale   = scale;
+                bgSubtractDefs_[name] = def;
+                if (std::find(histNames_.begin(), histNames_.end(), name) == histNames_.end())
+                    histNames_.push_back(name);
+                nBgSub++;
+            }
+        } else if (tag == "rebin") {
+            std::string name; int factor = 1;
+            ss >> name >> factor;
+            if (!name.empty() && factor > 1) {
+                rebinFactors_[name] = factor;
+                nRebin++;
             }
         }
     }
+    AppendLog(Form("[Metadata] Loaded: %d types, %d custom projections, %d bg-subtracted, %d rebin",
+                   nClasses, nProj, nBgSub, nRebin));
 }
 
 void GammaFitGUI::OnHistClassSet()
@@ -4725,12 +5920,17 @@ void GammaFitGUI::OnHistClassSet()
         AppendLog("[Class] 2D histograms are classified automatically."); return;
     }
     int sel = histClassCombo_ ? histClassCombo_->GetSelected() : 1;
-    std::string cls = (sel == 2) ? "Decay" : (sel == 3) ? "2D" : "Gamma";
+    std::string cls;
+    if      (sel == 2) cls = "Decay";
+    else if (sel == 3) cls = "2D";
+    else if (sel == 4) cls = "Background";
+    else               cls = "Gamma";
     histClass_[name] = cls;
     SaveMetadata();
     PopulateHistWidgets();
-    AppendLog("[Class] " + name + " -> " + cls);
-    SetStatus("Classified: " + name + " = " + cls);
+    PopulateBgSubCombos();
+    AppendLog("[Type] " + name + " -> " + cls);
+    SetStatus("Histogram type: " + name + " = " + cls);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4807,4 +6007,493 @@ void GammaFitGUI::OnAddCustomProjection()
     AppendLog(Form("[CustomProj] Added '%s' from %s  [%.3g, %.3g]  Proj%s",
                    name.c_str(), th2name.c_str(), lo, hi, projX ? "X" : "Y"));
     SetStatus("Added custom projection: " + name);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Background subtraction helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+void GammaFitGUI::PopulateBgSubCombos()
+{
+    if (!bgSubSrcCombo_ || !bgSubBgCombo_) return;
+    bgSubSrcCombo_->RemoveAll();
+    bgSubBgCombo_->RemoveAll();
+    int srcIdx = 1, bgIdx = 1;
+    for (const auto& name : histNames_) {
+        if (th2Names_.count(name)) continue;  // skip 2D
+        bgSubSrcCombo_->AddEntry(name.c_str(), srcIdx++);
+        if (ClassOf(name) == "Background")
+            bgSubBgCombo_->AddEntry(name.c_str(), bgIdx++);
+    }
+    bgSubSrcCombo_->MapSubwindows(); bgSubSrcCombo_->Layout();
+    bgSubBgCombo_->MapSubwindows();  bgSubBgCombo_->Layout();
+}
+
+void GammaFitGUI::OnSubtractHistogram()
+{
+    if (!inputFile_) { AppendLog("[BgSub] No ROOT file loaded."); return; }
+
+    // --- gather inputs ---
+    int srcSel = bgSubSrcCombo_ ? bgSubSrcCombo_->GetSelected() : -1;
+    int bgSel  = bgSubBgCombo_  ? bgSubBgCombo_->GetSelected()  : -1;
+    if (srcSel < 1 || bgSel < 1) {
+        AppendLog("[BgSub] Select source and background histograms."); return;
+    }
+
+    // Map combo IDs back to names (combos were filled in order, skipping 2D)
+    auto nameFromCombo = [&](TGComboBox* cb, int sel) -> std::string {
+        TGLBEntry* entry = cb->GetListBox()->GetEntry(sel);
+        return entry ? std::string(entry->GetTitle()) : "";
+    };
+    std::string srcName = nameFromCombo(bgSubSrcCombo_, srcSel);
+    std::string bgName  = nameFromCombo(bgSubBgCombo_,  bgSel);
+    if (srcName.empty() || bgName.empty()) {
+        AppendLog("[BgSub] Could not resolve histogram names."); return;
+    }
+    if (srcName == bgName) {
+        AppendLog("[BgSub] Source and background cannot be the same histogram."); return;
+    }
+
+    double scale = bgSubScaleEntry_ ? bgSubScaleEntry_->GetNumber() : 1.0;
+    if (scale < 0.0) scale = 1.0;
+
+    std::string outName = bgSubNameEntry_ ? std::string(bgSubNameEntry_->GetText()) : "subtracted";
+    if (outName.empty()) outName = srcName + "_bgsub";
+
+    // Check for duplicate name
+    if (std::find(histNames_.begin(), histNames_.end(), outName) != histNames_.end()) {
+        AppendLog("[BgSub] Name '" + outName + "' already exists. Choose a different name.");
+        return;
+    }
+
+    // --- load and subtract ---
+    bool srcOwned = false, bgOwned = false;
+    TH1* src = LoadHistFromFile(srcName, srcOwned);
+    TH1* bg  = LoadHistFromFile(bgName,  bgOwned);
+    if (!src) { AppendLog("[BgSub] Failed to load source: " + srcName); return; }
+    if (!bg)  {
+        if (srcOwned) delete src;
+        AppendLog("[BgSub] Failed to load background: " + bgName); return;
+    }
+
+    // Verify compatibility before subtracting
+    if (src->GetNbinsX() != bg->GetNbinsX() ||
+        std::abs(src->GetXaxis()->GetXmin() - bg->GetXaxis()->GetXmin()) > 1e-6 ||
+        std::abs(src->GetXaxis()->GetXmax() - bg->GetXaxis()->GetXmax()) > 1e-6) {
+        AppendLog(Form("[BgSub] ERROR: Incompatible histograms — cannot subtract."));
+        AppendLog(Form("  Source:     %d bins  [%.3g, %.3g]",
+                       src->GetNbinsX(),
+                       src->GetXaxis()->GetXmin(), src->GetXaxis()->GetXmax()));
+        AppendLog(Form("  Background: %d bins  [%.3g, %.3g]",
+                       bg->GetNbinsX(),
+                       bg->GetXaxis()->GetXmin(), bg->GetXaxis()->GetXmax()));
+        if (srcOwned) delete src;
+        if (bgOwned)  delete bg;
+        return;
+    }
+
+    double srcIntegral = src->Integral();
+    double bgIntegral  = bg->Integral();
+
+    TH1* result = (TH1*)src->Clone(outName.c_str());
+    result->SetDirectory(nullptr);
+    result->Sumw2();
+    result->Add(bg, -scale);
+
+    double resIntegral = result->Integral();
+    int negBins = 0;
+    for (int b = 1; b <= result->GetNbinsX(); b++)
+        if (result->GetBinContent(b) < 0) negBins++;
+
+    AppendLog(Form("[BgSub] Source integral:      %.0f", srcIntegral));
+    AppendLog(Form("[BgSub] Background integral:  %.0f  (scale=%.4g → subtract %.0f)",
+                   bgIntegral, scale, scale * bgIntegral));
+    AppendLog(Form("[BgSub] Result integral:      %.0f  (expected %.0f)",
+                   resIntegral, srcIntegral - scale * bgIntegral));
+    if (negBins > 0)
+        AppendLog(Form("[BgSub] Note: %d bins went negative (background > source in those bins)",
+                       negBins));
+
+    if (srcOwned) delete src;
+    if (bgOwned)  delete bg;
+
+    // --- store definition ---
+    BgSubtractDef def;
+    def.srcName = srcName;
+    def.bgName  = bgName;
+    def.scale   = scale;
+    bgSubtractDefs_[outName] = def;
+    histNames_.push_back(outName);
+
+    // Inherit source classification
+    auto cit = histClass_.find(srcName);
+    if (cit != histClass_.end())
+        histClass_[outName] = cit->second;
+
+    SaveMetadata();
+    PopulateHistWidgets();
+    PopulateBgSubCombos();
+
+    AppendLog(Form("[BgSub] Created '%s' = '%s' - %.4g * '%s'",
+                   outName.c_str(), srcName.c_str(), scale, bgName.c_str()));
+    SetStatus("Background subtracted: " + outName);
+
+    // Display the result
+    delete result;  // we'll reload via LoadHistFromFile for consistency
+    bool owned = false;
+    TH1* display = LoadHistFromFile(outName, owned);
+    if (display) {
+        if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+        rawHist_     = display;
+        rawHistOwned_ = owned;
+        currentHist_  = outName;
+        DrawOnCanvas(rawHist_);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recent files
+// ─────────────────────────────────────────────────────────────────────────────
+// Rebin slots
+// ─────────────────────────────────────────────────────────────────────────────
+
+void GammaFitGUI::OnRebinPreview()
+{
+    if (!rawHist_ || currentHist_.empty()) {
+        AppendLog("[Rebin] Load a histogram first."); return;
+    }
+    if (rawHist_->InheritsFrom("TH2")) {
+        AppendLog("[Rebin] Cannot rebin a 2D histogram."); return;
+    }
+    int n = rebinEntry_ ? (int)rebinEntry_->GetNumber() : 1;
+    if (n <= 1) { DrawOnCanvas(rawHist_); return; }
+
+    TH1* preview = (TH1*)rawHist_->Clone("_rebin_preview_");
+    preview->SetDirectory(nullptr);
+    preview->SetBit(kCanDelete);
+    // Sumw2 ensures Poisson errors add in quadrature when merging bins
+    preview->Sumw2();
+    preview->Rebin(n);
+    preview->SetTitle(Form("%s  [PREVIEW: rebin x%d]", rawHist_->GetName(), n));
+    DrawOnCanvas(preview);
+    AppendLog(Form("[Rebin] Preview rebin x%d for %s — use Apply to store.",
+                   n, currentHist_.c_str()));
+    SetStatus(Form("PREVIEW rebin x%d: %s", n, currentHist_.c_str()));
+}
+
+void GammaFitGUI::OnRebinApply()
+{
+    if (currentHist_.empty() || !rawHist_) {
+        AppendLog("[Rebin] Load a histogram first."); return;
+    }
+    if (rawHist_->InheritsFrom("TH2")) {
+        AppendLog("[Rebin] Cannot rebin a 2D histogram."); return;
+    }
+    int n = rebinEntry_ ? (int)rebinEntry_->GetNumber() : 1;
+    if (n < 1) n = 1;
+
+    if (n == 1) {
+        rebinFactors_.erase(currentHist_);
+        AppendLog("[Rebin] Rebin factor cleared for " + currentHist_);
+    } else {
+        rebinFactors_[currentHist_] = n;
+        AppendLog(Form("[Rebin] Stored rebin x%d for %s", n, currentHist_.c_str()));
+    }
+
+    // Reload histogram with the new factor applied
+    if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    rawHist_ = LoadHistFromFile(currentHist_, rawHistOwned_);
+    delete viewHist_; viewHist_ = nullptr;
+
+    SaveMetadata();
+    PopulateHistWidgets();
+    DrawOnCanvas(rawHist_);
+    SetStatus(n > 1 ? Form("Rebin x%d applied: %s", n, currentHist_.c_str())
+                    : ("Rebin cleared: " + currentHist_));
+}
+
+void GammaFitGUI::OnRebinReset()
+{
+    if (currentHist_.empty()) return;
+    rebinFactors_.erase(currentHist_);
+    if (rebinEntry_) rebinEntry_->SetNumber(1);
+
+    if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    rawHist_ = LoadHistFromFile(currentHist_, rawHistOwned_);
+    delete viewHist_; viewHist_ = nullptr;
+
+    SaveMetadata();
+    PopulateHistWidgets();
+    DrawOnCanvas(rawHist_);
+    AppendLog("[Rebin] Reset to original binning: " + currentHist_);
+    SetStatus("Rebin reset: " + currentHist_);
+}
+
+void GammaFitGUI::OnToggleIsoLabels()
+{
+    showIsoLabels_ = showIsoLabelsChk_ && showIsoLabelsChk_->IsOn();
+    if (rawHist_) RedrawView();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OnApplyBgAnchors — seed bg0, bg1 from two off-peak anchor regions
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnApplyBgAnchors()
+{
+    if (!rawHist_) { AppendLog("Load a histogram first."); return; }
+    if (!mBgAnch1Lo_ || !mBgAnch1Hi_ || !mBgAnch2Lo_ || !mBgAnch2Hi_) return;
+
+    double lo1 = mBgAnch1Lo_->GetNumber(), hi1 = mBgAnch1Hi_->GetNumber();
+    double lo2 = mBgAnch2Lo_->GetNumber(), hi2 = mBgAnch2Hi_->GetNumber();
+
+    if (hi1 <= lo1 || hi2 <= lo2) {
+        AppendLog("Anchor regions are invalid (Hi must be > Lo for both regions).");
+        return;
+    }
+    if (std::abs((lo1+hi1)*0.5 - (lo2+hi2)*0.5) < 1.0) {
+        AppendLog("Anchor regions overlap — use two distinct off-peak regions.");
+        return;
+    }
+
+    TH1* h = viewHist_ ? viewHist_ : rawHist_;
+
+    auto regionMean = [&](double lo, double hi) -> std::pair<double,double> {
+        int b1 = h->FindBin(lo + h->GetBinWidth(1)*0.01);
+        int b2 = h->FindBin(hi - h->GetBinWidth(1)*0.01);
+        if (b1 > b2) std::swap(b1, b2);
+        double sum = 0.0; int nb = 0;
+        for (int b = b1; b <= b2; b++) { sum += h->GetBinContent(b); nb++; }
+        return { (lo + hi) * 0.5, (nb > 0) ? sum / nb : 0.0 };
+    };
+
+    auto [x1, y1] = regionMean(lo1, hi1);
+    auto [x2, y2] = regionMean(lo2, hi2);
+
+    double bg1val = (std::abs(x2 - x1) > 1e-6) ? (y2 - y1) / (x2 - x1) : 0.0;
+    double bg0val = y1 - bg1val * x1;
+
+    mBg0_->SetNumber(bg0val);
+    mBg1_->SetNumber(bg1val);
+
+    AppendLog(Form("BG anchors applied: bg0=%.2f  bg1=%.5f  (regions [%.0f,%.0f] and [%.0f,%.0f])",
+                   bg0val, bg1val, lo1, hi1, lo2, hi2));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OnApplyCalibration — apply E = a + b·ch + c·ch² to selected histogram
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnApplyCalibration()
+{
+    if (!rawHist_) { AppendLog("Load a histogram first."); return; }
+    if (!calibA_ || !calibB_ || !calibC_) return;
+
+    double aParam = calibA_->GetNumber();
+    double bParam = calibB_->GetNumber();
+    double cParam = calibC_->GetNumber();
+
+    if (std::abs(bParam) < 1e-10 && std::abs(cParam) < 1e-20) {
+        AppendLog("Calibration requires b ≠ 0 (slope in keV/channel).");
+        return;
+    }
+
+    TH1* src  = rawHist_;
+    int  nbin = src->GetNbinsX();
+    std::string newName = currentHist_ + "_cal";
+
+    // Build non-uniform bin edges mapped through the calibration polynomial
+    std::vector<double> edges(nbin + 1);
+    for (int i = 0; i <= nbin; i++) {
+        double ch = (i < nbin)
+            ? src->GetXaxis()->GetBinLowEdge(i + 1)
+            : src->GetXaxis()->GetBinUpEdge(nbin);
+        edges[i] = aParam + bParam * ch + cParam * ch * ch;
+    }
+
+    if (edges.front() > edges.back())
+        AppendLog("WARNING: negative slope — x-axis will be reversed.");
+
+    TH1D* cal = new TH1D(newName.c_str(),
+                         (std::string(src->GetTitle()) + " (keV)").c_str(),
+                         nbin, edges.data());
+    cal->SetDirectory(nullptr);
+    cal->GetXaxis()->SetTitle("Energy (keV)");
+    cal->GetYaxis()->SetTitle(src->GetYaxis()->GetTitle());
+    cal->Sumw2();
+
+    for (int i = 1; i <= nbin; i++) {
+        cal->SetBinContent(i, src->GetBinContent(i));
+        cal->SetBinError(i, src->GetBinError(i));
+    }
+
+    histNames_.push_back(newName);
+    histClass_[newName] = histClass_.count(currentHist_) ? histClass_[currentHist_] : "Gamma Spectrum";
+
+    if (rawHistOwned_) { delete rawHist_; rawHistOwned_ = false; }
+    rawHist_     = cal;
+    rawHistOwned_ = true;
+    currentHist_ = newName;
+    PopulateHistWidgets();
+    DrawOnCanvas(rawHist_);
+
+    AppendLog(Form("Calibration applied: E = %.4g + %.6g·ch + %.4g·ch²", aParam, bParam, cParam));
+    AppendLog("  Created '" + newName + "'  range ["
+              + Fmt(cal->GetXaxis()->GetXmin(), 1) + ", "
+              + Fmt(cal->GetXaxis()->GetXmax(), 1) + "] keV");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OnApplyEfficiency — store efficiency model parameters for peak stats display
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnApplyEfficiency()
+{
+    if (!effA_ || !effB_ || !effC_ || !effD_) return;
+
+    double a = effA_->GetNumber(), b = effB_->GetNumber();
+    double c = effC_->GetNumber(), d = effD_->GetNumber();
+
+    if (b == 0.0 && c == 0.0 && d == 0.0) {
+        AppendLog("Efficiency: all non-offset parameters are zero — model has no E-dependence.");
+        return;
+    }
+    AppendLog(Form("Efficiency model: ln(ε) = %.4g - %.4g·ln(E) + %.4g·ln(E)² - %.4g/E²",
+                   a, b, c, d));
+    AppendLog("Eff-corrected areas will appear in peak statistics after the next fit.");
+
+    // Refresh stats display if a fit is already shown
+    if (manualTF1_ && rawHist_) {
+        TH1* dispHist = viewHist_ ? viewHist_ : rawHist_;
+        UpdatePeakStats(manualTF1_, dispHist,
+                        manualTF1_->GetXmin(), manualTF1_->GetXmax());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+static std::string RecentFilePath()
+{
+    const char* home = gSystem->HomeDirectory();
+    return std::string(home ? home : ".") + "/.autogammafit_recent.txt";
+}
+
+static constexpr int kMaxRecent = 10;
+
+void GammaFitGUI::LoadRecentFiles()
+{
+    recentFiles_.clear();
+    std::ifstream in(RecentFilePath());
+    std::string line;
+    while (std::getline(in, line)) {
+        // Strip \r and trailing spaces so \r\n files don't corrupt the path
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+            line.pop_back();
+        if (!line.empty())
+            recentFiles_.push_back(line);
+    }
+}
+
+void GammaFitGUI::SaveRecentFiles() const
+{
+    std::ofstream out(RecentFilePath());
+    for (const auto& p : recentFiles_)
+        out << p << "\n";
+}
+
+void GammaFitGUI::AddToRecentFiles(const std::string& path)
+{
+    if (path.empty()) return;
+    // Remove duplicate if already present
+    recentFiles_.erase(
+        std::remove(recentFiles_.begin(), recentFiles_.end(), path),
+        recentFiles_.end());
+    recentFiles_.insert(recentFiles_.begin(), path);
+    if ((int)recentFiles_.size() > kMaxRecent)
+        recentFiles_.resize(kMaxRecent);
+    SaveRecentFiles();
+    RefreshRecentCombo();
+}
+
+void GammaFitGUI::RefreshRecentCombo()
+{
+    if (!recentCombo_) return;
+    recentCombo_->RemoveAll();
+    if (recentFiles_.empty()) {
+        recentCombo_->AddEntry("(no recent files)", 1);
+        recentCombo_->Select(1, kFALSE);
+    } else {
+        for (int i = 0; i < (int)recentFiles_.size(); ++i) {
+            // Show only the filename portion, keep full path as title via id
+            std::string display = recentFiles_[i];
+            auto slash = display.rfind('/');
+            if (slash != std::string::npos) display = display.substr(slash + 1);
+            recentCombo_->AddEntry(display.c_str(), i + 1);
+        }
+        recentCombo_->Select(1, kFALSE);
+    }
+    recentCombo_->MapSubwindows();
+    recentCombo_->Layout();
+}
+
+void GammaFitGUI::OnOpenRecent()
+{
+    if (recentFiles_.empty()) { AppendLog("No recent files."); return; }
+    int sel = recentCombo_ ? recentCombo_->GetSelected() : -1;
+    if (sel < 1 || sel > (int)recentFiles_.size()) {
+        AppendLog("Select a recent file from the dropdown first."); return;
+    }
+    std::string path = recentFiles_[sel - 1];
+
+    if (inputFile_) { inputFile_->Close(); delete inputFile_; inputFile_ = nullptr; }
+    inputPath_ = path;
+    inputFile_ = TFile::Open(inputPath_.c_str(), "READ");
+    if (!inputFile_ || inputFile_->IsZombie()) {
+        AppendLog("ERROR: Cannot open " + inputPath_);
+        inputFile_ = nullptr;
+        return;
+    }
+
+    AddToRecentFiles(inputPath_);
+
+    histNames_.clear(); th2Names_.clear(); projParent_.clear();
+    histClass_.clear(); customProjDefs_.clear(); bgSubtractDefs_.clear();
+    rebinFactors_.clear();
+
+    TIter next(inputFile_->GetListOfKeys());
+    TKey* key;
+    while ((key = (TKey*)next())) {
+        TObject* obj = key->ReadObj();
+        if (!obj) continue;
+        std::string name = obj->GetName();
+        if (obj->InheritsFrom("TH2")) {
+            histNames_.push_back(name);
+            th2Names_.insert(name);
+            histNames_.push_back(name + "_px");
+            histNames_.push_back(name + "_py");
+            projParent_[name + "_px"] = name;
+            projParent_[name + "_py"] = name;
+        } else if (obj->InheritsFrom("TH1")) {
+            histNames_.push_back(name);
+        }
+    }
+
+    LoadMetadata();
+    PopulateHistWidgets();
+    PopulateCustProjTh2Combo();
+    PopulateBgSubCombos();
+
+    fittedHists_.clear();
+    fitResultsList_->RemoveAll();
+    for (const auto& hname : histNames_) {
+        struct stat st;
+        if (stat(CacheFileFor(hname).c_str(), &st) == 0)
+            fittedHists_.push_back(hname);
+    }
+    for (size_t i = 0; i < fittedHists_.size(); ++i)
+        fitResultsList_->AddEntry(fittedHists_[i].c_str(), (Int_t)i + 1);
+    fitResultsList_->MapSubwindows(); fitResultsList_->Layout();
+
+    std::string display = inputPath_;
+    if (display.size() > 45) display = "..." + display.substr(display.size() - 42);
+    fileLbl_->SetText(display.c_str());
+    AppendLog("Opened (recent): " + inputPath_);
+    SetStatus("Loaded: " + inputPath_);
 }

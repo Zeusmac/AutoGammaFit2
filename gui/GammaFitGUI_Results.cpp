@@ -5,6 +5,7 @@
 #include "TGTextEntry.h"
 #include "TGMsgBox.h"
 #include "TH1.h"
+#include "TH2.h"
 #include "TFile.h"
 #include "TCanvas.h"
 #include "TF1.h"
@@ -60,6 +61,25 @@ void GammaFitGUI::BuildFitResultsTab(TGCompositeFrame* p)
     sg->AddFrame(exportBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
     exportBtn->Connect("Clicked()", "GammaFitGUI", this, "OnExportCacheCSV()");
     exportBtn->SetToolTipText("Export fitted peak parameters from all cached histograms to a CSV file");
+
+    // ── gnuScope export ───────────────────────────────────────────────────────
+    TGGroupFrame* gsg = new TGGroupFrame(p, "Export to gnuScope");
+    p->AddFrame(gsg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+
+    TGTextButton* gsExportBtn = new TGTextButton(gsg, "Export Current Histogram...");
+    gsg->AddFrame(gsExportBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+    gsExportBtn->Connect("Clicked()", "GammaFitGUI", this, "OnExportGnuScope()");
+    gsExportBtn->SetToolTipText(
+        "Export the currently displayed histogram to gnuScope binary format.\n"
+        "1D histograms → .spe (Fortran unformatted float array)\n"
+        "2D histograms → .sqr (square matrix, same format as dump_square_asym.C)");
+
+    TGTextButton* gsExportAllBtn = new TGTextButton(gsg, "Export All Histograms to Folder...");
+    gsg->AddFrame(gsExportAllBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 4));
+    gsExportAllBtn->Connect("Clicked()", "GammaFitGUI", this, "OnExportGnuScopeAll()");
+    gsExportAllBtn->SetToolTipText(
+        "Batch-export every loaded histogram to gnuScope format in a chosen folder.\n"
+        "1D → <histname>.spe,  2D → <histname>.sqr");
 
     // ── Canvas Annotations ────────────────────────────────────────────────────
     TGGroupFrame* annGrp = new TGGroupFrame(p, "Canvas Annotations");
@@ -490,7 +510,8 @@ void GammaFitGUI::OnExportCacheCSV()
                 double Eerr = hasErr ? e.paramErrors[3*i + 1] : 0.0;
                 double serr = hasErr ? e.paramErrors[3*i + 2] : 0.0;
 
-                double area    = A * sig * kSqrt2Pi;
+                double bw      = (e.binWidth > 0.0) ? e.binWidth : 1.0;
+                double area    = A * sig * kSqrt2Pi / bw;
                 double areaErr = (A > 0 && sig > 0)
                     ? area * std::sqrt(std::pow(Aerr/A, 2) + std::pow(serr/sig, 2))
                     : 0.0;
@@ -555,6 +576,168 @@ void GammaFitGUI::OnExportCacheCSV()
     AppendLog(Form("CSV export: %d rows [%s] -> %s",
                    rowCount, exportHist.c_str(), outPath.c_str()));
     SetStatus(Form("Exported %d peaks to CSV", rowCount));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// gnuScope binary export
+// ─────────────────────────────────────────────────────────────────────────────
+// Both formats use Fortran sequential unformatted records:
+//   [4-byte record length] [data] [4-byte record length]
+//
+// 1D (.spe): single record — nchans floats (bins 1..N, overflows excluded)
+//
+// 2D (.sqr): two records
+//   Record 1 (header): 3 ints → maxxy, 0 (unused), 0 (type=square)
+//   Record 2 (data):   maxxy×maxxy floats, row-major (matches dump_square_asym.C)
+
+bool GammaFitGUI::ExportGnuScopeFile(TH1* h, const std::string& outPath) const
+{
+    std::ofstream fout(outPath, std::ios::out | std::ios::binary);
+    if (!fout.is_open()) return false;
+
+    auto writeInt   = [&](int   v) { fout.write(reinterpret_cast<char*>(&v), sizeof(int)); };
+    auto writeFloat = [&](float v) { fout.write(reinterpret_cast<char*>(&v), sizeof(float)); };
+
+    if (h->InheritsFrom("TH2")) {
+        TH2* h2   = static_cast<TH2*>(h);
+        int  nX   = h2->GetNbinsX();
+        int  nY   = h2->GetNbinsY();
+        int  maxxy = std::max(nX, nY);
+
+        // Record 1 — header (3 ints)
+        int hdrLen = static_cast<int>(sizeof(int) * 3);
+        int code   = 0;
+        writeInt(hdrLen);
+        writeInt(maxxy);
+        writeInt(code);   // unused
+        writeInt(code);   // type 0 = square
+        writeInt(hdrLen);
+
+        // Record 2 — data (maxxy × maxxy floats, zero-padded beyond histogram edges)
+        int datLen = static_cast<int>(sizeof(float)) * maxxy * maxxy;
+        writeInt(datLen);
+        for (int i = 1; i <= maxxy; i++) {
+            for (int j = 1; j <= maxxy; j++) {
+                float val = (i <= nY && j <= nX)
+                            ? static_cast<float>(h2->GetBinContent(j, i))
+                            : 0.0f;
+                writeFloat(val);
+            }
+        }
+        writeInt(datLen);
+    } else {
+        // 1D — single data record
+        int  nX    = h->GetNbinsX();
+        int  datLen = static_cast<int>(sizeof(float)) * nX;
+        writeInt(datLen);
+        for (int i = 1; i <= nX; i++)
+            writeFloat(static_cast<float>(h->GetBinContent(i)));
+        writeInt(datLen);
+    }
+
+    fout.close();
+    return fout.good() || true;  // close() clears failbit on success
+}
+
+void GammaFitGUI::OnExportGnuScope()
+{
+    if (!inputFile_ || currentHist_.empty()) {
+        AppendLog("[GnuScope] Select a histogram first."); return;
+    }
+
+    bool owned = false;
+    TH1* h = LoadHistFromFile(currentHist_, owned);
+    if (!h) { AppendLog("[GnuScope] Cannot load histogram: " + currentHist_); return; }
+
+    bool is2D = h->InheritsFrom("TH2");
+    const char* ext = is2D ? ".sqr" : ".spe";
+
+    static const char* kSqrTypes[] = {"gnuScope matrix","*.sqr","All files","*",nullptr,nullptr};
+    static const char* kSpeTypes[] = {"gnuScope spectrum","*.spe","All files","*",nullptr,nullptr};
+    TGFileInfo fi;
+    fi.fFileTypes = is2D ? kSqrTypes : kSpeTypes;
+    new TGFileDialog(gClient->GetRoot(), this, kFDSave, &fi);
+    if (!fi.fFilename) { if (owned) delete h; return; }
+
+    std::string outPath = fi.fFilename;
+    // Ensure correct extension
+    if (outPath.size() < 4 || outPath.substr(outPath.size() - 4) != std::string(ext))
+        outPath += ext;
+
+    bool ok = ExportGnuScopeFile(h, outPath);
+
+    if (ok) {
+        if (is2D) {
+            TH2* h2 = static_cast<TH2*>(h);
+            int maxxy = std::max(h2->GetNbinsX(), h2->GetNbinsY());
+            AppendLog(Form("[GnuScope] %s: 2D %dx%d → %dx%d square → %s",
+                           currentHist_.c_str(),
+                           h2->GetNbinsX(), h2->GetNbinsY(),
+                           maxxy, maxxy, outPath.c_str()));
+        } else {
+            AppendLog(Form("[GnuScope] %s: 1D %d channels → %s",
+                           currentHist_.c_str(), h->GetNbinsX(), outPath.c_str()));
+        }
+        SetStatus("gnuScope export: " + outPath);
+    } else {
+        AppendLog("[GnuScope] ERROR: write failed to " + outPath);
+    }
+
+    if (owned) delete h;
+}
+
+void GammaFitGUI::OnExportGnuScopeAll()
+{
+    if (!inputFile_ || histNames_.empty()) {
+        AppendLog("[GnuScope] No histograms loaded."); return;
+    }
+
+    // Use the file dialog to pick a destination directory: ask the user to
+    // navigate to the target folder and press Save (any filename is ignored).
+    static const char* kTypes[] = {"All files","*",nullptr,nullptr};
+    TGFileInfo fi;
+    fi.fFileTypes = kTypes;
+    fi.fIniDir    = StrDup(".");
+    new TGFileDialog(gClient->GetRoot(), this, kFDSave, &fi);
+    if (!fi.fFilename) return;
+
+    // Extract the directory part of whatever was typed/selected
+    std::string chosen = fi.fFilename;
+    std::string dir;
+    size_t slash = chosen.find_last_of("/\\");
+    dir = (slash != std::string::npos) ? chosen.substr(0, slash) : ".";
+
+    // Create directory if needed
+    gSystem->mkdir(dir.c_str(), true);
+
+    int nOk = 0, nErr = 0;
+    for (const auto& hname : histNames_) {
+        bool owned = false;
+        TH1* h = LoadHistFromFile(hname, owned);
+        if (!h) { nErr++; continue; }
+
+        bool is2D = h->InheritsFrom("TH2");
+        std::string safe = hname;
+        // Replace characters that are problematic in filenames
+        std::replace(safe.begin(), safe.end(), '/', '_');
+        std::replace(safe.begin(), safe.end(), '\\', '_');
+
+        std::string outPath = dir + "/" + safe + (is2D ? ".sqr" : ".spe");
+        bool ok = ExportGnuScopeFile(h, outPath);
+        if (ok) {
+            AppendLog("[GnuScope] " + hname + " → " + outPath);
+            nOk++;
+        } else {
+            AppendLog("[GnuScope] FAILED: " + hname);
+            nErr++;
+        }
+        if (owned) delete h;
+        gSystem->ProcessEvents();
+    }
+
+    AppendLog(Form("[GnuScope] Batch export complete: %d OK, %d failed → %s",
+                   nOk, nErr, dir.c_str()));
+    SetStatus(Form("gnuScope: %d exported to %s", nOk, dir.c_str()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

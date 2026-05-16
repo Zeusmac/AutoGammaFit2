@@ -211,10 +211,22 @@ public:
             ResidualMetrics rmN = FitDatabase::ComputeResiduals(h, f, xmin, xmax);
             double chi2ndf   = (rmN.rms < 1.0e6) ? FitDatabase::Chi2Ndf(rmN, 3*n + 2)
                                                   : r->Chi2() / r->Ndf();
-            double penalised = chi2ndf + cfg.kPenalty * (n - 1);
+
+            // Area-ratio penalty: fitted Gaussian area should equal observed
+            // counts above background.  Models where the ratio is far from 1
+            // are penalized so a better model (or more peaks) is preferred.
+            double areaRatio    = ComputeAreaRatio_(f, h, 3*n, n, xmin, xmax);
+            double ratioPenalty = 0.0;
+            if (areaRatio > 0.0) {
+                if      (areaRatio < 0.3 || areaRatio > 3.0) ratioPenalty = 10.0;
+                else if (areaRatio < 0.5 || areaRatio > 2.0) ratioPenalty =  3.0;
+                else if (areaRatio < 0.7 || areaRatio > 1.5) ratioPenalty =  1.0;
+            }
+            double penalised = chi2ndf + cfg.kPenalty * (n - 1) + ratioPenalty;
 
             Debug::Log(Debug::FITTER, std::to_string(n) + "-peak"
                        "  chi2/ndf=" + std::to_string(chi2ndf) +
+                       "  area_ratio=" + (areaRatio > 0 ? std::to_string(areaRatio) : "n/a") +
                        "  penalised=" + std::to_string(penalised) +
                        "  bestSoFar=" + std::to_string(bestChi2));
 
@@ -300,6 +312,14 @@ public:
             }
         }
 
+        // ---- ensure background never goes negative over the fit window ----
+        if (best) {
+            int npar = best->GetNpar();
+            bool isDG = (npar == 7);
+            int bgIdx = isDG ? 5 : 3 * nUsed;
+            ClampNonNegativeBG_(best, bgIdx, xmin, xmax);
+        }
+
         // ---- store in DB if better ----
         if (best && db) {
             FitEntry candidate = FitDatabase::MakeEntry(key, bestFit, best, nUsed, rm);
@@ -346,12 +366,10 @@ private:
             SetParSafe_(f, 3*i+2, sigma, cfg.sigmaLoFrac * sigma, cfg.sigmaHiFrac * sigma);
         }
 
-        // Background: seed from edge interpolation; allow negative to handle
-        // over-subtracted residuals from TSpectrum background removal.
         double bgMag  = std::max({std::abs(bgL), std::abs(bgR), 10.0});
         double slope  = (xrange > 0) ? (bgR - bgL) / xrange : 0.0;
-        SetParSafe_(f, 3*n,   bgL,   -bgMag * 5,  bgMag * 10);
-        SetParSafe_(f, 3*n+1, slope, -1e3,         1e3);
+        SetParSafe_(f, 3*n,   bgL,   0.0,   bgMag * 10);
+        SetParSafe_(f, 3*n+1, slope, -1e3,  1e3);
     }
  
     // -----------------------------------------------------------------------
@@ -378,8 +396,8 @@ private:
         double bg0    = f->GetParameter(3*n);
         double bg1    = f->GetParameter(3*n+1);
         double bgMag2 = std::max(std::abs(bg0), 10.0);
-        SetParSafe_(f, 3*n,   bg0, -bgMag2 * 5,  bgMag2 * 10);
-        SetParSafe_(f, 3*n+1, bg1, -1e3,          1e3);
+        SetParSafe_(f, 3*n,   bg0, 0.0,   bgMag2 * 10);
+        SetParSafe_(f, 3*n+1, bg1, -1e3,  1e3);
     }
 
     // -----------------------------------------------------------------------
@@ -449,6 +467,58 @@ private:
         double v = std::max(lo, std::min(hi, val));
         f->SetParameter(par, v);
         f->SetParLimits(par, lo, hi);
+    }
+
+    // -----------------------------------------------------------------------
+    // ClampNonNegativeBG_ — raise bg0 so the linear background stays >= 0
+    // over the entire fit window.  The slope is unchanged; only the constant
+    // term shifts up by the amount needed to bring the minimum to zero.
+    // Called on the winning TF1 after MIGRAD, before storing in the cache.
+    // npar_bg: index of bg0 in the parameter list (= 3*n for n-Gaussian model,
+    //          or 5 for the double-Gaussian model).
+    // -----------------------------------------------------------------------
+    static void ClampNonNegativeBG_(TF1* f, int npar_bg, double xmin, double xmax) {
+        double bg0   = f->GetParameter(npar_bg);
+        double bg1   = f->GetParameter(npar_bg + 1);
+        double bgMin = std::min(bg0 + bg1 * xmin, bg0 + bg1 * xmax);
+        if (bgMin < 0.0) {
+            f->SetParameter(npar_bg, bg0 - bgMin);  // bgMin is negative, so this raises bg0
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // ComputeAreaRatio_ — integral-of-fit / observed-counts-above-background.
+    // Returns -1 if the denominator is too small to be reliable.
+    // bgIdx: parameter index of bg0 (3*n for standard model, 5 for DG).
+    // nGauss: number of Gaussian peaks in the model.
+    // -----------------------------------------------------------------------
+    static double ComputeAreaRatio_(TF1* f, TH1* h,
+                                    int bgIdx, int nGauss,
+                                    double xmin, double xmax)
+    {
+        double bg0 = f->GetParameter(bgIdx);
+        double bg1 = f->GetParameter(bgIdx + 1);
+
+        // Observed counts above the fitted linear background
+        double obsAboveBg = 0.0;
+        int b1 = h->FindBin(xmin), b2 = h->FindBin(xmax);
+        for (int b = b1; b <= b2; b++)
+            obsAboveBg += h->GetBinContent(b) - (bg0 + bg1 * h->GetBinCenter(b));
+
+        if (obsAboveBg < 1.0) return -1.0;
+
+        // Total fitted Gaussian area (counts)
+        double fittedArea = 0.0;
+        for (int i = 0; i < nGauss; i++) {
+            double A   = f->GetParameter(3*i);
+            double E   = f->GetParameter(3*i + 1);
+            double sig = f->GetParameter(3*i + 2);
+            double bw  = h->GetBinWidth(h->FindBin(E));
+            if (bw <= 0.0) bw = 1.0;
+            fittedArea += A * sig * std::sqrt(2.0 * M_PI) / bw;
+        }
+
+        return fittedArea / obsAboveBg;
     }
 
     // -----------------------------------------------------------------------

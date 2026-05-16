@@ -19,6 +19,7 @@ struct PeakFitterBgOptions {
     double tspecThresh     = 0.02;   // TSpectrum::Search threshold (fraction of max)
     bool   useLogLikelihood = true;  // AdaptiveFitter: "L" option
     bool   useImprove       = false; // AdaptiveFitter: "M" option (IMPROVE)
+    double snMinRatio      = 0.0;   // S/N pre-screen: skip groups below threshold (0 = disabled)
 };
 
 // Flat resolution model used as a fallback when the energy-calibrated model

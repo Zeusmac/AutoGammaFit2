@@ -38,6 +38,7 @@ struct FitEntry {
     // exact same range that was used during fitting.  Both are 0 on old entries.
     double xlo = 0.0;
     double xhi = 0.0;
+    double binWidth = 1.0;  // histogram bin width in keV at peak energy (for area correction)
     // Isotope annotation (optional).  label = e.g. "Co-60"; classification =
     // "Parent", "Daughter", "Granddaughter", "Beta-n", "Beta-2n",
     // "Background", or "Custom:<user text>".  Both empty on unannotated entries.
@@ -313,6 +314,7 @@ public:
             }
             ss >> e.xlo;
             ss >> e.xhi;
+            { double bw = 1.0; if (ss >> bw && bw > 0.0) e.binWidth = bw; }
             // Optional label and classification — empty on old cache files
             {
                 std::string lbl, cls;
@@ -378,7 +380,7 @@ public:
             for (double p : e.params) out << " " << p;
             out << " " << e.residualRMS << " " << e.maxPull;
             out << " " << (e.fitMethod.empty() ? "-" : e.fitMethod);
-            out << " " << e.xlo << " " << e.xhi;
+            out << " " << e.xlo << " " << e.xhi << " " << e.binWidth;
             out << " " << (e.label.empty()          ? "-" : e.label);
             out << " " << (e.classification.empty() ? "-" : e.classification);
             // Parameter errors (ne followed by ne values)

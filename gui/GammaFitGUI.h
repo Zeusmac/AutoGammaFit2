@@ -42,6 +42,12 @@ struct CustomProjDef {
     double      lo, hi;  // cut range on the non-projected axis
 };
 
+struct BgSubtractDef {
+    std::string srcName;  // histogram being subtracted from
+    std::string bgName;   // background histogram to subtract
+    double      scale;    // scale factor applied to the background (default 1.0)
+};
+
 struct SourceLine {
     double energy;    // keV (reference value)
     double intensity; // branching ratio [0,1]
@@ -73,6 +79,7 @@ public:
     void OnApplyBgSelected();
     void OnApplyBgAll();
     void OnResetBgSub();
+    void OnDeleteHistogram();
     void OnDebugAllOn();
     void OnDebugAllOff();
 
@@ -111,6 +118,33 @@ public:
     // ── Custom projections ────────────────────────────────────────────────────
     void OnAddCustomProjection();
 
+    // ── Background histogram subtraction ─────────────────────────────────────
+    void OnSubtractHistogram();
+
+    // ── Rebin histogram ───────────────────────────────────────────────────────
+    void OnRebinPreview();
+    void OnRebinApply();
+    void OnRebinReset();
+
+    // ── Peak label display ────────────────────────────────────────────────────
+    void OnToggleIsoLabels();
+
+    // ── gnuScope export ───────────────────────────────────────────────────────
+    void OnExportGnuScope();
+    void OnExportGnuScopeAll();
+
+    // ── Extended fit options (Manual Fit) ─────────────────────────────────────
+    void OnApplyBgAnchors();
+
+    // ── Channel→keV calibration ───────────────────────────────────────────────
+    void OnApplyCalibration();
+
+    // ── Efficiency correction ─────────────────────────────────────────────────
+    void OnApplyEfficiency();
+
+    // ── Recent files ─────────────────────────────────────────────────────────
+    void OnOpenRecent();
+
     // ── Isotopes tab ──────────────────────────────────────────────────────────
     void OnIsoRefresh();
     void OnIsoFilterChanged(Int_t id);
@@ -124,6 +158,8 @@ public:
     void OnIsoDrawSchematic();
     void OnIsoApplyClassToAll();
     void OnIsoSetParent();
+    void OnLoadAMETable();
+    void OnLoadNubaseTable();
     void OnIsoSetLabelDecay();
     void OnIsoLabelDecayApply();
     void OnIsoLabelDecaySearch();
@@ -173,7 +209,10 @@ public:
     void OnNextPeak();
     void OnZoomIn();
     void OnZoomOut();
+    void OnNavXRangeGo();
     void OnDeleteCacheEntry();
+
+    void OnApplyPickedLabel();
 
     // ── Residuals ─────────────────────────────────────────────────────────────
     void OnToggleResiduals();
@@ -188,6 +227,8 @@ public:
     void SetStatus(const std::string& msg);
     void OnSavePlot();
     void OnClearHistCache();
+    void OnArchiveHistCache();
+    void OnRestoreArchivedCache();
     void OnApplyCanvasAnnotations();
 
     ClassDefOverride(GammaFitGUI, 0)
@@ -246,7 +287,9 @@ private:
     TGCheckButton* autoLogLikChk_    = nullptr;
     TGCheckButton* autoImprovChk_    = nullptr;
     TGCheckButton* debugChk_[8]      = {};
-    TGComboBox*    histClassCombo_   = nullptr;  // Gamma / Decay / 2D
+    TGComboBox*    histClassCombo_   = nullptr;  // Gamma / Decay / 2D / Background
+    TGComboBox*    recentCombo_      = nullptr;  // recent ROOT files
+    std::vector<std::string> recentFiles_;       // most-recent-first
 
     // Custom projection widgets
     TGComboBox*    custProjTh2Combo_  = nullptr;
@@ -254,8 +297,55 @@ private:
     TGNumberEntry* custProjLo_        = nullptr;
     TGNumberEntry* custProjHi_        = nullptr;
     TGTextEntry*   custProjName_      = nullptr;
+
+    // Background subtraction widgets
+    TGComboBox*    bgSubSrcCombo_     = nullptr;
+    TGComboBox*    bgSubBgCombo_      = nullptr;
+    TGNumberEntry* bgSubScaleEntry_   = nullptr;
+    TGTextEntry*   bgSubNameEntry_    = nullptr;
+
+    // Rebin widget
+    TGNumberEntry* rebinEntry_        = nullptr;   // rebin factor (1 = no rebin)
+
+    // S/N pre-screen threshold for AutoFit (0 = disabled)
+    TGNumberEntry* snThreshEntry_     = nullptr;
+
+    // Efficiency correction parameters (ln(ε) = a - b·ln(E) + c·(ln(E))² - d/E²)
+    TGNumberEntry* effA_              = nullptr;
+    TGNumberEntry* effB_              = nullptr;
+    TGNumberEntry* effC_              = nullptr;
+    TGNumberEntry* effD_              = nullptr;
+
+    // Channel→keV calibration parameters (E = a + b·ch + c·ch²)
+    TGNumberEntry* calibA_            = nullptr;
+    TGNumberEntry* calibB_            = nullptr;
+    TGNumberEntry* calibC_            = nullptr;
+
+    // Background subtraction definitions (persistent via metadata)
+    std::map<std::string, BgSubtractDef> bgSubtractDefs_;
+
+    // Stored rebin factors per histogram name (persistent via metadata)
+    std::map<std::string, int>           rebinFactors_;
     TGTextEntry*   th2XLabelEntry_ = nullptr;  // axis label for TH2 X axis (main file)
     TGTextEntry*   th2YLabelEntry_ = nullptr;  // axis label for TH2 Y axis (main file)
+
+    // ── AME mass table (NNDC/IAEA AME2020 mass_1.mas) ────────────────────────
+    std::map<std::pair<int,int>, double> ameTable_;  // (Z,A) -> mass excess (keV)
+    bool           ameLoaded_  = false;
+    TGLabel*       ameLbl_     = nullptr;
+    bool LoadAMETable(const std::string& path);
+
+    struct NubaseEntry {
+        std::string halflifeStr;       // human-readable, e.g. "125 ms"
+        double halflifeSec  = -1.0;    // seconds; 0=stable, -1=unknown
+        double brBetaMinus  = -1.0;    // % β⁻   (-1=unknown)
+        double brBetaN      = -1.0;    // % β⁻n
+        double brBeta2N     = -1.0;    // % β⁻2n
+    };
+    std::map<std::pair<int,int>, NubaseEntry> nubaseTable_;  // (Z,A) -> entry
+    bool           nubaseLoaded_ = false;
+    TGLabel*       nubaseLbl_    = nullptr;
+    bool LoadNubaseTable(const std::string& path);
 
     // ── Isotopes tab widgets ──────────────────────────────────────────────────
     TGLabel*       isoHistLabel_   = nullptr;  // shows isoHistName_ in the tab
@@ -272,6 +362,7 @@ private:
     std::vector<std::string> isoListAutoMatch_;  // best DB match isotope (may be empty)
     std::vector<double>      isoListDbEnergy_;   // matched DB line energy (0 if none)
     std::string              isoHistName_;  // histogram whose cache is shown
+    bool                     schematicDrawn_ = false;  // true after first DrawDecaySchematic call
     // Label → class mapping (label name → class string, e.g. "Co-60" → "Parent")
     std::map<std::string, std::string> labelClassMap_;
     // Parent nucleus info (set by user in Isotopes tab)
@@ -339,12 +430,31 @@ private:
     TGComboBox*          mPeakClass_      = nullptr;
     TGTextEntry*         mPeakCustom_     = nullptr;
 
+    // Label pick mode — click on canvas to select a cached peak and relabel it
+    bool                 labelPickMode_   = false;
+    std::string          labelPickKey_;          // cache key of the selected entry
+    int                  labelPickGaussIdx_ = -1; // which Gaussian in that entry (-1 = whole entry)
+    TGCheckButton*       labelPickChk_    = nullptr;
+    TGLabel*             labelPickInfo_   = nullptr;
+    TGTextButton*        applyLabelBtn_   = nullptr;
+
     // Fit options
     TGCheckButton*       mFitLogLikChk_ = nullptr;
     TGCheckButton*       mFitImprovChk_ = nullptr;
     TGCheckButton*       mFitMinosChk_  = nullptr;
     TGCheckButton*       mBgFlatChk_    = nullptr;  // flat (constant) background
-    TGCheckButton*       mShowCompChk_  = nullptr;  // show BG + individual Gaussian components
+    TGCheckButton*       mShowCompChk_     = nullptr;  // show BG + individual Gaussian components
+    TGCheckButton*       showIsoLabelsChk_ = nullptr;  // toggle isotope name above peak labels
+    bool                 showIsoLabels_    = true;
+    TGCheckButton*       mBgQuadChk_      = nullptr;  // quadratic background term
+    TGCheckButton*       mComptonStepChk_ = nullptr;  // Compton step (Erfc term per peak)
+    TGCheckButton*       mTieWidthsChk_   = nullptr;  // tie sigma to resolution model
+
+    // BG anchor markers — two regions used to seed the linear BG
+    TGNumberEntry*       mBgAnch1Lo_      = nullptr;
+    TGNumberEntry*       mBgAnch1Hi_      = nullptr;
+    TGNumberEntry*       mBgAnch2Lo_      = nullptr;
+    TGNumberEntry*       mBgAnch2Hi_      = nullptr;
 
     // Background region
     TGNumberEntry*       mBgLo_        = nullptr;
@@ -470,6 +580,8 @@ private:
     std::vector<std::string> peakNavKeys_;
     int              peakNavIdx_  = 0;
     TGLabel*         peakNavLbl_  = nullptr;
+    TGNumberEntry*   navXMinEntry_ = nullptr;
+    TGNumberEntry*   navXMaxEntry_ = nullptr;
 
     // ── Residuals ─────────────────────────────────────────────────────────────
     TGCheckButton*   residualChk_   = nullptr;
@@ -497,6 +609,9 @@ private:
     void RunFitOnHistogram(const std::string& hname,
                            TFile* overrideFile = nullptr,
                            const std::vector<double>& forcedSeeds = {});
+    std::string CacheDirFor() const;
+    std::string ArchiveDirFor() const;
+    void        EnsureCacheDir() const;
     std::string CacheFileFor(const std::string& hname) const;
     std::string DecayCacheFileFor() const;
     void        SaveDecayFitCache();
@@ -531,6 +646,7 @@ private:
     TF1* BuildFromCacheKey(const std::string& key);
     TF1* RebuildFromEntry(const FitEntry& entry, double xlo, double xhi);
     void DrawPeakLabels(TF1* f);
+    void RedrawView();
     void SaveFitResultToFile(const std::string& hname, TFile* fout);
     void UpdatePeakStats(TF1* f, TH1* h, double xlo, double xhi);
     void PopulateIsoList(const std::string& filterLabel = "");
@@ -541,6 +657,14 @@ private:
     void SaveLabelClassMap(FitDatabase& fitdb);
     void PopulateDecayTh2Combo();
     void PopulateCustProjTh2Combo();
+    void PopulateBgSubCombos();
+    void AddToRecentFiles(const std::string& path);
+    void LoadRecentFiles();
+    void SaveRecentFiles() const;
+    void RefreshRecentCombo();
+
+    // gnuScope export helper — returns false on I/O error
+    bool ExportGnuScopeFile(TH1* h, const std::string& outPath) const;
 
     // Histogram classification helpers
     std::string ClassOf(const std::string& name) const;

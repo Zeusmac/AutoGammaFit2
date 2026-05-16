@@ -2,6 +2,7 @@
 #include "GammaFitGUI_shared.h"
 
 #include "TGTextEntry.h"
+#include "TGFileDialog.h"
 #include "TH1.h"
 #include "TCanvas.h"
 #include "TSystem.h"
@@ -14,6 +15,7 @@
 #include <set>
 #include <map>
 #include <algorithm>
+#include <fstream>
 #include <sstream>
 #include <limits>
 #include <sys/stat.h>
@@ -320,12 +322,40 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
     }
     {
         TGTextButton* setParentBtn = new TGTextButton(parentGrp, "Set Parent Info");
-        parentGrp->AddFrame(setParentBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        parentGrp->AddFrame(setParentBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
         setParentBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoSetParent()");
         setParentBtn->SetToolTipText(
             "Save parent isotope name, Z, and N to the cache.\n"
             "Daughter/granddaughter Z and N are auto-calculated\n"
             "via beta-minus decay steps when drawing the schematic.");
+    }
+    {
+        // AME mass table for Q-value computation
+        TGHorizontalFrame* ameRow = new TGHorizontalFrame(parentGrp);
+        parentGrp->AddFrame(ameRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+        TGTextButton* ameBtn = new TGTextButton(ameRow, "Load AME Table");
+        ameRow->AddFrame(ameBtn, new TGLayoutHints(kLHintsLeft, 0, 6, 0, 0));
+        ameBtn->Connect("Clicked()", "GammaFitGUI", this, "OnLoadAMETable()");
+        ameBtn->SetToolTipText(
+            "Load the NNDC/IAEA AME2020 mass table (mass_1.mas) to compute\n"
+            "Q values for each decay step shown in the decay schematic.\n"
+            "Download from: https://www-nds.iaea.org/amdc/ame2020/mass_1.mas");
+        ameLbl_ = new TGLabel(ameRow, "(not loaded)");
+        ameRow->AddFrame(ameLbl_, new TGLayoutHints(kLHintsCenterY | kLHintsLeft, 0, 0, 0, 0));
+    }
+    {
+        // NUBASE2020 for half-lives, branching ratios
+        TGHorizontalFrame* nbRow = new TGHorizontalFrame(parentGrp);
+        parentGrp->AddFrame(nbRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 4));
+        TGTextButton* nbBtn = new TGTextButton(nbRow, "Load NUBASE Table");
+        nbRow->AddFrame(nbBtn, new TGLayoutHints(kLHintsLeft, 0, 6, 0, 0));
+        nbBtn->Connect("Clicked()", "GammaFitGUI", this, "OnLoadNubaseTable()");
+        nbBtn->SetToolTipText(
+            "Load the IAEA NUBASE2020 table (nubase_2020.txt) for half-lives\n"
+            "and beta-decay branching ratios shown in the decay schematic.\n"
+            "Download from: https://www-nds.iaea.org/amdc/ame2020/nubase_2020.txt");
+        nubaseLbl_ = new TGLabel(nbRow, "(not loaded)");
+        nbRow->AddFrame(nubaseLbl_, new TGLayoutHints(kLHintsCenterY | kLHintsLeft, 0, 0, 0, 0));
     }
 
     // ── Isotope Database browser ──────────────────────────────────────────────
@@ -569,6 +599,8 @@ void GammaFitGUI::OnIsoRefresh()
     RefreshIsoDisplay();
     AppendLog("Isotopes: loaded cache for " + isoHistName_ +
               "  (" + std::to_string(isoListKeys_.size()) + " peaks)");
+    if (schematicDrawn_)
+        DrawDecaySchematic(canvas_->GetCanvas());
 }
 
 void GammaFitGUI::OnIsoFilterChanged(Int_t /*id*/)
@@ -1492,33 +1524,262 @@ void GammaFitGUI::OnIsoPeakPreview()
 // Decay chain schematic
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Class hierarchy columns:
-//   col 0 (left):   Parent
-//   col 1 (middle): Daughter, Beta-n Daughter, Beta-2n Daughter
-//   col 2 (right):  Granddaughter, Beta-n Granddaughter, Beta-2n Granddaughter
-// Arrow connections (col0→col1, col1→col2 per chain):
-//   Parent → Daughter → Granddaughter
-//   Parent → Beta-n Daughter → Beta-n Granddaughter
-//   Parent → Beta-2n Daughter → Beta-2n Granddaughter
+// ─────────────────────────────────────────────────────────────────────────────
+// AME mass-table loader  (NNDC/IAEA AME2020 mass_1.mas format)
+// Q_β- = Δ(parent) - Δ(daughter) - n_emitted × Δ(neutron)
+// ─────────────────────────────────────────────────────────────────────────────
 
-static const std::vector<std::tuple<std::string,int>> kClassLayout = {
-    {"Parent",               0},
-    {"Daughter",             1},
-    {"Beta-n Daughter",      1},
-    {"Beta-2n Daughter",     1},
-    {"Granddaughter",        2},
-    {"Beta-n Granddaughter", 2},
-    {"Beta-2n Granddaughter",2},
+bool GammaFitGUI::LoadAMETable(const std::string& path)
+{
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+
+    ameTable_.clear();
+    std::string line;
+    int nLoaded = 0;
+
+    while (std::getline(f, line)) {
+        if (line.empty()) continue;
+        // Skip page-header lines that begin with "1"
+        if (!line.empty() && line[0] == '1') continue;
+
+        // Tokenise the line
+        std::istringstream ss(line);
+        std::vector<std::string> tok;
+        std::string t;
+        while (ss >> t) tok.push_back(t);
+
+        if (tok.size() < 7) continue;
+
+        // Find the element-symbol token: shortest alphabetic string (1-3 chars)
+        // that sits between purely-numeric tokens.  It separates (NZ,N,Z,A) from
+        // the mass-excess column.
+        int symIdx = -1;
+        for (int i = 1; i < (int)tok.size() - 1; i++) {
+            if (tok[i].size() >= 1 && tok[i].size() <= 3 &&
+                std::isalpha((unsigned char)tok[i][0])) {
+                symIdx = i;
+                break;
+            }
+        }
+        // Need at least three numeric tokens before the symbol (N, Z, A)
+        if (symIdx < 3) continue;
+
+        try {
+            int N = std::stoi(tok[symIdx - 3]);
+            int Z = std::stoi(tok[symIdx - 2]);
+            int A = std::stoi(tok[symIdx - 1]);
+            if (Z < 0 || N < 0 || A != Z + N) continue;
+
+            // Mass excess is the first token after the symbol.
+            // Strip '#' (extrapolated) and '*' (estimated) markers.
+            std::string mexStr = tok[symIdx + 1];
+            mexStr.erase(std::remove_if(mexStr.begin(), mexStr.end(),
+                         [](char c){ return c == '#' || c == '*'; }), mexStr.end());
+            if (mexStr.empty()) continue;
+
+            ameTable_[{Z, A}] = std::stod(mexStr);
+            ++nLoaded;
+        } catch (...) {
+            continue;
+        }
+    }
+
+    ameLoaded_ = (nLoaded > 100);
+    return ameLoaded_;
+}
+
+void GammaFitGUI::OnLoadAMETable()
+{
+    TGFileInfo fi;
+    static const char* kFileTypes[] = {
+        "AME mass files", "*.mas *.txt *.dat",
+        "All files",      "*",
+        nullptr,          nullptr
+    };
+    fi.fFileTypes = kFileTypes;
+    fi.fIniDir    = StrDup(".");
+    new TGFileDialog(gClient->GetRoot(), this, kFDOpen, &fi);
+    if (!fi.fFilename) return;
+
+    std::string path = fi.fFilename;
+    bool ok = LoadAMETable(path);
+    if (ok) {
+        std::string disp = path;
+        // Show only filename (strip path)
+        auto slash = disp.rfind('/');
+        if (slash != std::string::npos) disp = disp.substr(slash + 1);
+        if (ameLbl_) ameLbl_->SetText(disp.c_str());
+        AppendLog("AME table loaded: " + path + "  (" +
+                  std::to_string(ameTable_.size()) + " nuclides)");
+    } else {
+        if (ameLbl_) ameLbl_->SetText("(load failed)");
+        AppendLog("ERROR: Could not parse AME table from " + path);
+    }
+}
+
+// ── NUBASE2020 parser ─────────────────────────────────────────────────────────
+bool GammaFitGUI::LoadNubaseTable(const std::string& path)
+{
+    std::ifstream in(path);
+    if (!in.is_open()) return false;
+    nubaseTable_.clear();
+
+    // Unit → seconds conversion
+    auto unitToSec = [](const std::string& u) -> double {
+        if (u == "ps") return 1e-12;
+        if (u == "ns") return 1e-9;
+        if (u == "us") return 1e-6;
+        if (u == "ms") return 1e-3;
+        if (u == "s")  return 1.0;
+        if (u == "m")  return 60.0;
+        if (u == "h")  return 3600.0;
+        if (u == "d")  return 86400.0;
+        if (u == "y")  return 3.156e7;
+        if (u == "ky") return 3.156e10;
+        if (u == "My") return 3.156e13;
+        if (u == "Gy") return 3.156e16;
+        if (u == "Ty") return 3.156e19;
+        if (u == "stbl") return 0.0;    // stable
+        return -1.0;                     // unknown
+    };
+
+    // Extract branching ratio value after "KEY=" in a decay mode field
+    auto parseBR = [](const std::string& field, const std::string& key) -> double {
+        auto pos = field.find(key + "=");
+        if (pos == std::string::npos) return -1.0;
+        pos += key.size() + 1;
+        // skip leading spaces
+        while (pos < field.size() && field[pos] == ' ') ++pos;
+        std::string tok;
+        while (pos < field.size() && (std::isdigit(field[pos]) || field[pos] == '.' || field[pos] == '-'))
+            tok += field[pos++];
+        if (tok.empty()) return -1.0;
+        try { return std::stod(tok); } catch (...) { return -1.0; }
+    };
+
+    int nLoaded = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.size() < 10) continue;
+        if (line[0] == '#') continue;
+
+        // Cols 0-2: A, cols 4-6: Z (1-indexed in spec → 0-indexed here)
+        std::string aStr = line.substr(0, 3);
+        std::string zStr = (line.size() >= 7) ? line.substr(4, 3) : "";
+        int A = 0, Z = 0;
+        try { A = std::stoi(aStr); Z = std::stoi(zStr); } catch (...) { continue; }
+        if (A <= 0 || Z < 0 || Z > 118 || Z > A) continue;
+
+        // Isomer indicator at cols 7-10 — skip isomers (keep only ground state)
+        if (line.size() >= 8) {
+            char iso = line[7];
+            if (iso == 'm' || iso == 'n') continue;  // isomeric state
+        }
+
+        NubaseEntry nb;
+
+        // Half-life: value at cols 57-68, unit at cols 69-77 (approximate)
+        // Use token search: find a time unit token
+        if (line.size() > 69) {
+            // The half-life field spans ~cols 57-77; extract it
+            std::string hlField = line.substr(57, std::min((int)line.size() - 57, 22));
+            std::istringstream hls(hlField);
+            std::string tok1, tok2;
+            if (hls >> tok1 >> tok2) {
+                // tok1 might be the value, tok2 the unit
+                double factor = unitToSec(tok2);
+                if (factor >= 0.0) {
+                    // strip # and < > from value
+                    for (char c : {'#','<','>',' '}) tok1.erase(std::remove(tok1.begin(), tok1.end(), c), tok1.end());
+                    try {
+                        nb.halflifeSec  = std::stod(tok1) * factor;
+                        // Build human-readable string
+                        nb.halflifeStr  = tok1 + " " + tok2;
+                    } catch (...) {}
+                } else if (tok1 == "stbl" || tok2 == "stbl") {
+                    nb.halflifeSec = 0.0;
+                    nb.halflifeStr = "stable";
+                }
+            } else if (tok1 == "stbl") {
+                nb.halflifeSec = 0.0;
+                nb.halflifeStr = "stable";
+            }
+        }
+
+        // Decay modes: from col 119 onward (if line is long enough)
+        if (line.size() > 119) {
+            std::string decayField = line.substr(119);
+            // Replace semicolons with spaces for tokenizing, but keep = intact
+            // e.g. "B-=85.7 4;B-N=14.0 4;B-2N=0.30 10"
+            nb.brBetaMinus = parseBR(decayField, "B-");
+            // Make sure "B-N" match doesn't steal from "B-"
+            // parseBR for "B-" finds "B-=" but not "B-N=" — correct since B- comes before =
+            nb.brBetaN     = parseBR(decayField, "B-N");
+            nb.brBeta2N    = parseBR(decayField, "B-2N");
+        }
+
+        nubaseTable_[{Z, A}] = nb;
+        ++nLoaded;
+    }
+
+    nubaseLoaded_ = (nLoaded > 100);
+    return nubaseLoaded_;
+}
+
+void GammaFitGUI::OnLoadNubaseTable()
+{
+    TGFileInfo fi;
+    static const char* kFileTypes[] = {
+        "NUBASE files", "*.txt *.dat",
+        "All files",    "*",
+        nullptr,        nullptr
+    };
+    fi.fFileTypes = kFileTypes;
+    fi.fIniDir    = StrDup(".");
+    new TGFileDialog(gClient->GetRoot(), this, kFDOpen, &fi);
+    if (!fi.fFilename) return;
+
+    std::string path = fi.fFilename;
+    bool ok = LoadNubaseTable(path);
+    if (ok) {
+        std::string disp = path;
+        auto slash = disp.rfind('/');
+        if (slash != std::string::npos) disp = disp.substr(slash + 1);
+        if (nubaseLbl_) nubaseLbl_->SetText(disp.c_str());
+        AppendLog("NUBASE table loaded: " + path + "  (" +
+                  std::to_string(nubaseTable_.size()) + " nuclides)");
+    } else {
+        if (nubaseLbl_) nubaseLbl_->SetText("(load failed)");
+        AppendLog("ERROR: Could not parse NUBASE table from " + path);
+    }
+}
+
+// Fixed grid layout: col 0 = Parent, col 1 = Daughters, col 2 = Granddaughters.
+// All 7 nodes are always drawn, even if no peaks are matched to them.
+
+struct SchNodeDef { const char* cls; int col; int row; };
+static const SchNodeDef kSchNodes[] = {
+    {"Parent",               0, 1},
+    {"Daughter",             1, 0},
+    {"Beta-n Daughter",      1, 1},
+    {"Beta-2n Daughter",     1, 2},
+    {"Granddaughter",        2, 0},
+    {"Beta-n Granddaughter", 2, 1},
+    {"Beta-2n Granddaughter",2, 2},
 };
-// Chain linkage: {parent_class, child_class}
-static const std::vector<std::pair<std::string,std::string>> kChainLinks = {
-    {"Parent",          "Daughter"},
-    {"Parent",          "Beta-n Daughter"},
-    {"Parent",          "Beta-2n Daughter"},
-    {"Daughter",        "Granddaughter"},
-    {"Beta-n Daughter", "Beta-n Granddaughter"},
-    {"Beta-2n Daughter","Beta-2n Granddaughter"},
+static const int kNSchNodes = 7;
+
+struct SchArrowDef { const char* from; const char* to; int neutrons; };
+static const SchArrowDef kSchArrows[] = {
+    {"Parent",          "Daughter",             0},
+    {"Parent",          "Beta-n Daughter",      1},
+    {"Parent",          "Beta-2n Daughter",     2},
+    {"Daughter",        "Granddaughter",        0},
+    {"Beta-n Daughter", "Beta-n Granddaughter", 0},
+    {"Beta-2n Daughter","Beta-2n Granddaughter",0},
 };
+static const int kNSchArrows = 6;
 
 void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
 {
@@ -1528,172 +1789,252 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
     fitdb.Load(CacheFileFor(isoHistName_));
     LoadLabelClassMap(fitdb);
 
-    // Build: class → list of {isotope, peak_count}
-    std::map<std::string, std::map<std::string,int>> classIso;  // class→{iso→count}
+    // Collect peak counts and primary isotope name per class
+    std::map<std::string, int>         classPeaks;
+    std::map<std::string, std::string> classIsoName;
+
     for (const auto& kv : fitdb.GetEntries()) {
         if (kv.first.empty() || kv.first[0] == '_') continue;
         const FitEntry& fe = kv.second;
-        if (fe.label.empty()) continue;
-        std::string cls;
-        if (labelClassMap_.count(fe.label))     cls = labelClassMap_.at(fe.label);
-        else if (!fe.classification.empty())    cls = fe.classification;
-        if (cls.empty()) continue;
 
-        int nPeaks = 1;
+        auto addPeak = [&](const std::string& lbl, const std::string& cls) {
+            std::string resolvedCls = cls;
+            if (resolvedCls.empty() && !lbl.empty() && labelClassMap_.count(lbl))
+                resolvedCls = labelClassMap_.at(lbl);
+            if (resolvedCls.empty() && !lbl.empty())
+                resolvedCls = AutoClassFromParent(lbl);
+            if (resolvedCls.empty()) return;
+            classPeaks[resolvedCls]++;
+            if (!classIsoName.count(resolvedCls) && !lbl.empty())
+                classIsoName[resolvedCls] = lbl;
+        };
+
         int npar = (int)fe.params.size();
-        if (npar >= 5 && (npar - 2) % 3 == 0) nPeaks = (npar - 2) / 3;
-        classIso[cls][fe.label] += nPeaks;
-    }
-
-    // Collect nodes that actually have data
-    struct Node {
-        std::string cls;
-        int col;
-        std::vector<std::pair<std::string,int>> isos;  // {name, peak count}
-        double xc = 0, yc = 0, h = 0;  // center x/y and height (NDC)
-        std::string nucInfo;  // e.g. "^{90}Kr  (Z=36, N=54)"
-    };
-    std::vector<Node> nodes;
-    for (auto& [cls, col] : kClassLayout) {
-        auto it = classIso.find(cls);
-        if (it == classIso.end()) continue;
-        Node nd;
-        nd.cls = cls; nd.col = col;
-        for (auto& [iso, cnt] : it->second)
-            nd.isos.push_back({iso, cnt});
-        std::sort(nd.isos.begin(), nd.isos.end());
-        // Compute nuclear identity from beta-minus chain
-        int ZZ = 0, NN = 0;
-        if (ClassZN(cls, isoParentZval_, isoParentNval_, ZZ, NN) && ZZ > 0 && NN > 0) {
-            int A = ZZ + NN;
-            nd.nucInfo = Form("^{%d}%s  (Z=%d, N=%d)", A, ElementSymbol(ZZ), ZZ, NN);
+        if (npar >= 5 && (npar-2)%3==0) {
+            int n = (npar-2)/3;
+            for (int i = 0; i < n; i++)
+                addPeak(fe.PeakLabel(i), fe.PeakClass(i));
+        } else {
+            addPeak(fe.label, fe.classification);
         }
-        nodes.push_back(nd);
-    }
-
-    if (nodes.empty()) {
-        AppendLog("No labeled peaks with class assignments. "
-                  "Use 'Set Class for ALL peaks with this Label' to assign classes.");
-        return;
     }
 
     c->Clear(); c->cd();
     c->SetFillColor(kWhite);
     gPad->SetFillColor(kWhite);
+    gPad->Range(0, 0, 1, 1);   // TBox/TArrow use user coords; reset to NDC-space
 
-    // Layout: x positions per column
-    const double xCol[3] = {0.12, 0.50, 0.88};
-    const double boxW    = 0.22;   // half-width
-    const double lineH   = 0.040; // per text line
-    const double padV    = 0.020; // vertical padding inside box
+    // ── NDC grid ──────────────────────────────────────────────────────────────
+    const double xCol[3]  = {0.13, 0.47, 0.83};
+    const double yRows[3] = {0.80, 0.50, 0.20};
+    const double bW       = 0.090;  // box half-width
+    const double bH       = 0.095;  // box half-height
 
-    // Assign y centers per column
-    std::map<int,std::vector<Node*>> byCols;
-    for (auto& nd : nodes) byCols[nd.col].push_back(&nd);
+    const int kFill[3] = {kOrange-9, kAzure-9, kGreen-9};
 
-    for (auto& [col, ndlist] : byCols) {
-        // Height of each node: class header + optional nucInfo line + isotope lines
-        for (auto* nd : ndlist)
-            nd->h = ((int)nd->isos.size() + 1 + (nd->nucInfo.empty() ? 0 : 1)) * lineH
-                    + 2 * padV;
-        // Total height needed
-        double totalH = 0;
-        for (auto* nd : ndlist) totalH += nd->h;
-        double spacing = (ndlist.size() > 1)
-            ? (0.85 - 0.10 - totalH) / (ndlist.size() - 1) : 0.0;
-        double y = 0.90;
-        for (auto* nd : ndlist) {
-            nd->xc = xCol[col];
-            nd->yc = y - nd->h / 2;
-            y -= nd->h + spacing;
+    // NDC center map — all 7 nodes always present
+    std::map<std::string, std::pair<double,double>> pos;
+    for (int i = 0; i < kNSchNodes; i++)
+        pos[kSchNodes[i].cls] = {xCol[kSchNodes[i].col], yRows[kSchNodes[i].row]};
+
+    TLatex ltx; ltx.SetNDC(kTRUE);
+
+    // Q-value helper: Q_β- = Δ(from) - Δ(to) - neutrons × Δ(n) [keV]
+    // Returns -9999.0 when mass data are unavailable (AME not loaded / parent not set).
+    const double kNeutronMex = 8071.3171;  // keV
+    auto computeQ = [&](const char* fromCls, const char* toCls, int neutrons) -> double {
+        if (!ameLoaded_ || isoParentZval_ <= 0 || isoParentNval_ <= 0) return -9999.0;
+        int Zf = 0, Nf = 0, Zt = 0, Nt = 0;
+        if (!ClassZN(fromCls, isoParentZval_, isoParentNval_, Zf, Nf)) return -9999.0;
+        if (!ClassZN(toCls,   isoParentZval_, isoParentNval_, Zt, Nt)) return -9999.0;
+        auto ipf = ameTable_.find({Zf, Zf+Nf});
+        auto ipt = ameTable_.find({Zt, Zt+Nt});
+        if (ipf == ameTable_.end() || ipt == ameTable_.end()) return -9999.0;
+        return ipf->second - ipt->second - neutrons * kNeutronMex;
+    };
+
+    // An arrow is drawn only when Q ≥ 0 (or when the AME table isn't loaded so
+    // we have no way to judge).
+    auto arrowEnabled = [&](const SchArrowDef& ad) -> bool {
+        double Q = computeQ(ad.from, ad.to, ad.neutrons);
+        return Q >= 0.0 || Q < -9000.0;  // enabled when Q>0 OR Q unknown
+    };
+
+    // ── Pass 1: colored box fills for ALL 7 nodes ─────────────────────────────
+    for (int i = 0; i < kNSchNodes; i++) {
+        const SchNodeDef& nd = kSchNodes[i];
+        double xc = pos[nd.cls].first, yc = pos[nd.cls].second;
+        TBox* fill = new TBox(xc-bW, yc-bH, xc+bW, yc+bH);
+        fill->SetFillColor(kFill[nd.col]);
+        fill->SetLineColor(kBlack);
+        fill->SetLineWidth(2);
+        fill->Draw();
+    }
+
+    // ── Pass 2: arrows (drawn on top of fills so arrowheads are always visible)
+    for (int ai = 0; ai < kNSchArrows; ai++) {
+        const SchArrowDef& ad = kSchArrows[ai];
+        if (!arrowEnabled(ad)) continue;   // skip impossible decays (Q < 0)
+
+        double fx = pos[ad.from].first,  fy = pos[ad.from].second;
+        double tx = pos[ad.to].first,    ty = pos[ad.to].second;
+
+        double ax1 = fx + bW, ay1 = fy;
+        double ax2 = tx - bW, ay2 = ty;
+
+        TArrow* arr = new TArrow(ax1, ay1, ax2, ay2, 0.016, "|>");
+        arr->SetLineColor(kBlack); arr->SetFillColor(kBlack);
+        arr->SetLineWidth(3); arr->Draw();
+
+        // Perpendicular unit vector (always pointing toward top of canvas)
+        double dx = ax2-ax1, dy = ay2-ay1;
+        double len = std::sqrt(dx*dx + dy*dy);
+        double px = (len > 0) ? -dy/len : 0.0;
+        double py = (len > 0) ?  dx/len : 1.0;
+        if (py < 0) { px = -px; py = -py; }
+
+        double midX = (ax1+ax2)/2.0, midY = (ay1+ay2)/2.0;
+
+        std::string decayLbl = "#beta^{-}";
+        if (ad.neutrons == 1) decayLbl += "+n";
+        if (ad.neutrons == 2) decayLbl += "+2n";
+
+        ltx.SetTextSize(0.021); ltx.SetTextColor(kMagenta+1); ltx.SetTextAlign(22);
+        ltx.DrawLatex(midX + px*0.038, midY + py*0.038, decayLbl.c_str());
+
+        // Q value (green, slightly further offset)
+        double Q = computeQ(ad.from, ad.to, ad.neutrons);
+        if (Q > -9000.0) {
+            ltx.SetTextSize(0.018); ltx.SetTextColor(kGreen+2); ltx.SetTextAlign(22);
+            ltx.DrawLatex(midX + px*0.060, midY + py*0.060,
+                          Form("Q=%.2f MeV", Q / 1000.0));
+        }
+
+        // Neutron symbol box for beta-n / beta-2n arrows
+        if (ad.neutrons > 0) {
+            double nox = midX + px*0.098, noy = midY + py*0.098;
+            const double nW = 0.030, nH = 0.026;
+
+            TArrow* narr = new TArrow(midX + px*0.066, midY + py*0.066,
+                                      nox, noy - nH, 0.008, "|>");
+            narr->SetLineColor(kRed+1); narr->SetFillColor(kRed+1);
+            narr->SetLineStyle(2); narr->SetLineWidth(1); narr->Draw();
+
+            TBox* nbox = new TBox(nox-nW, noy-nH, nox+nW, noy+nH);
+            nbox->SetFillColor(kRed-9); nbox->SetLineColor(kBlack);
+            nbox->SetLineWidth(1); nbox->Draw();
+
+            std::string nlbl = (ad.neutrons == 1) ? "^{1}_{0}n" : "2 ^{1}_{0}n";
+            ltx.SetTextSize(0.018); ltx.SetTextColor(kRed+2); ltx.SetTextAlign(22);
+            ltx.DrawLatex(nox, noy - 0.010, nlbl.c_str());
         }
     }
 
-    // Draw boxes and text
-    TLatex tx; tx.SetNDC(kTRUE); tx.SetTextAlign(22);
+    // ── Pass 3: box text (element symbol, Z, N, A, isotope, T½, BRs, Sn) ───────
+    // Drawn last so text is never obscured by arrows.
+    for (int i = 0; i < kNSchNodes; i++) {
+        const SchNodeDef& nd = kSchNodes[i];
+        double xc = pos[nd.cls].first, yc = pos[nd.cls].second;
+        double x1 = xc-bW, x2 = xc+bW, y1 = yc-bH, y2 = yc+bH;
 
-    // Box colors by column
-    const int kBoxFill[3] = {kOrange-9, kAzure-9, kGreen-9};
+        // Nuclear identity from beta-minus chain
+        int Z = 0, N = 0;
+        bool hasZ = ClassZN(nd.cls, isoParentZval_, isoParentNval_, Z, N) && Z > 0 && N > 0;
+        int A = Z + N;
 
-    for (const auto& nd : nodes) {
-        double x1 = nd.xc - boxW / 2, x2 = nd.xc + boxW / 2;
-        double y1 = nd.yc - nd.h / 2, y2 = nd.yc + nd.h / 2;
-
-        TBox* box = new TBox(x1, y1, x2, y2);
-        box->SetFillColor(kBoxFill[nd.col]);
-        box->SetLineColor(kBlack);
-        box->SetLineWidth(1);
-        box->Draw();
-
-        // Class name (bold header)
-        tx.SetTextSize(0.030); tx.SetTextColor(kBlack);
-        double ty = y2 - padV - lineH * 0.5;
-        tx.DrawLatex(nd.xc, ty, nd.cls.c_str());
-
-        // Nuclear identity line (^{A}El, Z, N) if parent is set
-        if (!nd.nucInfo.empty()) {
-            ty -= lineH;
-            tx.SetTextSize(0.026); tx.SetTextColor(kRed + 1);
-            tx.DrawLatex(nd.xc, ty, nd.nucInfo.c_str());
+        if (hasZ) {
+            // Mass number — top left
+            ltx.SetTextSize(0.018); ltx.SetTextColor(kBlack); ltx.SetTextAlign(11);
+            ltx.DrawLatex(x1+0.005, y2-0.026, Form("%d", A));
+            // Z — bottom left
+            ltx.SetTextAlign(11);
+            ltx.DrawLatex(x1+0.005, y1+0.006, Form("Z=%d", Z));
+            // N — bottom right
+            ltx.SetTextAlign(31);
+            ltx.DrawLatex(x2-0.005, y1+0.006, Form("N=%d", N));
+            // Element symbol — large, upper center
+            ltx.SetTextSize(0.035); ltx.SetTextColor(kBlack); ltx.SetTextAlign(22);
+            ltx.DrawLatex(xc, yc+0.018, ElementSymbol(Z));
         }
 
-        // Isotope lines
-        tx.SetTextSize(0.025); tx.SetTextColor(kBlue + 1);
-        for (const auto& [iso, cnt] : nd.isos) {
-            ty -= lineH;
-            tx.DrawLatex(nd.xc, ty,
-                Form("%s (%d peak%s)", iso.c_str(), cnt, cnt == 1 ? "" : "s"));
+        // Class label (abbreviated)
+        std::string scls = nd.cls;
+        if      (scls == "Beta-n Daughter")        scls = "#beta^{-}n Dau.";
+        else if (scls == "Beta-2n Daughter")       scls = "#beta^{-}2n Dau.";
+        else if (scls == "Beta-n Granddaughter")   scls = "#beta^{-}n GD";
+        else if (scls == "Beta-2n Granddaughter")  scls = "#beta^{-}2n GD";
+        ltx.SetTextSize(0.013); ltx.SetTextColor(kGray+2); ltx.SetTextAlign(22);
+        ltx.DrawLatex(xc, yc-(hasZ ? 0.003 : 0.008), scls.c_str());
+
+        // Matched isotope name (blue)
+        std::string isoName = classIsoName.count(nd.cls) ? classIsoName.at(nd.cls) : "";
+        if (!isoName.empty()) {
+            ltx.SetTextSize(0.014); ltx.SetTextColor(kBlue+1); ltx.SetTextAlign(22);
+            ltx.DrawLatex(xc, yc-0.020, isoName.c_str());
+        }
+
+        // NUBASE: half-life and branching ratios
+        double textY = yc - 0.034;
+        if (nubaseLoaded_ && hasZ) {
+            auto nbit = nubaseTable_.find({Z, A});
+            if (nbit != nubaseTable_.end()) {
+                const NubaseEntry& nb = nbit->second;
+                if (!nb.halflifeStr.empty()) {
+                    ltx.SetTextSize(0.012); ltx.SetTextColor(kGreen+2); ltx.SetTextAlign(22);
+                    ltx.DrawLatex(xc, textY, Form("T_{1/2}=%s", nb.halflifeStr.c_str()));
+                    textY -= 0.014;
+                }
+                // Beta-minus branching ratios
+                std::string brStr;
+                if (nb.brBetaMinus >= 0) brStr += Form("#beta^{-}=%.1f%%", nb.brBetaMinus);
+                if (nb.brBetaN     >= 0) {
+                    if (!brStr.empty()) brStr += " ";
+                    brStr += Form("#beta^{-}n=%.1f%%", nb.brBetaN);
+                }
+                if (!brStr.empty()) {
+                    ltx.SetTextSize(0.011); ltx.SetTextColor(kMagenta+1); ltx.SetTextAlign(22);
+                    ltx.DrawLatex(xc, textY, brStr.c_str());
+                    textY -= 0.013;
+                }
+                if (nb.brBeta2N >= 0) {
+                    ltx.SetTextSize(0.011); ltx.SetTextColor(kMagenta+1); ltx.SetTextAlign(22);
+                    ltx.DrawLatex(xc, textY, Form("#beta^{-}2n=%.2f%%", nb.brBeta2N));
+                    textY -= 0.013;
+                }
+            }
+        }
+
+        // AME: neutron separation energy Sn = Δ(Z,A-1) + Δ_n - Δ(Z,A)
+        if (ameLoaded_ && hasZ && A > 1) {
+            auto it0 = ameTable_.find({Z, A});
+            auto it1 = ameTable_.find({Z, A-1});
+            if (it0 != ameTable_.end() && it1 != ameTable_.end()) {
+                double Sn = it1->second + kNeutronMex - it0->second;  // keV
+                ltx.SetTextSize(0.012); ltx.SetTextColor(kOrange+2); ltx.SetTextAlign(22);
+                ltx.DrawLatex(xc, textY, Form("S_{n}=%.2f MeV", Sn * 1e-3));
+                textY -= 0.013;
+            }
+        }
+
+        // Peak count — only shown when > 0
+        int nPks = classPeaks.count(nd.cls) ? classPeaks.at(nd.cls) : 0;
+        if (nPks > 0) {
+            ltx.SetTextSize(0.013); ltx.SetTextColor(kBlack); ltx.SetTextAlign(22);
+            ltx.DrawLatex(xc, y1+0.012, Form("%d peak%s", nPks, nPks==1?"":"s"));
         }
     }
 
-    // Draw chain arrows
-    // Build a map: class name → node pointer for quick lookup
-    std::map<std::string, const Node*> nodeMap;
-    for (const auto& nd : nodes) nodeMap[nd.cls] = &nd;
-
-    for (const auto& [fromCls, toCls] : kChainLinks) {
-        auto fi = nodeMap.find(fromCls);
-        auto ti = nodeMap.find(toCls);
-        if (fi == nodeMap.end() || ti == nodeMap.end()) continue;
-        const Node& from = *fi->second;
-        const Node& to   = *ti->second;
-
-        // Arrow from right edge of 'from' to left edge of 'to'
-        double ax1 = from.xc + boxW / 2;
-        double ax2 = to.xc   - boxW / 2;
-        double ay  = (from.yc + to.yc) / 2;
-        // Clamp y to both boxes
-        ay = std::max(ay, std::max(from.yc - from.h/2 + padV, to.yc - to.h/2 + padV));
-        ay = std::min(ay, std::min(from.yc + from.h/2 - padV, to.yc + to.h/2 - padV));
-
-        TArrow* arr = new TArrow(ax1, ay, ax2, ay, 0.012, "|>");
-        arr->SetLineColor(kBlack);
-        arr->SetFillColor(kBlack);
-        arr->SetLineWidth(2);
-        arr->Draw();
-
-        // β⁻ label above the arrow midpoint
-        TLatex* bmlbl = new TLatex((ax1 + ax2) / 2.0, ay + 0.018, "#beta^{-}");
-        bmlbl->SetNDC(kTRUE);
-        bmlbl->SetTextSize(0.022);
-        bmlbl->SetTextAlign(22);
-        bmlbl->SetTextColor(kMagenta + 1);
-        bmlbl->Draw();
-    }
-
-    // Title
-    tx.SetTextSize(0.032); tx.SetTextColor(kBlack); tx.SetTextAlign(22);
+    // ── Title ─────────────────────────────────────────────────────────────────
+    ltx.SetTextSize(0.026); ltx.SetTextColor(kBlack); ltx.SetTextAlign(22);
     if (!isoParentIsotope_.empty() && isoParentZval_ > 0) {
         int A = isoParentZval_ + isoParentNval_;
-        tx.DrawLatex(0.50, 0.97,
-            Form("Decay Schematic: %s   |   Parent: %s (^{%d}%s, Z=%d, N=%d)",
-                 isoHistName_.c_str(),
-                 isoParentIsotope_.c_str(), A,
-                 ElementSymbol(isoParentZval_),
-                 isoParentZval_, isoParentNval_));
+        ltx.DrawLatex(0.50, 0.96,
+            Form("Decay Chain: %s   |   Parent: %s (^{%d}%s, Z=%d, N=%d)",
+                 isoHistName_.c_str(), isoParentIsotope_.c_str(), A,
+                 ElementSymbol(isoParentZval_), isoParentZval_, isoParentNval_));
     } else {
-        tx.DrawLatex(0.50, 0.97,
-            Form("Decay Schematic: %s   |   Parent not set",
+        ltx.DrawLatex(0.50, 0.96,
+            Form("Decay Chain: %s   |   Set parent nucleus (Z, N) to show element symbols",
                  isoHistName_.c_str()));
     }
 
@@ -1705,6 +2046,7 @@ void GammaFitGUI::OnIsoDrawSchematic()
     if (isoHistName_.empty()) {
         AppendLog("Click 'Refresh' to load a histogram's cache first."); return;
     }
+    schematicDrawn_ = true;
     DrawDecaySchematic(canvas_->GetCanvas());
     AppendLog("Decay schematic drawn for " + isoHistName_);
 }

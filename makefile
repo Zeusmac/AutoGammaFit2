@@ -37,7 +37,7 @@ TARGET   := $(BIN_DIR)/gamma_fit
 # =========================
 GUI_DIR      := gui
 GUI_TARGET   := $(BIN_DIR)/gamma_gui
-GUI_ROOTLIBS := $(shell root-config --libs) -lSpectrum -lGui -lGuiHtml
+GUI_ROOTLIBS := $(shell root-config --libs) -lSpectrum -lGui -lGuiHtml -lRGL
 
 # =========================
 # SOURCES
