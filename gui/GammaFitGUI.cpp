@@ -3442,50 +3442,85 @@ void GammaFitGUI::OnTransferCache()
     }
     const std::string destHist = histNames_[selId - 1];
 
-    // Scan this file's cache dir for available .dat files (excluding the destination)
-    std::vector<std::string> available;
-    DIR* dir = opendir(CacheDirFor().c_str());
-    if (dir) {
-        struct dirent* ent;
-        const std::string prefix = "fit_cache_";
-        const std::string suffix = ".dat";
-        while ((ent = readdir(dir)) != nullptr) {
-            std::string fname = ent->d_name;
-            if (fname.size() <= prefix.size() + suffix.size()) continue;
-            if (fname.substr(0, prefix.size()) != prefix) continue;
-            if (fname.substr(fname.size() - suffix.size()) != suffix) continue;
-            std::string hname = fname.substr(prefix.size(),
-                                             fname.size() - prefix.size() - suffix.size());
-            if (hname != destHist)
-                available.push_back(hname);
-        }
-        closedir(dir);
-    }
-    std::sort(available.begin(), available.end());
+    // Each entry: display label + full path to the .dat file
+    struct SrcEntry { std::string label; std::string path; };
+    std::vector<SrcEntry> sources;
 
-    if (available.empty()) {
-        AppendLog("No other cache files found in " + CacheDirFor());
+    // Helper: scan a directory for fit_cache_*.dat files
+    auto scanLive = [&](const std::string& scanDir, const std::string& tag) {
+        DIR* d = opendir(scanDir.c_str());
+        if (!d) return;
+        struct dirent* ent;
+        const std::string pfx = "fit_cache_", sfx = ".dat";
+        while ((ent = readdir(d)) != nullptr) {
+            std::string fn = ent->d_name;
+            if (fn.size() <= pfx.size() + sfx.size()) continue;
+            if (fn.substr(0, pfx.size()) != pfx) continue;
+            if (fn.substr(fn.size() - sfx.size()) != sfx) continue;
+            std::string hname = fn.substr(pfx.size(), fn.size() - pfx.size() - sfx.size());
+            if (hname == destHist) continue;
+            std::string lbl = tag.empty() ? hname : hname + "  [" + tag + "]";
+            sources.push_back({lbl, scanDir + "/" + fn});
+        }
+        closedir(d);
+    };
+
+    // Helper: scan archive dir for fit_cache_<hname>_<timestamp>.dat
+    auto scanArchive = [&](const std::string& archDir) {
+        DIR* d = opendir(archDir.c_str());
+        if (!d) return;
+        struct dirent* ent;
+        const std::string pfx = "fit_cache_", sfx = ".dat";
+        // Timestamp suffix is always _YYYYMMDD_HHMMSS = 16 chars
+        const int tsLen = 16;
+        while ((ent = readdir(d)) != nullptr) {
+            std::string fn = ent->d_name;
+            if ((int)fn.size() <= (int)(pfx.size() + sfx.size()) + tsLen) continue;
+            if (fn.substr(0, pfx.size()) != pfx) continue;
+            if (fn.substr(fn.size() - sfx.size()) != sfx) continue;
+            std::string stem = fn.substr(pfx.size(), fn.size() - pfx.size() - sfx.size());
+            if ((int)stem.size() <= tsLen) continue;
+            std::string ts    = stem.substr(stem.size() - tsLen); // _YYYYMMDD_HHMMSS
+            std::string hname = stem.substr(0, stem.size() - tsLen);
+            sources.push_back({hname + "  [archived " + ts.substr(1) + "]",
+                                archDir + "/" + fn});
+        }
+        closedir(d);
+    };
+
+    scanLive(CacheDirFor(), "");                   // current per-file live caches
+    scanLive(std::string(kCacheDir), "legacy");    // old flat caches from before subdir scheme
+    scanArchive(ArchiveDirFor());                  // archived caches for this file
+
+    // De-duplicate by path
+    std::sort(sources.begin(), sources.end(),
+              [](const SrcEntry& a, const SrcEntry& b){ return a.label < b.label; });
+    sources.erase(std::unique(sources.begin(), sources.end(),
+              [](const SrcEntry& a, const SrcEntry& b){ return a.path == b.path; }),
+              sources.end());
+
+    if (sources.empty()) {
+        AppendLog("[Transfer] No source caches found (live, legacy, or archived).");
         return;
     }
 
-    // Build a simple picker dialog
-    TGTransientFrame* dlg = new TGTransientFrame(gClient->GetRoot(), this, 420, 10, kVerticalFrame);
+    // Build picker dialog
+    TGTransientFrame* dlg = new TGTransientFrame(gClient->GetRoot(), this, 460, 10, kVerticalFrame);
     dlg->SetWindowName("Transfer Cache From");
     dlg->SetCleanup(kDeepCleanup);
 
     dlg->AddFrame(new TGLabel(dlg, Form("Destination: %s", destHist.c_str())),
                   new TGLayoutHints(kLHintsLeft, 8, 8, 8, 2));
-    dlg->AddFrame(new TGLabel(dlg, "Source histogram to copy from:"),
+    dlg->AddFrame(new TGLabel(dlg, "Source  (live, legacy, or archived):"),
                   new TGLayoutHints(kLHintsLeft, 8, 8, 0, 4));
 
     TGComboBox* srcCombo = new TGComboBox(dlg, 500);
-    srcCombo->Resize(390, 22);
+    srcCombo->Resize(430, 22);
     dlg->AddFrame(srcCombo, new TGLayoutHints(kLHintsExpandX, 8, 8, 0, 4));
-    for (int i = 0; i < (int)available.size(); i++)
-        srcCombo->AddEntry(available[i].c_str(), i + 1);
+    for (int i = 0; i < (int)sources.size(); i++)
+        srcCombo->AddEntry(sources[i].label.c_str(), i + 1);
     srcCombo->Select(1, kFALSE);
 
-    // Overwrite vs merge option
     TGCheckButton* mergeChk = new TGCheckButton(dlg, "Merge  (keep existing entries in destination)");
     dlg->AddFrame(mergeChk, new TGLayoutHints(kLHintsLeft, 8, 8, 4, 4));
     mergeChk->SetState(kButtonDown);
@@ -3496,7 +3531,9 @@ void GammaFitGUI::OnTransferCache()
     TGTextButton* canBtn = new TGTextButton(btnRow, "  Cancel  ");
     btnRow->AddFrame(okBtn,  new TGLayoutHints(kLHintsLeft, 0, 8, 0, 0));
     btnRow->AddFrame(canBtn, new TGLayoutHints(kLHintsLeft));
-    okBtn ->Connect("Clicked()", "TGFrame", dlg, "UnmapWindow()");
+    // OK sets a user bit on the dialog so we can detect it after WaitForUnmap
+    okBtn->Connect("Clicked()", "TObject", dlg, "SetBit(UInt_t=16384)");
+    okBtn->Connect("Clicked()", "TGFrame", dlg, "UnmapWindow()");
     canBtn->Connect("Clicked()", "TGFrame", dlg, "UnmapWindow()");
 
     dlg->MapSubwindows();
@@ -3504,29 +3541,22 @@ void GammaFitGUI::OnTransferCache()
     dlg->CenterOnParent();
     dlg->MapWindow();
 
-    // Capture selections before waiting
-    bool cancelled = false;
-    // Tag the cancel button so we can detect it
-    canBtn->SetUserData((void*)1);
-
     gClient->WaitForUnmap(dlg);
 
     Int_t srcSelId = srcCombo->GetSelected();
-    bool  merge = mergeChk->IsOn();
-    // Check which button was clicked (ok leaves UserData null, cancel sets it)
-    cancelled = (canBtn->GetUserData() != nullptr);
+    bool  merge    = mergeChk->IsOn();
+    bool  confirmed = dlg->TestBit(BIT(14));  // BIT(14) = 16384, set only when OK clicked
+    dlg->DeleteWindow();
 
-    // Re-read which button dismissed by checking ok button state — simplest: just check selId
-    delete dlg;
+    if (!confirmed || srcSelId < 1 || srcSelId > (int)sources.size()) return;
 
-    if (cancelled || srcSelId < 1 || srcSelId > (int)available.size()) return;
+    const std::string srcPath = sources[srcSelId - 1].path;
+    const std::string srcLabel = sources[srcSelId - 1].label;
 
-    std::string srcHist = available[srcSelId - 1];
-
-    // Load source cache
+    // Load source cache from whatever path was selected
     FitDatabase srcDb;
-    if (!srcDb.Load(CacheFileFor(srcHist))) {
-        AppendLog("Could not load cache for " + srcHist);
+    if (!srcDb.Load(srcPath)) {
+        AppendLog("[Transfer] Could not load cache: " + srcPath);
         return;
     }
 
@@ -3560,8 +3590,8 @@ void GammaFitGUI::OnTransferCache()
 
     EnsureCacheDir();
     dstDb.Save(CacheFileFor(destHist));
-    AppendLog(Form("Transfer from '%s' -> '%s': copied %d entries, skipped %d (merge=%s)",
-                   srcHist.c_str(), destHist.c_str(), nCopied, nSkipped,
+    AppendLog(Form("[Transfer] '%s' -> '%s': copied %d, skipped %d (merge=%s)",
+                   srcLabel.c_str(), destHist.c_str(), nCopied, nSkipped,
                    merge ? "on" : "off"));
 
     // If the destination is currently displayed, re-apply bg settings then refresh
@@ -4202,9 +4232,9 @@ void GammaFitGUI::OnRestoreArchivedCache()
     TGTextButton* canBtn = new TGTextButton(btnRow, "  Cancel  ");
     btnRow->AddFrame(okBtn,  new TGLayoutHints(kLHintsLeft, 0, 8, 0, 0));
     btnRow->AddFrame(canBtn, new TGLayoutHints(kLHintsLeft));
-    okBtn ->Connect("Clicked()", "TGFrame", dlg, "UnmapWindow()");
+    okBtn->Connect("Clicked()", "TObject", dlg, "SetBit(UInt_t=16384)");
+    okBtn->Connect("Clicked()", "TGFrame", dlg, "UnmapWindow()");
     canBtn->Connect("Clicked()", "TGFrame", dlg, "UnmapWindow()");
-    canBtn->SetUserData((void*)1);
 
     dlg->MapSubwindows();
     dlg->Resize(dlg->GetDefaultSize());
@@ -4213,11 +4243,11 @@ void GammaFitGUI::OnRestoreArchivedCache()
 
     gClient->WaitForUnmap(dlg);
 
-    Int_t selId = archCombo->GetSelected();
-    bool  cancelled = (canBtn->GetUserData() != nullptr);
+    Int_t selId    = archCombo->GetSelected();
+    bool confirmed = dlg->TestBit(BIT(14));
     dlg->DeleteWindow();
 
-    if (cancelled || selId < 1 || (size_t)selId > archives.size()) return;
+    if (!confirmed || selId < 1 || (size_t)selId > archives.size()) return;
 
     std::string srcFile  = ArchiveDirFor() + "/" + archives[selId - 1];
     std::string destFile = CacheFileFor(currentHist_);

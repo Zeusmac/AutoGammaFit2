@@ -73,7 +73,7 @@ all Gamma Spectrum histograms in the loaded ROOT file.
 ### 3.2 Background Subtraction
 
 The Compton continuum is estimated and subtracted before peak finding using
-TSpectrum's iterative averaging (SNIP) algorithm [Morhac et al. 1997]. The subtracted
+TSpectrum's iterative averaging (SNIP) algorithm [[Morhac et al. 1997](#ref-8)]. The subtracted
 histogram is used only for peak finding and seeding — the actual Gaussian fit is
 performed on the original histogram (background included as B₀ + B₁·x in the model).
 
@@ -85,7 +85,7 @@ performed on the original histogram (background included as B₀ + B₁·x in th
 ### 3.3 Peak Finding
 
 TSpectrum::Search scans the background-subtracted spectrum for local maxima
-[Morhac et al. 1997].
+[[Morhac et al. 1997](#ref-8)].
 
 - **Sigma (bins)**: the expected peak width in bins. Must roughly match the actual
   detector FWHM expressed in bins. Too low → misses broad peaks; too high → merges
@@ -127,8 +127,8 @@ typically yield SN > 10–100. Statistical noise bumps yield SN ≈ 1–2.
   for moderately noisy spectra.
 - `5` — conservative; only clearly visible peaks are fitted.
 
-*Technique inspired by the `GetSumFF` pre-screen in gnuScope [Pavan & Tabor, FSU].
-Signal significance criterion: see Bevington & Robinson (2003), Ch. 4.*
+*Technique inspired by the `GetSumFF` pre-screen in gnuScope [[Pavan & Tabor, FSU](#ref-14)].
+Signal significance criterion: see [Bevington & Robinson (2003)](#ref-7), Ch. 4.*
 
 ### 3.5 Efficiency Correction
 
@@ -144,8 +144,8 @@ Enter the four parameters `a, b, c, d` determined from a source calibration
 measurement (Source tab → Efficiency vs Energy plot), then click **Apply**. The
 corrected area will appear in peak statistics after the next manual fit.
 
-*Reference: Knoll (2000), Eq. 12.8; log-polynomial form also used in gnuScope
-efficiency module [Pavan & Tabor, FSU]*
+*Reference: [Knoll (2000)](#ref-6), Eq. 12.8; log-polynomial form also used in gnuScope
+efficiency module [[Pavan & Tabor, FSU](#ref-14)]*
 
 ### 3.6 Rebin Histogram
 
@@ -162,7 +162,7 @@ so uncertainties add in quadrature:
 The rebin factor is stored per-histogram in the cache metadata file so it persists
 across sessions.
 
-*Reference: Poisson error propagation — see Bevington & Robinson (2003), Ch. 3*
+*Reference: Poisson error propagation — see [Bevington & Robinson (2003)](#ref-7), Ch. 3*
 
 ### 3.7 Custom Projections / Background Histogram Subtraction
 
@@ -246,7 +246,7 @@ the shoulder of a much larger transition).
 2. Enter `Right Lo/Hi` — a clean off-peak region to the right
 3. Click **Apply Anchors → seed bg0, bg1**
 
-*Reference: Debertin & Helmer (1988), Sec. 4.3 — background interpolation methods*
+*Reference: [Debertin & Helmer (1988)](#ref-5), Sec. 4.3 — background interpolation methods*
 
 #### Flat background
 
@@ -273,7 +273,7 @@ Common situations:
 The B₂ parameter is seeded at zero and its limits are set conservatively to
 prevent the quadratic term from dominating and absorbing peak area.
 
-*Reference: Debertin & Helmer (1988), Ch. 3; standard practice in HPGe analysis*
+*Reference: [Debertin & Helmer (1988)](#ref-5), Ch. 3; standard practice in HPGe analysis*
 
 ### 4.3 Compton Step
 
@@ -317,9 +317,9 @@ seeded at 5% of the peak amplitude and constrained to [0, Aᵢ].
 - Background-subtracted spectra where the TSpectrum removal has already absorbed
   most of the shelf
 
-*Reference: Helmer & McCullagh, Nucl. Instrum. Methods 168 (1979) 593–599 —
+*Reference: [Helmer & McCullagh (1979)](#ref-3) —
 the original derivation and justification of the erfc step model for Ge detectors.
-Also: Debertin & Helmer (1988), Sec. 4.4*
+Also: [Debertin & Helmer (1988)](#ref-5), Sec. 4.4*
 
 ### 4.4 Tied Widths
 
@@ -362,8 +362,8 @@ more constrained and physically meaningful. The energies and amplitudes remain f
 **Requires:** a valid FWHM model loaded in the FWHM tab. If the model parameters
 are all zero, tied widths will produce zero-sigma peaks.
 
-*Reference: gnuScope tied-width fitting mode; Debertin & Helmer (1988), Sec. 4.2;
-Radford, Nucl. Instrum. Methods A 361 (1995) 297 — tied-width multiplet fitting*
+*Reference: gnuScope tied-width fitting mode; [Debertin & Helmer (1988)](#ref-5), Sec. 4.2;
+[Radford (1995)](#ref-4) — tied-width multiplet fitting*
 
 ### 4.5 Fit Options
 
@@ -392,7 +392,7 @@ Bounds are applied via MIGRAD's parameter limits. Note that parameters at their
 bounds will have zero or underestimated uncertainties — the **WARNING: hit bound**
 message in the log indicates this.
 
-*Reference: James & Roos (1975), MINUIT documentation — behaviour of parameters
+*Reference: [James & Roos (1975)](#ref-1), MINUIT documentation — behaviour of parameters
 at limits*
 
 ### 4.7 Peak Statistics Panel
@@ -447,7 +447,7 @@ physically consistent widths when Tie Widths is enabled. A well-calibrated model
 directly improves fit quality and convergence.
 
 **Physical origin of the resolution model:** the energy resolution of a semiconductor
-detector has three contributions [Knoll (2000), Ch. 11]:
+detector has three contributions [[Knoll (2000)](#ref-6), Ch. 11]:
 
 ```
 FWHM(E)² = a + b·E + c·E²
@@ -467,7 +467,7 @@ FWHM(E)² = a + b·E + c·E²
 4. Inspect residuals; exclude outliers with Remove Mode
 5. Click **Accept FWHM** — stores the model; it is now used by all fitting operations
 
-*Reference: Knoll (2000), Ch. 11; Debertin & Helmer (1988), Sec. 2.4*
+*Reference: [Knoll (2000)](#ref-6), Ch. 11; [Debertin & Helmer (1988)](#ref-5), Sec. 2.4*
 
 ---
 
@@ -490,8 +490,8 @@ livetime  3600.0       # seconds
 1332.492  0.9998
 ```
 Branching ratios (intensities) are per-decay values in the range (0, 1].
-Reference values can be obtained from NuDat [NNDC] or the IAEA Nuclear Data
-Services (https://www-nds.iaea.org/).
+Reference values can be obtained from [NuDat 3.0](https://www.nndc.bnl.gov/nudat3/)
+or the IAEA Nuclear Data Services.
 
 ### 6.2 Peak Assignment
 
@@ -529,7 +529,7 @@ monotonically decreasing (for Ge, above ~100 keV). Fit a log-polynomial to the
 data (see Section 10.7) and enter the coefficients in the Efficiency Correction
 group of the AutoFit tab.
 
-*Reference: Knoll (2000), Sec. 12-VI; Debertin & Helmer (1988), Ch. 6*
+*Reference: [Knoll (2000)](#ref-6), Sec. 12-VI; [Debertin & Helmer (1988)](#ref-5), Ch. 6*
 
 ### 6.5 FWHM vs Energy
 
@@ -561,8 +561,8 @@ small but non-negligible for 12-bit ADCs.
 **Note:** for a purely linear calibration, set `c = 0`. The result is equivalent
 to `TH1::GetXaxis()->SetLimits(E_min, E_max)`.
 
-*Reference: polynomial energy calibration — Knoll (2000), Sec. 11-VII;
-Debertin & Helmer (1988), Sec. 2.2*
+*Reference: [Knoll (2000)](#ref-6), Sec. 11-VII;
+[Debertin & Helmer (1988)](#ref-5), Sec. 2.2*
 
 ---
 
@@ -623,7 +623,7 @@ Beta-n Granddaughter, Beta-2n Granddaughter, Background, X-ray, Custom
 
 Classifications are stored per peak label and used in the Decay tab and CSV exports.
 
-*Reference: NNDC NuDat database; AME2020 — Wang et al., Chinese Physics C 45 (2021)*
+*Reference: [NNDC NuDat database](#ref-10); [AME2020 — Wang et al. (2021)](#ref-11)*
 
 ---
 
@@ -645,8 +645,8 @@ Half-lives are fitted with uncertainties and stored per peak in a separate
 decay cache file. The peak intensity at each time slice is extracted by integrating
 the fitted Gaussian within ±N·σ of the centroid.
 
-*Reference: Bateman equations — Bateman (1910); ingrowth formalism —
-Debertin & Helmer (1988), Appendix 1*
+*Reference: Bateman equations — [Bateman (1910)](#ref-12); ingrowth formalism —
+[Debertin & Helmer (1988)](#ref-5), Appendix 1*
 
 ---
 
@@ -690,7 +690,7 @@ to [0, Aᵢ].
 
 Total parameters: **4N + NBG** where NBG = 2 (linear) or 3 (quadratic).
 
-*Reference: Helmer & McCullagh (1979); also Debertin & Helmer (1988), Sec. 4.4*
+*Reference: [Helmer & McCullagh (1979)](#ref-3); also [Debertin & Helmer (1988)](#ref-5), Sec. 4.4*
 
 ### 10.4 Tied-Width Constraint
 
@@ -701,7 +701,7 @@ When enabled, each sigma is fixed to the resolution model prediction before fitt
 This removes N free parameters from the fit (one per peak), improving convergence
 for close doublets and ensuring physical consistency.
 
-*Reference: Radford (1995); gnuScope implementation*
+*Reference: [Radford (1995)](#ref-4); gnuScope implementation*
 
 ### 10.5 Peak Area Calculation
 
@@ -729,7 +729,7 @@ SNR = N_peak / √(N_BG)
 where N_BG = |BG(Eᵢ)| · 5σᵢ / Δx is the estimated background count under
 ±2.5σ of the peak. This is the standard figure of merit for peak detectability.
 
-*Reference: Bevington & Robinson (2003), Ch. 4; Debertin & Helmer (1988), Sec. 4.5*
+*Reference: [Bevington & Robinson (2003)](#ref-7), Ch. 4; [Debertin & Helmer (1988)](#ref-5), Sec. 4.5*
 
 ### 10.7 Detector Resolution Model
 
@@ -747,7 +747,7 @@ Physical interpretation of each term:
 
 For a pristine HPGe detector: a ≈ 0.5, b ≈ 1×10⁻³, c ≈ 0.
 
-*Reference: Knoll (2000), Sec. 11-III; Debertin & Helmer (1988), Sec. 2.4*
+*Reference: [Knoll (2000)](#ref-6), Sec. 11-III; [Debertin & Helmer (1988)](#ref-5), Sec. 2.4*
 
 ### 10.8 Efficiency Model
 
@@ -773,8 +773,8 @@ N_corrected = N_peak / ε(E)
 This gives the number of gamma quanta emitted into the solid angle of the
 detector, after correcting for detection probability.
 
-*Reference: Knoll (2000), Eq. 12.8; Debertin & Helmer (1988), Sec. 6.2;
-log-polynomial form also used in gnuScope [Pavan & Tabor, FSU]*
+*Reference: [Knoll (2000)](#ref-6), Eq. 12.8; [Debertin & Helmer (1988)](#ref-5), Sec. 6.2;
+log-polynomial form also used in gnuScope [[Pavan & Tabor, FSU](#ref-14)]*
 
 ### 10.9 NNDC Uncertainty Notation
 
@@ -789,8 +789,8 @@ Examples:
 - `661.6(5)`    → 661.6 ± 0.5 keV
 - `1460(2)`     → 1460 ± 2 keV
 
-*Reference: Browne & Tuli, Nucl. Data Sheets — NNDC notation convention;
-https://www.nndc.bnl.gov/nudat3/*
+*Reference: [Browne & Tuli — NNDC notation convention](#ref-10);
+[NuDat 3.0](https://www.nndc.bnl.gov/nudat3/)*
 
 ### 10.10 Chi-squared and Goodness of Fit
 
@@ -810,7 +810,7 @@ chi²/ndf = χ² / ndf
 The p-value (probability that chi² ≥ observed, given correct model) is also
 reported; p < 0.01 typically indicates a poor fit.
 
-*Reference: Bevington & Robinson (2003), Ch. 6; James & Roos (1975)*
+*Reference: [Bevington & Robinson (2003)](#ref-7), Ch. 6; [James & Roos (1975)](#ref-1)*
 
 ---
 
@@ -821,16 +821,16 @@ reported; p < 0.01 typically indicates a poor fit.
 1. **Background subtraction**: TSpectrum::Background uses the SNIP (Statistics-
    sensitive Non-linear Iterative Peak-clipping) algorithm. The background estimate
    is subtracted from a working copy of the histogram.
-   *Reference: Morhac et al. (1997)*
+   *Reference: [Morhac et al. (1997)](#ref-8)*
 
 2. **Peak search**: TSpectrum::Search scans the background-subtracted histogram
    for local maxima above the threshold.
-   *Reference: Morhac et al. (1997)*
+   *Reference: [Morhac et al. (1997)](#ref-8)*
 
 3. **S/N pre-screen** (if enabled): each group's signal-to-noise ratio is estimated
    from the ratio of peak-window signal to sideband noise on the BG-subtracted
    spectrum. Groups below the threshold are skipped.
-   *Technique: gnuScope GetSumFF; significance criterion: Bevington & Robinson (2003)*
+   *Technique: gnuScope GetSumFF [[Pavan & Tabor, FSU](#ref-14)]; significance criterion: [Bevington & Robinson (2003)](#ref-7)*
 
 4. **Peak grouping**: PeakGrouper merges peaks whose fit windows overlap (separation
    < 3σ of the lower-energy peak) into a single fit group.
@@ -842,7 +842,7 @@ reported; p < 0.01 typically indicates a poor fit.
    score = chi²/ndf + kPenalty × (N_peaks − 1)
    ```
    Default kPenalty = 0.05; higher values favour simpler models.
-   *Reference: Akaike (1974)*
+   *Reference: [Akaike (1974)](#ref-2)*
 
 6. **Double-Gaussian override**: the 511 keV annihilation peak is automatically
    modelled with a narrow + broad Gaussian (Doppler broadening). The model with
@@ -867,7 +867,7 @@ Optional: **MINOS** (option E) computes asymmetric uncertainties by scanning the
 log-likelihood profile for each parameter independently. More accurate near bounds
 but significantly slower.
 
-*Reference: James & Roos (1975); MINUIT2 manual, CERN Program Library D506*
+*Reference: [James & Roos (1975)](#ref-1); MINUIT2 manual, CERN Program Library D506*
 
 ### 11.3 Chi² vs Log-likelihood
 
@@ -879,7 +879,7 @@ the Poisson distribution is not symmetric.
 Valid for any count level including zero. Preferred for weak peaks and low-statistics
 spectra. The chi²/ndf interpretation of the fit quality is less direct.
 
-*Reference: Barlow & Beeston (1993); Bevington & Robinson (2003), Ch. 8*
+*Reference: [Barlow & Beeston (1993)](#ref-9); [Bevington & Robinson (2003)](#ref-7), Ch. 8*
 
 ### 11.4 Background Anchor Algorithm
 
@@ -895,7 +895,7 @@ Given two anchor regions [lo₁, hi₁] and [lo₂, hi₂]:
 The method samples the background on both sides of the peak, making it more robust
 than a single off-peak region estimate when the continuum has a significant slope.
 
-*Reference: Debertin & Helmer (1988), Sec. 4.3; Knoll (2000), Sec. 12-IV*
+*Reference: [Debertin & Helmer (1988)](#ref-5), Sec. 4.3; [Knoll (2000)](#ref-6), Sec. 12-IV*
 
 ### 11.5 AIC Model Selection
 
@@ -915,15 +915,15 @@ score = chi²/ndf + kPenalty × (N_peaks − 1)
 with default kPenalty = 0.05. This means adding a peak must reduce chi²/ndf by
 at least 0.05 to be favoured.
 
-*Reference: Akaike (1974); Burnham & Anderson (2002), Ch. 2*
+*Reference: [Akaike (1974)](#ref-2); [Burnham & Anderson (2002)](#ref-2), Ch. 2*
 
 ---
 
 ## 12. Cache System
 
-Fit results are stored as plain-text cache files in `fit_caches/`:
+Fit results are stored as plain-text cache files in `fit_caches/<rootfile>/`:
 ```
-fit_caches/<histogram_name>.cache
+fit_caches/<rootfile>/fit_cache_<histogram_name>.dat
 ```
 
 Each cache file contains one entry per fit region. Each entry records:
@@ -938,6 +938,9 @@ Special entries:
 - `__EXCLUDED_FWHM__`: list of energies excluded from the FWHM fit
 - `rebin <name> <factor>`: stored rebin factors per histogram
 
+Archived caches are stored in `fit_caches/<rootfile>/archive/` with a timestamp
+suffix and can be restored via the **Restore Archived Cache** button.
+
 Cache files are plain text — they can be inspected, edited, or merged with a text
 editor if needed.
 
@@ -945,67 +948,82 @@ editor if needed.
 
 ## 13. References
 
+<a id="ref-1"></a>
 1. **MIGRAD minimisation and MINOS errors:**
    F. James & M. Roos, "MINUIT — A System for Function Minimisation and Analysis of
    the Parameter Errors and Correlations," *Comput. Phys. Commun.* **10** (1975) 343–367.
    MINUIT2 manual: CERN Program Library D506.
 
+<a id="ref-2"></a>
 2. **AIC model selection:**
    H. Akaike, "A new look at the statistical model identification,"
    *IEEE Trans. Autom. Control* **19** (1974) 716–723.
    Practical guide: K.P. Burnham & D.R. Anderson, *Model Selection and Multimodel
    Inference*, 2nd ed., Springer, 2002.
 
+<a id="ref-3"></a>
 3. **Compton step (erfc shelf model):**
    R.G. Helmer & C.W. McCullagh, "Analytical functions for fitting peaks from Ge(Li)
    detectors," *Nucl. Instrum. Methods* **168** (1979) 593–599.
 
+<a id="ref-4"></a>
 4. **Tied-width multiplet fitting:**
    D.C. Radford, "ESCL8R and LEVIT8R: Software for interactive graphical analysis of
    HPGe coincidence data sets," *Nucl. Instrum. Methods* A **361** (1995) 297–305.
 
+<a id="ref-5"></a>
 5. **HPGe spectroscopy — BG methods, FWHM models, efficiency curves, peak areas:**
    K. Debertin & R.G. Helmer, *Gamma- and X-ray Spectrometry with Semiconductor
    Detectors*, North-Holland, Amsterdam, 1988.
 
+<a id="ref-6"></a>
 6. **Radiation detection — efficiency, resolution, statistics:**
    G.F. Knoll, *Radiation Detection and Measurement*, 4th ed., Wiley, 2010.
 
+<a id="ref-7"></a>
 7. **Statistical methods for experimental physics:**
    P.R. Bevington & D.K. Robinson, *Data Reduction and Error Analysis for the
    Physical Sciences*, 3rd ed., McGraw-Hill, 2003.
 
+<a id="ref-8"></a>
 8. **TSpectrum background estimation and peak search:**
    M. Morhac et al., "Background elimination methods for multidimensional coincidence
    γ-ray spectra," *Nucl. Instrum. Methods* A **401** (1997) 113–132.
    ROOT class documentation: `TSpectrum`.
 
+<a id="ref-9"></a>
 9. **Poisson log-likelihood for binned data:**
    R. Barlow & C. Beeston, "Fitting using finite Monte Carlo samples,"
    *Comput. Phys. Commun.* **77** (1993) 219–228.
    Also: W.T. Eadie et al., *Statistical Methods in Experimental Physics*,
    North-Holland, 1971.
 
+<a id="ref-10"></a>
 10. **NNDC notation and nuclear data:**
     E. Browne & J.K. Tuli, *Table of Radioactive Isotopes*, Wiley, 1986.
-    NuDat 3.0: https://www.nndc.bnl.gov/nudat3/
+    NuDat 3.0: [https://www.nndc.bnl.gov/nudat3/](https://www.nndc.bnl.gov/nudat3/)
 
+<a id="ref-11"></a>
 11. **AME2020 atomic mass evaluation:**
     M. Wang et al., "The AME2020 atomic mass evaluation,"
     *Chinese Physics C* **45** (2021) 030003.
 
+<a id="ref-12"></a>
 12. **Bateman decay equations:**
     H. Bateman, "The solution of a system of differential equations occurring in the
     theory of radio-active transformations," *Proc. Cambridge Phil. Soc.* **15** (1910) 423.
 
+<a id="ref-13"></a>
 13. **Energy calibration polynomials:**
     G.F. Knoll, *Radiation Detection and Measurement* (2010), Sec. 11-VII.
     K. Debertin & R.G. Helmer (1988), Sec. 2.2.
 
+<a id="ref-14"></a>
 14. **S/N pre-screen technique and efficiency model form:**
     J. Pavan & K. Tabor, gnuScope — interactive gamma spectroscopy analysis program,
     Florida State University Nuclear Structure Group. Internal program documentation.
 
+<a id="ref-15"></a>
 15. **Fano factor and detector resolution:**
     U. Fano, "Ionization yield of radiations. II. The fluctuations of the number of
     ions," *Physical Review* **72** (1947) 26–29.
