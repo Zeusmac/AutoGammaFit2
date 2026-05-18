@@ -90,9 +90,15 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
                                              TGNumberFormat::kNEAPositive,
                                              TGNumberFormat::kNELLimitMinMax, 1, 1024);
         decayRebinEntry_->SetWidth(55);
-        rebinRow->AddFrame(decayRebinEntry_, new TGLayoutHints(kLHintsLeft, 0, 6, 0, 0));
-        rebinRow->AddFrame(new TGLabel(rebinRow, "(1 = original)"),
-                           new TGLayoutHints(kLHintsCenterY));
+        rebinRow->AddFrame(decayRebinEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        TGTextButton* decayRebinApply = new TGTextButton(rebinRow, "Apply");
+        decayRebinApply->Connect("Clicked()", "GammaFitGUI", this, "OnPreviewDecay()");
+        decayRebinApply->SetToolTipText("Redraw projection with the selected rebin factor");
+        rebinRow->AddFrame(decayRebinApply, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        TGTextButton* decayRebinReset = new TGTextButton(rebinRow, "Reset");
+        decayRebinReset->Connect("Clicked()", "GammaFitGUI", this, "OnDecayRebinReset()");
+        decayRebinReset->SetToolTipText("Reset rebin to 1 and redraw");
+        rebinRow->AddFrame(decayRebinReset, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
 
         decayPeakList_ = new TGListBox(grp, 802);
         decayPeakList_->Resize(280, 100);
@@ -375,6 +381,7 @@ void GammaFitGUI::OnRefreshDecayPeaks()
             std::string lbl = Form("%.2f keV  (sig=%.3f)", Ep, sig);
             if (!e.label.empty()) lbl = e.label + "  " + lbl;
             if (!e.classification.empty()) lbl += "  [" + e.classification + "]";
+            if (e.needsRefit) lbl = "[R] " + lbl;
             decayPeakList_->AddEntry(lbl.c_str(), listIdx++);
         }
     }
@@ -436,10 +443,15 @@ void GammaFitGUI::OnFitDecay()
     c->Clear();
     c->cd();
     hDecay->GetXaxis()->SetTitle("Time (ms)");
-    hDecay->GetYaxis()->SetTitle("Counts");
+    if (rebin > 1) {
+        double binW = hDecay->GetBinWidth(1);
+        hDecay->GetYaxis()->SetTitle(Form("Counts / (%.4g ms)", binW));
+    } else {
+        hDecay->GetYaxis()->SetTitle("Counts");
+    }
     hDecay->SetLineColor(kBlack);
     hDecay->SetMarkerSize(0);
-    hDecay->Draw("hist E");
+    hDecay->Draw(showErrorBars_ ? "hist E" : "hist");
     c->Modified(); c->Update();
     gSystem->ProcessEvents();
 
@@ -546,7 +558,7 @@ void GammaFitGUI::OnFitDecay()
 
     TFitResultPtr fitRes = hDecay->Fit(fDecay, "SR");
 
-    hDecay->Draw("hist E");
+    hDecay->Draw(showErrorBars_ ? "hist E" : "hist");
     fDecay->Draw("same");
     c->Modified(); c->Update();
 
@@ -754,13 +766,18 @@ void GammaFitGUI::OnPreviewDecay()
     hDecay->GetXaxis()->SetRangeUser(tLo, hDecay->GetXaxis()->GetXmax());
 
     hDecay->GetXaxis()->SetTitle("Time (ms)");
-    hDecay->GetYaxis()->SetTitle("Counts");
+    if (rebin > 1) {
+        double binW = hDecay->GetBinWidth(1);
+        hDecay->GetYaxis()->SetTitle(Form("Counts / (%.4g ms)", binW));
+    } else {
+        hDecay->GetYaxis()->SetTitle("Counts");
+    }
     hDecay->SetLineColor(kBlack);
     hDecay->SetMarkerSize(0);
 
     TCanvas* c = canvas_->GetCanvas();
     c->Clear(); c->cd();
-    hDecay->Draw("hist E");
+    hDecay->Draw(showErrorBars_ ? "hist E" : "hist");
     c->Modified(); c->Update();
     gSystem->ProcessEvents();
 
@@ -935,6 +952,12 @@ void GammaFitGUI::OnMakePeakCountVsTime()
     AppendLog(Form("[Decay] Peak counts plot: %.2f keV  %d points  slice=%.2f ms  saved to %s",
                    E, N, sliceW, sliceRootPath.c_str()));
     SetStatus(Form("Peak counts vs time: %.2f keV  %d slices", E, N));
+}
+
+void GammaFitGUI::OnDecayRebinReset()
+{
+    if (decayRebinEntry_) decayRebinEntry_->SetNumber(1);
+    OnPreviewDecay();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

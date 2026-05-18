@@ -11,6 +11,18 @@
 8. [Isotopes Tab](#8-isotopes-tab)
 9. [Decay Tab](#9-decay-tab)
 10. [Fitting Models and Mathematics](#10-fitting-models-and-mathematics)
+    - [10.1 Standard N-Gaussian + Linear Background](#101-standard-n-gaussian--linear-background)
+    - [10.2 Quadratic Background](#102-quadratic-background)
+    - [10.3 Compton Step Model](#103-compton-step-model)
+    - [10.4 Tied-Width Constraint](#104-tied-width-constraint)
+    - [10.5 Peak Area Calculation](#105-peak-area-calculation)
+    - [10.6 Signal-to-Noise Ratio (post-fit)](#106-signal-to-noise-ratio-post-fit)
+    - [10.7 Detector Resolution Model](#107-detector-resolution-model)
+    - [10.8 Efficiency Model](#108-efficiency-model)
+    - [10.9 NNDC Uncertainty Notation](#109-nndc-uncertainty-notation)
+    - [10.10 Chi-squared and Goodness of Fit](#1010-chi-squared-and-goodness-of-fit)
+    - [10.11 Peak Significance](#1011-peak-significance)
+    - [**10.12 Complete Fit Statistics Reference**](#1012-complete-fit-statistics-reference)
 11. [Algorithms](#11-algorithms)
 12. [Cache System](#12-cache-system)
 13. [References](#13-references)
@@ -397,25 +409,36 @@ at limits*
 
 ### 4.7 Peak Statistics Panel
 
-After each fit, the panel displays for every Gaussian component:
+After each fit, the upper-right panel shows a block of statistics for every
+Gaussian component. If a cached fit already exists for the same peak set, the
+manual fit results appear first under `=== Manual Fit ===` and the cached fit
+appears below under `=== Cached Fit ===` for direct comparison.
 
-| Quantity | Formula | Notes |
-|----------|---------|-------|
-| Amplitude | A ± σ_A | Raw fit parameter |
-| Centroid | E ± σ_E in NNDC notation | e.g. 1332.492(4) = 1332.492 ± 0.004 keV |
-| Sigma | σ ± σ_σ | Gaussian width |
-| FWHM | 2.3548·σ ± 2.3548·σ_σ | Full width at half maximum |
-| Peak area | A·σ·√(2π) / Δx | Δx = bin width; converts counts/bin to counts |
-| Area uncertainty | area·√((σ_A/A)² + (σ_σ/σ)²) | Propagated in quadrature |
-| SNR | N_peak / √N_BG | Signal-to-noise; N_BG = BG under ±2.5σ |
-| P/T (window) | N_peak / N_window | Peak prominence in local context |
-| P/T (all) | N_peak / N_spectrum | Detector figure of merit |
-| Eff-corr area | N_peak / ε(E) | Only if efficiency model is loaded |
-| chi²/ndf | Σ(pull²) / DOF | Computed from residuals, not from ROOT r->Chi2() |
-| p-value | TMath::Prob(chi², ndf) | Probability of chi² ≥ observed under H₀ |
+A complete reference with derivations and physical interpretation of every term
+is given in [Section 10.12](#1012-complete-fit-statistics-reference). The quick
+summary table is below; read §10.12 before making claims about weak peaks.
 
-The area ratio (fit/obs) compares the total fitted Gaussian area to the observed
-counts above the background. A ratio of 0.9–1.1 indicates a good fit.
+| Quantity | Formula | Quick interpretation |
+|----------|---------|---------------------|
+| Area ratio (fit/obs) | N_fit / N_obs\_above\_BG | 0.90–1.10 = GOOD; outside = model problem |
+| Amplitude | A ± σ_A | Gaussian peak height in counts/bin |
+| Centroid | E ± σ_E (NNDC) | Full-energy peak position in keV |
+| Sigma | σ ± σ_σ | Gaussian width (not FWHM) |
+| FWHM | 2.3548·σ ± 2.3548·σ_σ | Standard detector resolution measure |
+| Peak area | A·σ·√(2π) / Δx | Total counts in peak above background |
+| Area uncertainty | area·√((σ_A/A)² + (σ_σ/σ)²) | Propagated from fit covariance |
+| SNR | N_peak / √N_BG | > 5 = clearly visible; < 3 = questionable |
+| Significance (fit) | N_peak / σ(N_peak) | Fit-based significance; requires valid covariance |
+| Significance (stat) | N_peak / √(N_peak + 2·N_BG) | Counting-based significance (p-value shown) |
+| p-value (stat) | ½·erfc(S/√2) | Probability peak is background fluctuation |
+| P/T (window) | N_peak / N_window | Fraction of window counts in peak |
+| P/T (all) | N_peak / N_spectrum | Fraction of all spectrum counts in peak |
+| Eff-corr area | N_peak / ε(E) | Emitted gammas; needs efficiency model loaded |
+| bg0 | B₀ ± σ_B₀ | Background intercept (counts/bin at x = 0) |
+| bg1 | B₁ ± σ_B₁ | Background slope (counts/bin per keV) |
+| bg2 | B₂ ± σ_B₂ | Background curvature (quadratic term) |
+| chi²/ndf | Σ(pull²) / (bins − params) | ≈ 1 = good fit; >> 1 = bad model |
+| p-value (chi²) | TMath::Prob(χ², ndf) | > 0.05 = fit consistent with data |
 
 ### 4.8 Residuals
 
@@ -812,6 +835,573 @@ reported; p < 0.01 typically indicates a poor fit.
 
 *Reference: [Bevington & Robinson (2003)](#ref-7), Ch. 6; [James & Roos (1975)](#ref-1)*
 
+### 10.11 Peak Significance
+
+Two independent significance metrics are reported for each fitted peak.
+
+#### Significance (fit)
+
+```
+S_fit = N_peak / σ(N_peak)
+```
+
+This is the number of standard deviations the fitted peak area is above zero,
+using the uncertainty propagated from MINUIT's covariance matrix:
+
+```
+σ(N_peak) = N_peak · √((σ_A/A)² + (σ_σ/σ)²)
+```
+
+**Interpretation:** S_fit answers the question *"how well-constrained is this
+Gaussian by the fit?"* A high S_fit means the amplitude and width are well
+determined; a low S_fit means one or both parameters are poorly constrained.
+
+**Caveat:** if MINUIT converged on a boundary or did not produce a valid
+covariance matrix, σ(N_peak) = 0 and S_fit is not reported. Always check
+the **WARNING: hit bound** messages in the log.
+
+#### Significance (stat)
+
+```
+S_stat = N_net / √(N_net + 2·N_BG)
+```
+
+where N_net is the fitted peak area and N_BG is the estimated background count
+under ±2.5σ of the peak.
+
+**Derivation:** the gross counts in the peak region are N_gross = N_net + N_BG.
+Both terms follow Poisson statistics, so the variance of N_net is:
+
+```
+Var(N_net) = Var(N_gross) + Var(N_BG) = N_gross + N_BG = N_net + 2·N_BG
+```
+
+The factor of 2 on N_BG arises because the background must be *estimated* from
+the fit rather than measured independently; estimating it carries its own
+Poisson uncertainty equal to N_BG.
+
+**Interpretation:** S_stat answers the question *"given the raw counts, how
+likely is this peak to be a background fluctuation?"* It does not depend on
+MINUIT convergence and remains valid even when fit errors are unreliable.
+
+The reported one-sided p-value is:
+
+```
+p = ½ · erfc(S_stat / √2)
+```
+
+This is the probability that a pure-background measurement would produce at
+least this many net counts by chance.
+
+#### Threshold conventions
+
+| S (σ) | p-value | Interpretation in nuclear counting |
+|------:|--------:|-------------------------------------|
+| < 2   | > 2.3 % | Not significant — likely background fluctuation |
+| 2–3   | 2.3–0.13 % | Tentative — worth investigating |
+| ≥ 3   | < 0.13 % | Evidence of a peak — above the Currie detection limit |
+| ≥ 5   | < 3×10⁻⁷ | Significant — unambiguous peak |
+
+In routine HPGe spectroscopy, 3σ is the standard minimum detection threshold
+(the Currie critical level L_c). The 5σ convention is borrowed from particle
+physics and is appropriate when claim of a new line must be very robust.
+
+*Reference: [Currie (1968)](#ref-16) defines L_c (critical level) and L_D (detection
+limit) from Poisson statistics. The N/√(N+2B) formula follows from standard
+error propagation — [Bevington & Robinson (2003)](#ref-7), Ch. 3–4;
+[Knoll (2000)](#ref-6), Sec. 3-V. One-sided p-value via the complementary
+error function: [Bevington & Robinson (2003)](#ref-7), App. A.*
+
+### 10.12 Complete Fit Statistics Reference
+
+This section defines and contextualises every quantity shown in the Peak
+Statistics panel. The goal is that you can look at any line in that panel
+and know exactly what it means, how it was computed, and whether the value
+is reasonable for a real gamma-ray peak.
+
+---
+
+#### Area Ratio (fit/obs)
+
+```
+ratio = N_fit_total / N_obs_above_BG
+```
+
+Computed **before** the per-peak breakdown. `N_fit_total` is the sum of all
+Gaussian integrals in the fit window. `N_obs_above_BG` is the sum of
+`(bin_content − background_model)` for every bin in the window.
+
+**What it means in a gamma spectrum:** if the fit model correctly describes
+all peaks and the background model is accurate, these two quantities should
+agree to within a few percent. The ratio is a global sanity check independent
+of MINUIT convergence.
+
+| Ratio | Grade | What to look for |
+|-------|-------|-----------------|
+| 0.90–1.10 | **GOOD** | Model accounts for essentially all the signal |
+| 0.70–1.30 | **fair** | Mild mismatch — check background model |
+| outside | **POOR** | Fit is missing a peak, background is wrong, or amplitude hit a bound |
+
+A ratio > 1.1 usually means the background is underestimated (too low), so
+the "observed above BG" is artificially small while the Gaussians picked up
+extra area. A ratio < 0.9 usually means a peak was missed or the background
+is overestimated.
+
+*Reference: [Debertin & Helmer (1988)](#ref-5), Sec. 4.2*
+
+---
+
+#### Amplitude  (A ± σ_A)
+
+The height of the fitted Gaussian in **counts per bin** at the centroid.
+It is a raw MINUIT fit parameter, not directly interpretable as a physical
+quantity — the same physical peak will have a different amplitude if you
+change the bin width or rebin the histogram.
+
+**In a gamma spectrum:** amplitude scales with count rate, bin width, and
+detector efficiency. A large amplitude simply means many counts landed near
+the peak centroid. To get a physically meaningful quantity, use the
+**peak area** instead (which accounts for the bin width and peak width).
+
+The quoted uncertainty σ_A comes directly from the diagonal element of
+MINUIT's covariance matrix. It is reliable only when the fit has converged
+and no parameter is at a bound. A zero or very small σ_A always means
+a parameter hit a bound — check the log.
+
+---
+
+#### Centroid  (E ± σ_E keV,  NNDC notation)
+
+The mean of the fitted Gaussian, in keV. This is the best estimate of the
+**full-energy peak position** — the energy at which the detector most
+frequently registers gamma photons of that transition.
+
+**In a gamma spectrum:** the centroid should match the tabulated gamma-ray
+energy to within your calibration uncertainty. If it doesn't, either the
+calibration is wrong, the peak is a different transition, or a nearby line
+is pulling the centroid (doublet).
+
+The uncertainty σ_E reflects both the statistical precision of the
+measurement (more counts → smaller σ_E) and the stiffness of the χ²
+surface in the energy direction (correlated with σ_A). For a well-resolved
+peak with ~1000 counts, σ_E ≈ FWHM/(2.35·√N) ≈ a fraction of a keV.
+
+The energy is displayed in NNDC parenthesis notation: `1332.492(4)` means
+`1332.492 ± 0.004 keV`. See [Section 10.9](#109-nndc-uncertainty-notation).
+
+*Reference: uncertainty on centroid — [Bevington & Robinson (2003)](#ref-7), Sec. 6.3;
+NNDC notation — [Browne & Tuli](#ref-10)*
+
+---
+
+#### Sigma  (σ ± σ_σ keV)
+
+The standard deviation of the fitted Gaussian, in keV. Along with the
+centroid and amplitude, sigma is one of the three core fit parameters.
+
+**In a gamma spectrum:** sigma is determined by the detector energy resolution.
+For an HPGe detector, a typical value at 1.33 MeV is σ ≈ 0.5–0.6 keV
+(FWHM ≈ 1.2–1.4 keV). Sigma increases with energy roughly as √E (statistical
+term) plus a constant noise floor. A sigma much larger than the model
+prediction indicates a doublet or a detector problem. A sigma much smaller
+indicates the peak is undersampled (too few counts) or has hit a lower bound.
+
+When **Tie Widths** is enabled, sigma is fixed to the FWHM model prediction
+and σ_σ = 0.
+
+---
+
+#### FWHM  (keV ± keV)
+
+```
+FWHM = 2√(2·ln 2) · σ = 2.3548 · σ
+σ(FWHM) = 2.3548 · σ_σ
+```
+
+The full width at half maximum of the fitted peak. FWHM is the conventional
+measure of detector energy resolution and is directly comparable across
+detectors and published specifications.
+
+**In a gamma spectrum:** FWHM is quoted at specific calibration energies.
+For HPGe detectors, a commonly cited benchmark is the FWHM at the 1332 keV
+Co-60 line. Typical values:
+- Excellent HPGe: ≤ 1.8 keV FWHM at 1332 keV
+- Good HPGe: 1.8–2.5 keV
+- NaI(Tl): ~60 keV (about 4.5% at 1332 keV)
+
+FWHM in keV is equivalent to energy resolution R:
+```
+R (%) = 100 × FWHM(E) / E
+```
+
+For the 1332 keV Co-60 line at 1.8 keV FWHM: R = 0.135%.
+
+The uncertainty on FWHM propagates directly from σ_σ. It is NOT the
+uncertainty on the peak position — that is σ_E (the centroid uncertainty).
+
+*Reference: resolution definition — [Knoll (2000)](#ref-6), Sec. 11-III;
+[Debertin & Helmer (1988)](#ref-5), Sec. 2.4; IEEE Std 325 [[Leo (1994)](#ref-17)]*
+
+---
+
+#### Peak Area  (N_peak ± σ_N counts)
+
+```
+N_peak = A · σ · √(2π) / Δx
+σ(N_peak) = N_peak · √( (σ_A/A)² + (σ_σ/σ)² )
+```
+
+The total number of counts in the Gaussian peak, above the background.
+Δx is the bin width in keV at the peak centroid. This formula converts
+from ROOT's per-bin convention (amplitude in counts/bin) to the true
+count integral over all energies.
+
+**In a gamma spectrum:** peak area is the physically fundamental quantity.
+It is proportional to:
+```
+N_peak = A_source · BR · ε(E) · Ω · T_live
+```
+where A_source is the source activity (decays/s), BR is the branching ratio
+(photons per decay), ε(E) is the full-energy peak efficiency, Ω is the
+solid-angle factor, and T_live is the live measurement time.
+
+All downstream quantities — efficiency, activity, isotope ratios — derive
+from the peak area. The amplitude alone is **not** the right quantity to use.
+
+**Warnings displayed in the panel:**
+- `WARNING: area > spectrum total` — the Gaussian integral exceeds all counts
+  in the entire spectrum. The fit is almost certainly wrong (amplitude at
+  upper bound, very broad sigma, or wrong model).
+- `WARNING: negative area` — A or σ is negative or zero. Check bounds.
+
+The area uncertainty propagates A and σ in quadrature. It does **not** include
+uncertainty from the background model; for that, use the BG anchor approach
+(§4.2) to estimate BG systematic uncertainty separately.
+
+*Reference: area formula — [Debertin & Helmer (1988)](#ref-5), Sec. 4.2;
+error propagation — [Bevington & Robinson (2003)](#ref-7), Ch. 3;
+[Knoll (2000)](#ref-6), Sec. 12-IV*
+
+---
+
+#### Signal-to-Noise Ratio  (SNR)
+
+```
+SNR = N_peak / √(N_BG)
+```
+
+where `N_BG = |BG(E)| · 5σ / Δx` is the estimated number of background
+counts under ±2.5σ of the peak. BG(E) is the fitted background polynomial
+evaluated at the peak centroid, and Δx is the bin width.
+
+**What it means:** SNR compares the signal (peak counts) to the statistical
+noise of the underlying background (Poisson fluctuations ≈ √N_BG). A peak
+with SNR = 10 means the signal is 10 standard deviations above the expected
+random fluctuation of the background in the peak region.
+
+**In a gamma spectrum:**
+- SNR >> 10: dominant, clearly visible peak
+- SNR ≈ 5–10: well-defined peak
+- SNR ≈ 3–5: marginal; visible by eye but requires careful background treatment
+- SNR < 3: indistinguishable from background noise
+
+Note: SNR uses the *fitted* background level. If the background model is wrong,
+SNR will be wrong too. Compare SNR with `Significance (stat)`, which uses
+the same N_BG estimate but from a different angle.
+
+*Reference: [Bevington & Robinson (2003)](#ref-7), Ch. 4;
+[Debertin & Helmer (1988)](#ref-5), Sec. 4.5*
+
+---
+
+#### Significance (fit)
+
+```
+S_fit = N_peak / σ(N_peak)
+```
+
+The number of standard deviations the fitted peak area is above zero,
+using the uncertainty from MINUIT's covariance matrix.
+
+**What it means:** S_fit answers *"how well-constrained is the Gaussian
+amplitude by the fitter?"* It is a measure of fit confidence, not of
+counting statistics. A high S_fit means the likelihood surface has a
+clear minimum with respect to the peak amplitude — the fitter is certain
+this Gaussian is needed. A low S_fit means the amplitude could shrink to
+zero without significantly worsening chi².
+
+**In a gamma spectrum:** S_fit can be large even for a weak physical peak
+if the fit is well-behaved (good convergence, low background). Conversely,
+it can be small for a real peak if the fitter is poorly constrained
+(e.g., doublet with correlated parameters).
+
+**Caveat:** S_fit is only trustworthy when:
+1. MIGRAD converged (status = 0 or 1)
+2. No parameters hit their bounds (`WARNING: hit bound` absent in log)
+3. EDM is small (< 0.01)
+
+If any of these conditions fail, S_fit may be artificially inflated or
+suppressed. In that case, rely on `Significance (stat)` instead.
+
+*Reference: parameter significance from covariance —
+[James & Roos (1975)](#ref-1); [Bevington & Robinson (2003)](#ref-7), Sec. 6.2*
+
+---
+
+#### Significance (stat)  and  p-value
+
+```
+S_stat = N_peak / √(N_peak + 2·N_BG)
+
+p = ½ · erfc( S_stat / √2 )
+```
+
+The Poisson counting significance, entirely independent of MINUIT convergence.
+N_BG is the same estimated background count used in SNR (background under
+±2.5σ of the peak).
+
+**Derivation:** The net peak count is `N_net = N_gross − N_BG`. Both are
+Poisson random variables, so:
+```
+Var(N_net) = Var(N_gross) + Var(N_BG) = N_gross + N_BG = N_net + 2·N_BG
+```
+
+The factor of 2 appears because the background must be *estimated* from the
+fit rather than measured in an independent blank measurement — this estimation
+carries its own Poisson uncertainty of N_BG. Under the null hypothesis
+(background only), Var(N_net) ≈ 2·N_BG.
+
+**What it means:** S_stat answers *"if only background were present, how
+unlikely is it to observe this many net counts by chance?"* The p-value is
+that probability.
+
+**In a gamma spectrum:** S_stat is your primary detection threshold.
+The standard critical level L_c in nuclear counting (after Currie, 1968)
+corresponds to roughly S_stat ≈ 3σ (p ≈ 0.0013). Below this level, a peak
+cannot be claimed with confidence.
+
+| S_stat | p-value | Interpretation |
+|-------:|--------:|----------------|
+| < 2σ   | > 0.023 | Not significant — likely background fluctuation |
+| 2–3σ   | 0.023–0.0013 | Tentative — worth further investigation |
+| ≥ 3σ   | < 0.0013 | Evidence — above the Currie critical level |
+| ≥ 5σ   | < 3×10⁻⁷ | Significant — unambiguous full-energy peak |
+
+**What `p < 1e-10` means:** the p-value is smaller than 1 in 10 billion —
+the peak is essentially certain to be real from a counting statistics
+perspective. This typically occurs for any strong gamma line (>5σ).
+
+**When S_stat and S_fit disagree:**
+- S_stat >> S_fit: the peak is clearly present in the counts but the fitter
+  is poorly constrained (e.g., doublet, parameter correlated with background).
+  Trust S_stat; consider using tied widths or BG anchors.
+- S_fit >> S_stat: the fitter found a clean minimum but the raw counts are
+  marginal. This happens for narrow peaks in a high-background region.
+  Both quantities are reporting real information; the peak is formally weak.
+
+*Reference: [Currie (1968)](#ref-16) — critical level L_c and detection
+limit L_D; [Knoll (2000)](#ref-6), Sec. 3-V;
+[Bevington & Robinson (2003)](#ref-7), Ch. 3–4*
+
+---
+
+#### Peak-to-Total Ratio  P/T (window) and P/T (all)
+
+```
+P/T (window) = N_peak / N_window
+P/T (all)    = N_peak / N_spectrum
+```
+
+`N_window` = total counts in the fit window (signal + background + all peaks).
+`N_spectrum` = total counts in the entire loaded histogram.
+
+**What P/T (window) means:** the fraction of counts in the local fit window
+that belong to this peak. A ratio of 0.80 means 80% of the counts in the
+window are under this Gaussian — the background and any other peaks account
+for the remaining 20%. Useful for checking whether the window is dominated
+by the peak or by background/neighbours.
+
+**What P/T (all) means:** the peak area as a fraction of the entire spectrum.
+This is the classical **peak-to-total ratio**, a standard figure of merit for
+detector quality. A detector with high P/T has most of its counts in
+full-energy peaks rather than Compton continuum.
+
+**Typical values for HPGe at 1332 keV:**
+- P/T (all) ≈ 0.50–0.65 for a 100% relative efficiency HPGe in close geometry
+- P/T (all) ≈ 0.20–0.35 for a small-volume HPGe
+- P/T (all) < 0.10 for NaI(Tl)
+
+In practice, P/T (all) from a single peak in a mixed-isotope spectrum is not
+a good detector figure of merit — it depends on the source composition. Use
+it for single-line sources (e.g., Co-60 at 1332 keV in a clean spectrum).
+
+*Reference: peak-to-total ratio — [Knoll (2000)](#ref-6), Sec. 12-II;
+[Debertin & Helmer (1988)](#ref-5), Sec. 3.2*
+
+---
+
+#### Efficiency-Corrected Area  (Eff-corr area)
+
+```
+N_corrected = N_peak / ε(E)
+```
+
+Only displayed when the log-polynomial efficiency model has been loaded
+(AutoFit tab → Efficiency Correction). ε(E) is evaluated from:
+```
+ln ε(E) = a − b·ln(E) + c·(ln E)² − d/E²
+```
+
+**What it means:** N_corrected is the number of gamma photons that were
+emitted (into the detector solid angle) at energy E, after correcting for
+the probability that any one photon was actually detected as a full-energy
+event. It removes the detector's energy-dependent response.
+
+**In a gamma spectrum:** combining N_corrected from multiple lines of the
+same isotope should give activity × branching ratio × solid angle, which
+is constant across lines if the efficiency model is correct. Inconsistency
+across lines indicates either a wrong efficiency model or an interfering peak.
+For absolute activity determination:
+```
+Activity (Bq) = N_corrected / (BR × T_live × Ω / 4π)
+```
+
+*Reference: [Knoll (2000)](#ref-6), Sec. 12-VI;
+[Debertin & Helmer (1988)](#ref-5), Sec. 6.2*
+
+---
+
+#### Background Parameters  (bg0, bg1, bg2)
+
+The fitted polynomial background under the peaks:
+```
+BG(x) = bg0 + bg1·x              (linear, default)
+BG(x) = bg0 + bg1·x + bg2·x²     (quadratic, when enabled)
+```
+
+**What they mean in a gamma spectrum:** the background represents the Compton
+continuum — scattered photons from higher-energy transitions that deposit
+only part of their energy in the detector. bg1 (slope) reflects the gradient
+of the Compton edge region at that energy; bg0 (intercept) reflects the
+absolute level of the continuum.
+
+**Interpreting bg0 and bg1:**
+- bg0 units: counts/bin (this is the background at x = 0 keV, which is
+  usually not physically meaningful; what matters is bg0 + bg1·E at the
+  peak energy)
+- bg1 units: (counts/bin) per keV — the slope of the continuum
+- A negative bg1 means the continuum decreases with energy (normal for
+  Compton continuum, which drops off above the Compton edge)
+- A positive bg1 means the continuum rises with energy (unusual; check
+  whether the fit window crosses a Compton edge from a higher-energy line)
+
+**When bg2 is non-zero:** the quadratic term indicates curvature in the
+continuum across the fit window. This is physical when the window sits on
+the rising or falling edge of a broad Compton feature.
+
+*Reference: background interpolation — [Debertin & Helmer (1988)](#ref-5),
+Sec. 4.3; [Knoll (2000)](#ref-6), Sec. 12-IV*
+
+---
+
+#### chi²/ndf  (Goodness of Fit)
+
+```
+χ² = Σ_b [ (y_b − f(x_b)) / σ_b ]²
+ndf = N_bins_in_window − N_free_parameters
+chi²/ndf = χ² / ndf
+```
+
+Computed from the normalised pull residuals at every bin in the fit window.
+Each term `(y_b − f(x_b)) / σ_b` is called a **pull** — it is the
+discrepancy between data and model, measured in units of the bin uncertainty.
+
+AutoGammaFit computes chi²/ndf directly from the pulls rather than using
+ROOT's `r->Chi2()`, because the ROOT value is unreliable for log-likelihood
+fits on background-subtracted histograms.
+
+**What it means:**
+- Each pull should be approximately a standard normal random variable if the
+  model is correct.
+- chi²/ndf = 1 means the average squared pull is 1 — the fit agrees with
+  data at the level of statistical noise. This is ideal.
+- chi²/ndf > 1 means the model is over-predicting scatter, or there are
+  systematic discrepancies (wrong model).
+- chi²/ndf < 1 usually means errors are overestimated, or the model has
+  too many parameters for the available data.
+
+**Typical diagnostic values:**
+
+| chi²/ndf | Interpretation | Action |
+|---------|---------------|--------|
+| 0.8–1.2 | Good fit | Accept |
+| 1.2–2.0 | Marginal | Check residual plot — may be acceptable |
+| 2–5 | Poor | Try quadratic BG, Compton step, or add a peak |
+| > 5 | Very poor | Wrong model — inspect residuals |
+| < 0.5 | Over-fit / errors inflated | Check rebin factor; too many parameters |
+
+**Note on degrees of freedom:** if the fit window has fewer bins than
+parameters (e.g., very narrow window with many peaks), ndf ≤ 0 and chi²/ndf
+falls back to chi²/N_bins. This is labelled in the display.
+
+*Reference: chi² goodness of fit — [Bevington & Robinson (2003)](#ref-7),
+Ch. 6; [James & Roos (1975)](#ref-1)*
+
+---
+
+#### p-value  (chi²)
+
+```
+p = P(χ² ≥ χ²_observed | ndf)  = TMath::Prob(chi2, ndf)
+```
+
+The probability, assuming the fit model is **correct**, of observing chi²
+this large or larger by pure statistical chance.
+
+**What it means:** p is a one-tailed tail probability of the chi² distribution
+with ndf degrees of freedom. A small p means it is unlikely that the data
+would look this bad if the model were right — i.e., the model is probably wrong.
+A large p means the data are consistent with the model.
+
+| p-value | Interpretation |
+|---------|---------------|
+| > 0.05 | Fit is consistent with data |
+| 0.01–0.05 | Marginal — worth checking residuals |
+| < 0.01 | Poor fit — model likely wrong |
+| < 0.001 | Very poor fit |
+
+**Common confusions:**
+- A large p-value does **not** prove the model is correct — only that the
+  data do not significantly contradict it.
+- The p-value on chi² (fit quality) is completely separate from the p-value
+  on `Significance (stat)` (peak detection). Both are shown; they answer
+  different questions.
+
+*Reference: [Bevington & Robinson (2003)](#ref-7), Ch. 6;
+[Barlow & Beeston (1993)](#ref-9)*
+
+---
+
+#### Quick Diagnostic Checklist
+
+When evaluating a fit in the statistics panel, check these in order:
+
+1. **Area ratio** — should be 0.90–1.10. If not, the model is missing
+   something before looking at individual peak quantities.
+2. **chi²/ndf and p-value** — should be ≈ 1 and > 0.05. If chi²/ndf >> 1,
+   the individual peak stats are unreliable.
+3. **Significance (stat)** — must be ≥ 3σ to claim a peak. The p-value
+   directly quantifies false-positive risk.
+4. **Significance (fit)** — corroborates (stat) when fit errors are valid.
+   Check the log for `WARNING: hit bound`.
+5. **FWHM** — should match the resolution model (FWHM tab). A value 2× the
+   model suggests a doublet; 0.5× suggests a parameter bound was hit.
+6. **Peak area and uncertainty** — the ratio N_peak/σ(N_peak) should agree
+   with `Significance (fit)` within rounding.
+
+*Reference: full pipeline guidance — [Debertin & Helmer (1988)](#ref-5),
+Sec. 4.5–4.7; [Leo (1994)](#ref-17), Ch. 7*
+
 ---
 
 ## 11. Algorithms
@@ -1027,3 +1617,18 @@ editor if needed.
 15. **Fano factor and detector resolution:**
     U. Fano, "Ionization yield of radiations. II. The fluctuations of the number of
     ions," *Physical Review* **72** (1947) 26–29.
+
+<a id="ref-16"></a>
+16. **Detection limits and significance in counting experiments:**
+    L.A. Currie, "Limits for qualitative detection and quantitative determination:
+    application to radiochemistry," *Analytical Chemistry* **40** (1968) 586–593.
+    Defines the critical level L_c (false-positive threshold) and detection limit L_D
+    from Poisson counting statistics. The N/√(N+2B) significance formula follows
+    directly from the Gaussian approximation to paired Poisson counts.
+
+<a id="ref-17"></a>
+17. **Experimental nuclear and particle physics techniques:**
+    W.R. Leo, *Techniques for Nuclear and Particle Physics Experiments*, 2nd ed.,
+    Springer-Verlag, 1994. Chapters 6–7 cover detector resolution, FWHM, peak
+    fitting methodology, and signal significance in counting experiments. The
+    peak-to-total ratio and detector figures of merit are discussed in Ch. 7.

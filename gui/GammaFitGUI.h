@@ -69,6 +69,7 @@ public:
     // ── File & histogram ──────────────────────────────────────────────────────
     void OnOpenFile();
     void OnOpenIsotopeDB();
+    void OnReloadIsotopeDB();
     void OnHistogramSelected(Int_t id);
 
     // ── AutoFit tab ───────────────────────────────────────────────────────────
@@ -79,6 +80,9 @@ public:
     void OnApplyBgSelected();
     void OnApplyBgAll();
     void OnResetBgSub();
+    void OnApplyBgToCurrent();
+    void OnToggleShowBgLine();
+    void OnTogglePeakClickZoom();
     void OnDeleteHistogram();
     void OnDebugAllOn();
     void OnDebugAllOff();
@@ -108,6 +112,7 @@ public:
     void OnFitDecay();
     void OnRefreshDecayPeaks();
     void OnPreviewDecay();
+    void OnDecayRebinReset();
     void OnDecayApplyLabel();
     void OnMakePeakCountVsTime();
     void OnLoadDecayCache();
@@ -135,6 +140,12 @@ public:
 
     // ── Extended fit options (Manual Fit) ─────────────────────────────────────
     void OnApplyBgAnchors();
+    void OnClearBgAnchors();
+    void OnBgIterChanged();
+    void OnImportAllCachesFromFile();
+    void OnToggleErrorBars();
+    void OnResModelComboChanged();
+    void OnLoadResFromHist();
 
     // ── Channel→keV calibration ───────────────────────────────────────────────
     void OnApplyCalibration();
@@ -174,6 +185,8 @@ public:
 
     // ── FWHM tab ──────────────────────────────────────────────────────────────
     void OnLoadFWHM();
+    void OnRemoveFWHMHist();
+    void OnClearFWHMHists();
     void OnFitFWHM();
     void OnAcceptFWHM();
     void OnFWHMRestoreAll();
@@ -196,6 +209,8 @@ public:
     void OnSetBgFromCanvas();
     void OnFitBackground();
     void OnClearBackground();
+    void OnSetAnch1FromCanvas();
+    void OnSetAnch2FromCanvas();
     void OnSetRangeFromCanvas();
     void OnClearFitRange();
     void OnParameterScan();
@@ -203,6 +218,7 @@ public:
     void OnFitParamClose();
     void OnSeedBoundsFromModel();
     void OnTransferCache();
+    void OnTogglePeakPlaceMode();
 
     // ── Peak navigation ───────────────────────────────────────────────────────
     void OnPrevPeak();
@@ -211,6 +227,8 @@ public:
     void OnZoomOut();
     void OnNavXRangeGo();
     void OnDeleteCacheEntry();
+    void OnToggleMarkRefit();
+    void OnAddPeakNoFit();
 
     void OnApplyPickedLabel();
 
@@ -242,6 +260,7 @@ private:
     bool          dbLoaded_ = false;
 
     // ── Run-time state ────────────────────────────────────────────────────────
+    std::string  launchDir_;    // CWD at construction — all cache paths anchored here
     TFile*       inputFile_   = nullptr;
     std::string  inputPath_;
     std::vector<std::string> histNames_;
@@ -279,6 +298,10 @@ private:
     TGLabel*       fileLbl_          = nullptr;
     TGLabel*       isotopeLbl_       = nullptr;
     TGCheckButton* bgSubtractChk_    = nullptr;
+    TGCheckButton* showBgLineChk_    = nullptr;
+    bool           showBgLine_       = false;
+    bool           showErrorBars_    = true;
+    TGTextButton*  errorBarsBtn_     = nullptr;
     TGNumberEntry* bgIterEntry_      = nullptr;
     TGNumberEntry* tspecSigmaEntry_  = nullptr;
     TGNumberEntry* tspecThreshEntry_ = nullptr;
@@ -290,6 +313,8 @@ private:
     TGComboBox*    histClassCombo_   = nullptr;  // Gamma / Decay / 2D / Background
     TGComboBox*    recentCombo_      = nullptr;  // recent ROOT files
     std::vector<std::string> recentFiles_;       // most-recent-first
+    TGTextButton*  peakZoomBtn_       = nullptr;
+    bool           peakClickZoom_     = false;
 
     // Custom projection widgets
     TGComboBox*    custProjTh2Combo_  = nullptr;
@@ -430,11 +455,13 @@ private:
     TGComboBox*          mPeakClass_      = nullptr;
     TGTextEntry*         mPeakCustom_     = nullptr;
 
-    // Label pick mode — click on canvas to select a cached peak and relabel it
-    bool                 labelPickMode_   = false;
+    // Choose Peaks mode — when ON, canvas clicks place peak seeds; default is label-pick
+    bool                 peakPlaceMode_   = false;
+    TGTextButton*        choosePeakBtn_   = nullptr;
+
+    // Label pick (always-on default) — click on canvas to select a cached peak and relabel it
     std::string          labelPickKey_;          // cache key of the selected entry
     int                  labelPickGaussIdx_ = -1; // which Gaussian in that entry (-1 = whole entry)
-    TGCheckButton*       labelPickChk_    = nullptr;
     TGLabel*             labelPickInfo_   = nullptr;
     TGTextButton*        applyLabelBtn_   = nullptr;
 
@@ -443,12 +470,19 @@ private:
     TGCheckButton*       mFitImprovChk_ = nullptr;
     TGCheckButton*       mFitMinosChk_  = nullptr;
     TGCheckButton*       mBgFlatChk_    = nullptr;  // flat (constant) background
+    TGCheckButton*       mShowManualFitChk_ = nullptr;  // toggle manual fit overlay
+    TGCheckButton*       mShowCacheFitsChk_ = nullptr;  // toggle cached fit overlay
+    TGTextButton*        markRefitBtn_       = nullptr;  // mark/unmark current peak for refit
     TGCheckButton*       mShowCompChk_     = nullptr;  // show BG + individual Gaussian components
     TGCheckButton*       showIsoLabelsChk_ = nullptr;  // toggle isotope name above peak labels
     bool                 showIsoLabels_    = true;
     TGCheckButton*       mBgQuadChk_      = nullptr;  // quadratic background term
     TGCheckButton*       mComptonStepChk_ = nullptr;  // Compton step (Erfc term per peak)
     TGCheckButton*       mTieWidthsChk_   = nullptr;  // tie sigma to resolution model
+    TGComboBox*          mResModelCombo_  = nullptr;  // "Auto" | "Custom"
+    TGNumberEntry*       mResParA_        = nullptr;  // FWHM²=a+b·E+c·E² — a
+    TGNumberEntry*       mResParB_        = nullptr;  // b
+    TGNumberEntry*       mResParC_        = nullptr;  // c
 
     // BG anchor markers — two regions used to seed the linear BG
     TGNumberEntry*       mBgAnch1Lo_      = nullptr;
@@ -461,6 +495,9 @@ private:
     TGNumberEntry*       mBgHi_        = nullptr;
     bool                 bgClickMode_  = false;
     int                  bgClickCount_ = 0;
+    bool                 anchClickMode_  = false;
+    int                  anchClickCount_ = 0;
+    int                  anchTarget_     = 0;  // 0=anchor1, 1=anchor2
     TF1*                 bgTF1_        = nullptr;
 
     // Fit range (2-click)
@@ -505,6 +542,7 @@ private:
 
     // ── FWHM tab widgets ─────────────────────────────────────────────────────
     TGComboBox*    fwhmCombo_         = nullptr;
+    TGListBox*     fwhmHistList_      = nullptr;   // loaded histograms for combined plot
     TGNumberEntry* mFwhmA_            = nullptr;
     TGNumberEntry* mFwhmB_            = nullptr;
     TGNumberEntry* mFwhmC_            = nullptr;
@@ -520,10 +558,13 @@ private:
     TGCheckButton* fwhmShowResChk_    = nullptr;
     TGCheckButton* fwhmRemoveModeChk_ = nullptr;
     TF1*           fwhmTF1_           = nullptr;   // owned; clones drawn to canvas
-    std::string    fwhmHistName_;
+    std::string    fwhmHistName_;                  // last loaded / "Combined"
+    std::vector<std::string> fwhmLoadedHists_;    // names of loaded histograms in order
+    std::vector<std::string> fwhmHistSources_;    // per-point: which histogram it came from
     std::vector<double> fwhmAllX_;       // all FWHM data points (energy)
-    std::vector<double> fwhmAllY_;       // all FWHM data points (FWHM value)
+    std::vector<double> fwhmAllY_;       // all FWHM data points (FWHM² value, keV²)
     std::vector<bool>   fwhmExcluded_;   // parallel exclusion flags
+    std::vector<bool>   fwhmTied_;       // true = sigma was fixed to res model
     double         fwhmChi2Ndf_   = -1.0;
     double         fwhmPValue_    = -1.0;
     double         fwhmResidRMS_  = -1.0;
@@ -620,6 +661,9 @@ private:
     // Fit Results helpers
     void ShowFitResult(const std::string& hname);
     TH1* MakeBgSubHist(TH1* raw, bool doSubtract = false, int iterations = 14);
+    TH1* GetTSpectrumBg(TH1* raw, int iterations = 14);
+    void SyncResParFields();   // push res_.a/b/c to display fields (Auto mode only)
+    ResolutionModel GetTieResModel() const;  // effective model for Tie widths
     void OverlayFitPeaks(const std::string& hname, TCanvas* c);
 
     // Peak stats snapshot for before/after Run Fit comparison
@@ -648,7 +692,9 @@ private:
     void DrawPeakLabels(TF1* f);
     void RedrawView();
     void SaveFitResultToFile(const std::string& hname, TFile* fout);
-    void UpdatePeakStats(TF1* f, TH1* h, double xlo, double xhi);
+    void UpdatePeakStats(TF1* f, TH1* h, double xlo, double xhi,
+                         TF1* cachedF = nullptr, TH1* cachedH = nullptr,
+                         double cxlo = 0.0, double cxhi = 0.0);
     void PopulateIsoList(const std::string& filterLabel = "");
     void PopulateIsoDbList(const std::string& filter = "");
     void RefreshIsoDisplay();

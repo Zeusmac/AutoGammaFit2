@@ -6,7 +6,7 @@ Pb214	    295
 Pb214	    352
 Ti208	    2614 	                 
 K40         1460.8
-PairP	    511  
+PairA	    511  
 LaBr        1436
 LaBr        32
 44Cl	    891 

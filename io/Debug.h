@@ -22,6 +22,9 @@ namespace Debug {
 //  RESMODEL   — ResolutionModel: parameter updates and exponential smoothing
 //  FILEIO     — RootFileManager: every object written to disk
 //  PEAKFITTER — PeakFitter main loop: per-peak results, SNR, background
+//  GUI        — GUI slot calls, canvas events, view refreshes
+//  CACHE      — cache load / save / validation / per-file subdirectory ops
+//  MANUAL     — Manual-fit tab: param seeding, fit dispatch, convergence
 //
 // CLI: ./gamma_fit input.root --debug=FITTER,DB
 //      ./gamma_fit input.root --debug-all
@@ -35,6 +38,9 @@ enum Section {
     RESMODEL   = 5,
     FILEIO     = 6,
     PEAKFITTER = 7,
+    GUI        = 8,
+    CACHE      = 9,
+    MANUAL     = 10,
     N_SECTIONS
 };
 

@@ -59,9 +59,13 @@ $(TARGET): $(OBJECTS) | $(BIN_DIR)
 # =========================
 # COMPILE
 # =========================
+# -MMD -MP: generate .d dependency files so header changes trigger recompile.
+DEPFLAGS = -MMD -MP
+-include $(patsubst %.cpp,$(OBJ_DIR)/%.d,$(SOURCES))
+
 $(OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # =========================
 # CREATE DIRS
@@ -113,9 +117,11 @@ $(GUI_DICT_OBJ): $(GUI_DICT_SRC)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+-include $(patsubst %.cpp,$(OBJ_DIR)/%.d,$(GUI_SRCS))
+
 $(OBJ_DIR)/gui/%.o: $(GUI_DIR)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 .PHONY: gui
 gui: $(GUI_TARGET)

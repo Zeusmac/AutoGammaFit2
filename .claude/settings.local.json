@@ -13,7 +13,17 @@
       "Bash(find /home/macwheeler -name \"peakfit.c\" -o -name \"peakfit.h\" -o -name \"analysis.c\" 2>/dev/null | head -20)",
       "Read(//home/macwheeler/**)",
       "Bash(cmake --build build)",
-      "Bash(make -j4)"
+      "Bash(make -j4)",
+      "Read(//usr/include/**)",
+      "Bash(pkg-config --libs sqlite3)",
+      "Bash(touch /home/macwheeler/Research/AutoGammaFit/gui/*.cpp && make gui 2>&1 | tail -40)",
+      "Bash(touch /home/macwheeler/Research/AutoGammaFit/gui/*.cpp /home/macwheeler/Research/AutoGammaFit/io/*.cpp && make gui 2>&1)",
+      "Bash(python3 -c ' *)",
+      "Bash(git -C /home/macwheeler/Research/AutoGammaFit log --oneline --all)",
+      "Bash(git -C /home/macwheeler/Research/AutoGammaFit show --stat 0de7fa7)"
+    ],
+    "additionalDirectories": [
+      "/home/macwheeler/Research/AutoGammaFit/gui"
     ]
   }
 }

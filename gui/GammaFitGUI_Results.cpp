@@ -183,7 +183,7 @@ void GammaFitGUI::ShowFitResult(const std::string& hname)
     viewHist_->GetXaxis()->UnZoom();
     SetYMaxFromVisible(viewHist_);
     viewHist_->Draw("hist");
-    viewHist_->Draw("E1 same");
+    if (showErrorBars_) viewHist_->Draw("E1 same");
 
     OverlayFitPeaks(hname, c);
 
@@ -208,10 +208,9 @@ void GammaFitGUI::SaveFitResultToFile(const std::string& hname, TFile* fout)
         std::vector<double> allX, allY;
         for (const auto& [key, entry] : fitdb.GetEntries()) {
             if (key.size() >= 2 && key[0] == '_' && key[1] == '_') continue;
-            int npar = (int)entry.params.size();
-            if (npar < 5 || (npar - 2) % 3 != 0) continue;
-            int n = (npar - 2) / 3;
-            for (int i = 0; i < n; i++) {
+            FitLayout lay = DetectLayout((int)entry.params.size());
+            if (!lay.valid()) continue;
+            for (int i = 0; i < lay.n; i++) {
                 double E   = entry.params[3*i + 1];
                 double sig = entry.params[3*i + 2];
                 if (sig <= 0 || E <= 0) continue;
@@ -313,7 +312,7 @@ void GammaFitGUI::SaveFitResultToFile(const std::string& hname, TFile* fout)
     csave->cd();
 
     hbg->Draw("hist");
-    hbg->Draw("E1 same");
+    if (showErrorBars_) hbg->Draw("E1 same");
     OverlayFitPeaks(hname, csave);
 
     csave->Modified(); csave->Update();
@@ -336,7 +335,7 @@ void GammaFitGUI::OnSaveSelected()
     static const char* kTypes[] = {"ROOT files","*.root","All files","*",nullptr,nullptr};
     TGFileInfo fi;
     fi.fFileTypes = kTypes;
-    new TGFileDialog(gClient->GetRoot(), this, kFDSave, &fi);
+    OpenFileDialog(this, kFDSave, &fi);
     if (!fi.fFilename) return;
 
     TFile* fout = TFile::Open(fi.fFilename, "RECREATE");
@@ -355,7 +354,7 @@ void GammaFitGUI::OnSaveAll()
     static const char* kTypes[] = {"ROOT files","*.root","All files","*",nullptr,nullptr};
     TGFileInfo fi;
     fi.fFileTypes = kTypes;
-    new TGFileDialog(gClient->GetRoot(), this, kFDSave, &fi);
+    OpenFileDialog(this, kFDSave, &fi);
     if (!fi.fFilename) return;
 
     TFile* fout = TFile::Open(fi.fFilename, "RECREATE");
@@ -442,7 +441,7 @@ void GammaFitGUI::OnExportCacheCSV()
     static const char* kCsvTypes[] = {"CSV files","*.csv","All files","*",nullptr,nullptr};
     TGFileInfo fi;
     fi.fFileTypes = kCsvTypes;
-    new TGFileDialog(gClient->GetRoot(), this, kFDSave, &fi);
+    OpenFileDialog(this, kFDSave, &fi);
     if (!fi.fFilename) return;
 
     std::string outPath = fi.fFilename;
@@ -495,12 +494,12 @@ void GammaFitGUI::OnExportCacheCSV()
         for (const auto& kv : fdb.GetEntries()) {
             if (!kv.first.empty() && kv.first[0] == '_') continue;  // skip internal keys
             const FitEntry& e = kv.second;
-            int npar = (int)e.params.size();
-            if (npar < 5 || (npar - 2) % 3 != 0) continue;
-            int nPeaks = (npar - 2) / 3;
-            bool hasErr = ((int)e.paramErrors.size() == npar);
-            double bg0 = e.params[3*nPeaks];
-            double bg1 = e.params[3*nPeaks + 1];
+            FitLayout lay = DetectLayout((int)e.params.size());
+            if (!lay.valid()) continue;
+            int nPeaks = lay.n;
+            bool hasErr = ((int)e.paramErrors.size() == (int)e.params.size());
+            double bg0 = e.params[lay.bgBase()];
+            double bg1 = e.params[lay.bgBase() + 1];
 
             for (int i = 0; i < nPeaks; i++) {
                 double A    = e.params[3*i];
@@ -656,7 +655,7 @@ void GammaFitGUI::OnExportGnuScope()
     static const char* kSpeTypes[] = {"gnuScope spectrum","*.spe","All files","*",nullptr,nullptr};
     TGFileInfo fi;
     fi.fFileTypes = is2D ? kSqrTypes : kSpeTypes;
-    new TGFileDialog(gClient->GetRoot(), this, kFDSave, &fi);
+    OpenFileDialog(this, kFDSave, &fi);
     if (!fi.fFilename) { if (owned) delete h; return; }
 
     std::string outPath = fi.fFilename;
@@ -698,7 +697,7 @@ void GammaFitGUI::OnExportGnuScopeAll()
     TGFileInfo fi;
     fi.fFileTypes = kTypes;
     fi.fIniDir    = StrDup(".");
-    new TGFileDialog(gClient->GetRoot(), this, kFDSave, &fi);
+    OpenFileDialog(this, kFDSave, &fi);
     if (!fi.fFilename) return;
 
     // Extract the directory part of whatever was typed/selected

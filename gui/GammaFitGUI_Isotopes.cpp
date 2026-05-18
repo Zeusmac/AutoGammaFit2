@@ -421,27 +421,27 @@ void GammaFitGUI::PopulateIsoList(const std::string& filterLabel)
         std::string label;         // effective label (per-Gaussian if set, else entry)
         std::string classification;
         int         gaussIdx;      // -1 = whole entry; 0..n-1 = specific Gaussian
+        bool        needsRefit;
     };
     std::vector<Row> rows;
     for (const auto& kv : fitdb.GetEntries()) {
         if (kv.first.empty() || kv.first[0] == '_') continue;
         const FitEntry& fe = kv.second;
 
-        int npar = (int)fe.params.size();
-        if (npar >= 5 && (npar - 2) % 3 == 0) {
-            int n = (npar - 2) / 3;
-            for (int i = 0; i < n; i++) {
+        FitLayout lay = DetectLayout((int)fe.params.size());
+        if (lay.valid()) {
+            for (int i = 0; i < lay.n; i++) {
                 double E        = fe.params[3*i + 1];
                 std::string lbl = fe.PeakLabel(i);
                 std::string cls = fe.PeakClass(i);
                 if (!filterLabel.empty() && filterLabel != "All" && lbl != filterLabel) continue;
-                rows.push_back({kv.first, E, lbl, cls, i});
+                rows.push_back({kv.first, E, lbl, cls, i, fe.needsRefit});
             }
         } else {
             double E = 0.0;
             try { E = std::stod(kv.first.substr(0, kv.first.find('_'))); } catch (...) {}
             if (!filterLabel.empty() && filterLabel != "All" && fe.label != filterLabel) continue;
-            rows.push_back({kv.first, E, fe.label, fe.classification, -1});
+            rows.push_back({kv.first, E, fe.label, fe.classification, -1, fe.needsRefit});
         }
     }
 
@@ -544,6 +544,7 @@ void GammaFitGUI::PopulateIsoList(const std::string& filterLabel)
 
         std::string entry = Form("%-16s  %8.2f    %s",
                                  displayLabel.c_str(), r.energy, dbCol.c_str());
+        if (r.needsRefit) entry += "  [REFIT]";
         isoList_->AddEntry(entry.c_str(), id++);
         isoListKeys_.push_back(r.key);
         isoListGaussIdx_.push_back(r.gaussIdx);
@@ -678,11 +679,11 @@ void GammaFitGUI::OnIsoListSelected(Int_t id)
         if (cls.empty() && !curLabel.empty() && labelClassMap_.count(curLabel))
             cls = labelClassMap_.at(curLabel);
         // Auto-suggest X-ray for peaks below 100 keV
-        int npar = (int)it->second.params.size();
+        FitLayout lay = DetectLayout((int)it->second.params.size());
         double peakE = 0.0;
-        if (gaussIdx >= 0 && npar >= 5 && (npar-2)%3==0 && gaussIdx < (npar-2)/3)
+        if (gaussIdx >= 0 && lay.valid() && gaussIdx < lay.n)
             peakE = it->second.params[3*gaussIdx + 1];
-        else if (npar >= 2)
+        else if ((int)it->second.params.size() >= 2)
             peakE = it->second.params[1];
         if (cls.empty() && peakE > 0 && peakE < 100.0) cls = "X-ray";
         isoClassCombo_->Select(ClassToComboIndex(cls), kFALSE);
@@ -730,8 +731,8 @@ void GammaFitGUI::OnIsoApply()
 
     // Apply label: per-Gaussian for wide entries, entry-level for tight/single
     if (gaussIdx >= 0) {
-        int npar = (int)e.params.size();
-        int n    = (npar >= 5 && (npar-2)%3==0) ? (npar-2)/3 : 1;
+        FitLayout lay = DetectLayout((int)e.params.size());
+        int n = lay.valid() ? lay.n : 1;
         if ((int)e.peakLabels.size() < n)          e.peakLabels.resize(n);
         if ((int)e.peakClassifications.size() < n) e.peakClassifications.resize(n);
         e.peakLabels[gaussIdx] = newLabel;
@@ -954,19 +955,18 @@ void GammaFitGUI::OnIsoAutoMatchAll()
     for (const auto& kv : fitdb.GetEntries()) {
         if (kv.first.empty() || kv.first[0] == '_') continue;
         const FitEntry& fe = kv.second;
-        int npar = (int)fe.params.size();
+        FitLayout lay = DetectLayout((int)fe.params.size());
 
         // Extract per-Gaussian energies and amplitudes
         std::vector<std::pair<double,double>> gaussians;  // {energy, amplitude}
-        if (npar >= 5 && (npar - 2) % 3 == 0) {
-            int n = (npar - 2) / 3;
-            for (int i = 0; i < n; i++)
+        if (lay.valid()) {
+            for (int i = 0; i < lay.n; i++)
                 gaussians.push_back({fe.params[3*i + 1], fe.params[3*i]});
-        } else if (npar >= 2) {
+        } else if ((int)fe.params.size() >= 2) {
             double repE = fe.params[1];
             if (repE <= 0)
                 try { repE = std::stod(kv.first.substr(0, kv.first.find('_'))); } catch (...) {}
-            if (repE > 0) gaussians.push_back({repE, npar >= 1 ? fe.params[0] : 1.0});
+            if (repE > 0) gaussians.push_back({repE, fe.params.empty() ? 1.0 : fe.params[0]});
         }
         if (gaussians.empty()) continue;
 
@@ -1071,8 +1071,8 @@ void GammaFitGUI::OnIsoAutoMatchAll()
             if (!cls.empty()) { e.classification = cls; }
         } else {
             // Wide multi-Gaussian — label only this Gaussian
-            int npar = (int)e.params.size();
-            int n    = (npar >= 5 && (npar-2)%3==0) ? (npar-2)/3 : 1;
+            FitLayout lay = DetectLayout((int)e.params.size());
+            int n = lay.valid() ? lay.n : 1;
             if ((int)e.peakLabels.size() < n)          e.peakLabels.resize(n);
             if ((int)e.peakClassifications.size() < n) e.peakClassifications.resize(n);
             e.peakLabels[u.gaussIdx] = iso;
@@ -1478,9 +1478,9 @@ void GammaFitGUI::OnIsoPeakPreview()
     // Find the highest-amplitude peak energy in this entry
     const FitEntry& fe = it->second;
     double peakE = 0.0;
-    int npar = (int)fe.params.size();
-    if (npar >= 5 && (npar - 2) % 3 == 0) {
-        int n = (npar - 2) / 3;
+    FitLayout lay = DetectLayout((int)fe.params.size());
+    if (lay.valid()) {
+        int n = lay.n;
         double bestAmp = -1.0;
         for (int i = 0; i < n; i++) {
             if (fe.params[3*i] > bestAmp) {
@@ -1489,7 +1489,7 @@ void GammaFitGUI::OnIsoPeakPreview()
             }
         }
     }
-    if (peakE <= 0.0 && npar >= 2) peakE = fe.params[1];
+    if (peakE <= 0.0 && (int)fe.params.size() >= 2) peakE = fe.params[1];
     if (peakE <= 0.0) {
         try { peakE = std::stod(key.substr(0, key.find('_'))); } catch (...) {}
     }
@@ -1809,10 +1809,9 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
                 classIsoName[resolvedCls] = lbl;
         };
 
-        int npar = (int)fe.params.size();
-        if (npar >= 5 && (npar-2)%3==0) {
-            int n = (npar-2)/3;
-            for (int i = 0; i < n; i++)
+        FitLayout lay = DetectLayout((int)fe.params.size());
+        if (lay.valid()) {
+            for (int i = 0; i < lay.n; i++)
                 addPeak(fe.PeakLabel(i), fe.PeakClass(i));
         } else {
             addPeak(fe.label, fe.classification);

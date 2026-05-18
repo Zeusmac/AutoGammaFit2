@@ -17,7 +17,8 @@ static bool sections_[N_SECTIONS] = {};
 
 static const char* kNames_[N_SECTIONS] = {
     "FITTER", "GROUPER", "TRACKER", "DB",
-    "GAMMADB", "RESMODEL", "FILEIO", "PEAKFITTER"
+    "GAMMADB", "RESMODEL", "FILEIO", "PEAKFITTER",
+    "GUI", "CACHE", "MANUAL"
 };
 
 // ─── Toggle control ──────────────────────────────────────────────────────────

@@ -51,6 +51,15 @@ struct FitEntry {
     std::vector<std::string> peakLabels;
     std::vector<std::string> peakClassifications;
 
+    // When true, sigma was fixed to the resolution model during fitting.
+    // resA/B/C are the model parameters (FWHM²=a+b·E+c·E²) actually used.
+    bool   widthTied = false;
+    double resA = 0.0, resB = 0.0, resC = 0.0;
+
+    // When true, this peak is flagged for refitting (poor fit, no fit, or user-tagged).
+    // Automatically excluded from FWHM vs Energy plot.
+    bool   needsRefit = false;
+
     // Return the effective label for Gaussian index gi (-1 = whole entry).
     const std::string& PeakLabel(int gi) const {
         if (gi >= 0 && gi < (int)peakLabels.size() && !peakLabels[gi].empty())
@@ -348,6 +357,19 @@ public:
                     }
                 }
             }
+            // Optional tied-width flag and resolution model used
+            {
+                int tied = 0;
+                if (ss >> tied && tied == 1) {
+                    e.widthTied = true;
+                    ss >> e.resA >> e.resB >> e.resC;
+                }
+            }
+            // Optional needs-refit flag
+            {
+                int r = 0;
+                if (ss >> r && r == 1) e.needsRefit = true;
+            }
             entries_[e.key] = std::move(e);
             ++count;
         }
@@ -396,6 +418,13 @@ public:
             out << " " << npc;
             for (int i = 0; i < npc; i++)
                 out << " " << (e.peakClassifications[i].empty() ? "-" : e.peakClassifications[i]);
+            // Tied-width flag and resolution model (0 = not tied; 1 a b c = tied)
+            if (e.widthTied)
+                out << " 1 " << e.resA << " " << e.resB << " " << e.resC;
+            else
+                out << " 0";
+            // Needs-refit flag
+            out << " " << (e.needsRefit ? 1 : 0);
             out << "\n";
         }
         out.close();
@@ -405,6 +434,7 @@ public:
     }
 
     const std::map<std::string, FitEntry>& GetEntries() const { return entries_; }
+    std::map<std::string, FitEntry>& GetEntriesMutable() { return entries_; }
 
     // Remove a single entry by key. Returns true if the key existed.
     bool Remove(const std::string& key) {
