@@ -66,7 +66,8 @@ GammaFitGUI::GammaFitGUI(const TGWindow* p, UInt_t w, UInt_t h)
     BuildFWHMTab      (ctrlTab->AddTab("FWHM"));
     BuildDecayTab     (ctrlTab->AddTab("Decay"));
     BuildFitResultsTab(ctrlTab->AddTab("Fit Results"));
-    BuildIsotopesTab  (ctrlTab->AddTab("Isotopes"));
+    BuildPeakTableTab (ctrlTab->AddTab("Peak Table"));
+    BuildNuclearTab   (ctrlTab->AddTab("Nuclear"));
 
     // ── RIGHT: canvas + log ───────────────────────────────────────────────────
     TGVerticalFrame* right = new TGVerticalFrame(main, w - 318, h - 25);

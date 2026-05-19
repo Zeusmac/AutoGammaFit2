@@ -139,7 +139,9 @@ void GammaFitGUI::SaveLabelClassMap(FitDatabase& fitdb)
     fitdb.ForceStore(kLabelClassesKey, e);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// BuildIsotopesTab removed — UI merged into Nuclear tab (Peak Matching sub-tab)
+
+#if 0
 void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
 {
     TGCanvas* sc = new TGCanvas(p, 308, 860, kSunkenFrame);
@@ -395,6 +397,7 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
         "Apply the isotope name from the selected DB line as label,\n"
         "and the chosen class, to the peak selected in the Peaks list above.");
 }
+#endif
 
 // ─────────────────────────────────────────────────────────────────────────────
 

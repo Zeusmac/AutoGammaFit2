@@ -1,0 +1,48 @@
+What you're describing — structured as modules
+Already exists (extend)
+Isotope matching + decay chain classification
+Basic gamma intensity / branching ratio from fit areas
+Decay tab (half-life fitting)
+Phase 1 — NNDC data layer (foundation for everything else)
+Every downstream feature needs this. Per-isotope data structure holding:
+
+Levels: energy, J^π, T½, isomer flag
+Gamma transitions: E_γ, I_γ, initial level → final level, multipolarity (E1/M1/E2…), mixing ratio δ, conversion coefficient
+Beta branches: Q_β, log ft, ΔJ, Δπ, transition type (Fermi/GT/forbidden)
+References: ENSDF citation keys
+Source: IAEA LiveChart API + full ENSDF files. One fetch per isotope, cached locally as structured files (SQLite or per-isotope JSON).
+
+Phase 2 — Enhanced isotope matching
+With the data layer in place:
+
+Match measured E_γ to known transitions, showing initial → final level, J^π, multipolarity
+Flag ambiguous assignments (two transitions within FWHM)
+Identify unmatched gammas as potential new transitions or contaminants
+Phase 3 — Branching ratios + log ft
+Compute relative γ intensities from fit areas (corrected for efficiency if loaded)
+Normalize to 100% for each decay branch
+Compare to NNDC branching ratios
+For beta branches: log ft = log(f·t) where f is the Fermi integral (function of Q_β − E_level, Z) and t = T½ / B.R.
+Classify transition: log ft < 3.5 → superallowed, 3.5–5 → allowed Fermi or GT, 5–8 → first-forbidden, > 8 → higher forbidden
+This gives you Fermi vs GT directly from log ft + ΔJ + Δπ
+Phase 4 — Level scheme editor
+Draw levels as horizontal lines at their energies, label with J^π
+Arrows between levels labeled with E_γ, I_γ, multipolarity
+Import NNDC scheme as baseline
+Toggle experimental vs NNDC overlay
+Add/move/delete levels interactively
+Export as ROOT canvas or PDF
+Shell model input: read NuShellX / KSHELL / OXBASH output format, overlay predicted levels in a different color
+Phase 5 — Gamma-gamma coincidences
+Load TH2 matrix (you already have the Decay tab TH2 infrastructure)
+Gate on any assigned gamma ray → project → show coincident gammas
+Highlight which coincident gammas correspond to known cascade paths through the level scheme
+Build coincidence matrix of assigned transitions
+Phase 6 — Deformation
+Once levels and transitions are assigned: B(E2) values from known E2 transition strengths
+Compare to rotational model predictions (E_J ∝ J(J+1)) to identify rotational bands
+β₂ deformation from Grodzins relation or measured B(E2) if you have lifetimes
+
+
+
+

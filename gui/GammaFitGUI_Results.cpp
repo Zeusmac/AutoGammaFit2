@@ -625,9 +625,14 @@ bool GammaFitGUI::ExportGnuScopeFile(TH1* h, const std::string& outPath) const
         }
         writeInt(datLen);
     } else {
-        // 1D — single data record
-        int  nX    = h->GetNbinsX();
-        int  datLen = static_cast<int>(sizeof(float)) * nX;
+        // 1D — two records: header (nchans) then data
+        int nX     = h->GetNbinsX();
+        int datLen = nX * static_cast<int>(sizeof(float));
+        // Record 1: channel count (single int)
+        writeInt(static_cast<int>(sizeof(int)));
+        writeInt(nX);
+        writeInt(static_cast<int>(sizeof(int)));
+        // Record 2: bin contents
         writeInt(datLen);
         for (int i = 1; i <= nX; i++)
             writeFloat(static_cast<float>(h->GetBinContent(i)));
@@ -635,7 +640,77 @@ bool GammaFitGUI::ExportGnuScopeFile(TH1* h, const std::string& outPath) const
     }
 
     fout.close();
-    return fout.good() || true;  // close() clears failbit on success
+    return !fout.fail();
+}
+
+// Write a companion _fit.spe containing the summed fitted curves evaluated
+// at each bin center of h.  Each cached fit entry contributes its full TF1
+// (Gaussian(s) + background) only within the recorded fit range [xlo, xhi].
+// Bins outside every fit window are zero.  Returns false if no fits exist or
+// on I/O error.
+bool GammaFitGUI::ExportGnuScopeFit(TH1* h, const std::string& histName,
+                                     const std::string& outPath) const
+{
+    if (!h) return false;
+    FitDatabase fitdb;
+    if (!fitdb.Load(CacheFileFor(histName))) return false;
+    const auto& entries = fitdb.GetEntries();
+
+    int nX = h->GetNbinsX();
+    std::vector<float> fitVals(nX + 2, 0.0f);  // indexed 1..nX
+
+    bool anyFit = false;
+    for (const auto& [key, entry] : entries) {
+        if (key.size() >= 2 && key[0] == '_' && key[1] == '_') continue;
+        if (entry.params.empty()) continue;
+        FitLayout lay = DetectLayout((int)entry.params.size());
+        if (!lay.valid()) continue;
+
+        double xlo = entry.xlo, xhi = entry.xhi;
+        if (xlo >= xhi) {
+            // Fall back to ±6σ around the outermost peaks using stored energies
+            std::vector<double> peakE;
+            std::istringstream ss(key);
+            std::string tok;
+            while (std::getline(ss, tok, '_'))
+                try { peakE.push_back(std::stod(tok)); } catch (...) {}
+            if (peakE.empty()) continue;
+            double sig0 = res_.Sigma(peakE.front());
+            double sigN = res_.Sigma(peakE.back());
+            xlo = peakE.front() - 6.0 * sig0;
+            xhi = peakE.back()  + 6.0 * sigN;
+        }
+
+        TF1* f = new TF1("_gs_fit_tmp_",
+                          FitModel::FromLayout(lay).Formula().c_str(), xlo, xhi);
+        for (int p = 0; p < (int)entry.params.size(); p++)
+            f->SetParameter(p, entry.params[p]);
+
+        int b1 = h->FindBin(xlo), b2 = h->FindBin(xhi);
+        b1 = std::max(b1, 1); b2 = std::min(b2, nX);
+        for (int b = b1; b <= b2; b++) {
+            double x = h->GetBinCenter(b);
+            fitVals[b] += static_cast<float>(f->Eval(x));
+        }
+        delete f;
+        anyFit = true;
+    }
+    if (!anyFit) return false;
+
+    // Write as a standard 1D gnuScope .spe (same two-record format)
+    std::ofstream fout(outPath, std::ios::out | std::ios::binary);
+    if (!fout.is_open()) return false;
+    auto writeInt   = [&](int   v) { fout.write(reinterpret_cast<char*>(&v), sizeof(int));   };
+    auto writeFloat = [&](float v) { fout.write(reinterpret_cast<char*>(&v), sizeof(float)); };
+    int datLen = nX * static_cast<int>(sizeof(float));
+    writeInt(static_cast<int>(sizeof(int)));
+    writeInt(nX);
+    writeInt(static_cast<int>(sizeof(int)));
+    writeInt(datLen);
+    for (int i = 1; i <= nX; i++) writeFloat(fitVals[i]);
+    writeInt(datLen);
+    fout.close();
+    return !fout.fail();
 }
 
 void GammaFitGUI::OnExportGnuScope()
@@ -676,6 +751,13 @@ void GammaFitGUI::OnExportGnuScope()
         } else {
             AppendLog(Form("[GnuScope] %s: 1D %d channels → %s",
                            currentHist_.c_str(), h->GetNbinsX(), outPath.c_str()));
+            // Companion fit spectrum — strip extension and add _fit.spe
+            std::string fitPath = outPath;
+            if (fitPath.size() >= 4 && fitPath.substr(fitPath.size()-4) == ".spe")
+                fitPath = fitPath.substr(0, fitPath.size()-4);
+            fitPath += "_fit.spe";
+            if (ExportGnuScopeFit(h, currentHist_, fitPath))
+                AppendLog("[GnuScope] Fit curve → " + fitPath);
         }
         SetStatus("gnuScope export: " + outPath);
     } else {
@@ -726,6 +808,11 @@ void GammaFitGUI::OnExportGnuScopeAll()
         if (ok) {
             AppendLog("[GnuScope] " + hname + " → " + outPath);
             nOk++;
+            if (!is2D) {
+                std::string fitPath = dir + "/" + safe + "_fit.spe";
+                if (ExportGnuScopeFit(h, hname, fitPath))
+                    AppendLog("[GnuScope]   fit → " + fitPath);
+            }
         } else {
             AppendLog("[GnuScope] FAILED: " + hname);
             nErr++;

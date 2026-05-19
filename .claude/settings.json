@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s --max-time 15 \"https://nds.iaea.org/relnsd/v1/data?fields=ground_states&nuclides=s44\")",
+      "Bash(python3 -c \"import urllib.request; print\\(urllib.request.urlopen\\('https://nds.iaea.org/relnsd/v1/data?fields=ground_states&nuclides=s44', timeout=15\\).read\\(200\\).decode\\(\\)\\)\")",
+      "Bash(wget -q -O - \"https://nds.iaea.org/relnsd/v1/data?fields=ground_states&nuclides=s44\")",
+      "Bash(sort -k2 -t:)",
+      "Bash(sort -k6,7)",
+      "Bash(grep -E \"^\\(AutoFit|Source|Manual Fit|FWHM|Decay|Fit Results|Nuclear|Isotopes|Peak Matching|Isotope Chain\\)$\")",
+      "Bash(git -C /home/macwheeler/Research/AutoGammaFit log --oneline --since=\"2026-05-18 00:00\" --until=\"2026-05-18 12:00\")",
+      "Bash(git -C /home/macwheeler/Research/AutoGammaFit log --oneline --since=\"2026-05-18 12:00\")"
+    ]
+  }
+}

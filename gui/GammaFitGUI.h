@@ -26,6 +26,7 @@
 #include "PeakTracker.h"
 #include "FitDatabase.h"
 #include "Debug.h"
+#include "NuclearData.h"
 
 class TH1;
 class TH2;
@@ -52,6 +53,21 @@ struct SourceLine {
     double energy;    // keV (reference value)
     double intensity; // branching ratio [0,1]
     int    assigned;  // index into srcPeakEs_; -1 = unassigned
+};
+
+struct PeakTableRow {
+    std::string histName;
+    int         histIdx    = 0;
+    double      energy     = 0.0;
+    double      energyErr  = 0.0;
+    double      sigma      = 0.0;
+    double      fwhm       = 0.0;
+    double      area       = 0.0;
+    double      areaErr    = 0.0;
+    double      chi2ndf    = -1.0;
+    std::string label;
+    std::string classification;
+    std::string cacheFile;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,6 +132,7 @@ public:
     void OnDecayApplyLabel();
     void OnMakePeakCountVsTime();
     void OnLoadDecayCache();
+    void OnDecayScanCaches();
 
     // ── Histogram classification ──────────────────────────────────────────────
     void OnHistClassSet();
@@ -182,6 +199,28 @@ public:
     void OnIsoDbClear();
     void OnIsoDbLineSelected(Int_t id);
     void OnIsoDbApply();
+
+    // ── Nuclear tab ───────────────────────────────────────────────────────────
+    void OnNucSetParentFromChain();
+    void OnNucAutoTraceChain();
+    void OnNucFetchAll();
+    void OnNucReloadCache();
+    void OnNucAddToChain();
+    void OnNucRemoveFromChain();
+    void OnNucClearChain();
+    void OnNucAddBackground();
+    void OnNucLoadNNDCTxt();
+
+    // ── Peak Table tab ────────────────────────────────────────────────────────
+    void OnPTScanAll();
+    void OnPTAddCache();
+    void OnPTRemoveCache();
+    void OnPTClearCaches();
+    void OnPTRebuildTable();
+    void OnPTPlot();
+    void OnPTExportCSV();
+    void LoadPeakCacheIntoTable(const std::string& cachePath,
+                                const std::string& histName);
 
     // ── FWHM tab ──────────────────────────────────────────────────────────────
     void OnLoadFWHM();
@@ -412,6 +451,35 @@ private:
     TGComboBox*    isoDbClassCombo_ = nullptr;
     std::vector<int> isoDbIndices_;  // index into db_.db for each visible row
 
+    // ── Nuclear tab widgets ───────────────────────────────────────────────────
+    TGListBox*    nucChainList_     = nullptr;  // isotopes in the decay chain
+    TGComboBox*   nucBgCombo_       = nullptr;  // common background selector
+    TGNumberEntry* nucAddAEntry_    = nullptr;  // A for manual add
+    TGTextEntry*  nucAddSymEntry_   = nullptr;  // symbol for manual add
+    TGComboBox*   nucAddTypeCombo_  = nullptr;  // type: auto/decay/background
+    TGTextView*   nucGammaRefView_  = nullptr;  // known gammas display
+    TGLabel*      nucStatusLbl_     = nullptr;  // status line
+    TGTextButton* nucTraceChainBtn_ = nullptr;
+    TGNumberEntry* nucAEntry_       = nullptr;  // parent A entry
+    TGTextEntry*  nucSymbolEntry_   = nullptr;  // parent symbol entry
+    TGComboBox*   nucIsoCombo_      = nullptr;  // isotope combo for Level Scheme
+    TGComboBox*   nucIsoLogftCombo_ = nullptr;  // isotope combo for Log ft tab
+    std::string   nucCacheDir_;                 // path to nuclear data cache
+    std::vector<std::string> nucChainIsotopes_; // isotope IDs in chain (e.g. "44S")
+    std::map<std::string, NucIsotope> nuclearDB_; // fetched nuclear data by ID
+
+    // ── Peak Table tab widgets ────────────────────────────────────────────────
+    TGListBox*   ptCacheList_   = nullptr;
+    TGTextEntry* ptFilterLabel_ = nullptr;
+    TGComboBox*  ptClassFilter_ = nullptr;
+    TGComboBox*  ptSortCombo_   = nullptr;
+    TGTextView*  ptTableView_   = nullptr;
+    TGComboBox*  ptXAxisCombo_  = nullptr;
+    TGComboBox*  ptYAxisCombo_  = nullptr;
+    TGTextEntry* ptGraphLabel_  = nullptr;
+    std::vector<PeakTableRow>   ptRows_;
+    std::vector<std::string>    ptLoadedCaches_;
+
     // ── Fit Results tab widgets ───────────────────────────────────────────────
     TGListBox*           fitResultsList_ = nullptr;
     std::vector<std::string> fittedHists_;   // parallel to fitResultsList_ entries
@@ -617,6 +685,10 @@ private:
     std::vector<std::string>           decayPeakKeys_;
     std::map<double, DecayFitResult>   decayFitStore_;  // keyed by peak energy
 
+    // Decay cache picker (which gamma histogram's cache to use for tie widths)
+    TGComboBox*              decayCacheCombo_      = nullptr;
+    std::vector<std::string> decayPeakCacheNames_; // cache name for each peak in decayPeakList_
+
     // ── Peak navigation ───────────────────────────────────────────────────────
     std::vector<std::string> peakNavKeys_;
     int              peakNavIdx_  = 0;
@@ -640,8 +712,15 @@ private:
     void BuildFWHMTab       (TGCompositeFrame* parent);
     void BuildDecayTab      (TGCompositeFrame* parent);
     void BuildFitResultsTab (TGCompositeFrame* parent);
-    void BuildIsotopesTab   (TGCompositeFrame* parent);
+    void BuildPeakTableTab  (TGCompositeFrame* parent);
+    void BuildNuclearTab    (TGCompositeFrame* parent);
     void PopulateHistWidgets();
+    std::string NucCacheDirPath() const;
+    void PopulateNucGammaRef();
+    void RefreshIsoComboHelper(TGComboBox* combo,
+                               const std::vector<std::string>& chain,
+                               const std::map<std::string, NucIsotope>& db);
+    void DrawLevelScheme(const std::string& isoID);
     void SyncDebugToggles();
     void DrawOnCanvas(TH1* h, TF1* fit = nullptr);
     void DrawWithResiduals(TH1* h, TF1* fit, double xlo, double xhi);
@@ -673,7 +752,7 @@ private:
     // FWHM helpers
     void RedrawFWHM();
     void DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine,
-                          bool showResolution = false);
+                          bool showResolution = false, bool showErrBars = false);
 
     // Source tab helpers
     double      ComputeDecayedActivity() const;
@@ -711,6 +790,8 @@ private:
 
     // gnuScope export helper — returns false on I/O error
     bool ExportGnuScopeFile(TH1* h, const std::string& outPath) const;
+    bool ExportGnuScopeFit(TH1* h, const std::string& outPath,
+                           const std::string& histName) const;
 
     // Histogram classification helpers
     std::string ClassOf(const std::string& name) const;

@@ -212,7 +212,7 @@ static const int kNFWHMPalette     = 8;
 // fwhmTF1_ is NEVER drawn directly; fresh TF1 expressions are created here so
 // that fwhmTF1_ stays fully under our control and safe to access later.
 void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine,
-                                    bool showResolution)
+                                    bool showResolution, bool showErrBars)
 {
     if (fwhmAllX_.empty()) return;
 
@@ -272,28 +272,19 @@ void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine
     if (yDataMax <= 0) yDataMax = 1.0;
     double yAxisMax = yDataMax * 1.35;
 
-    // ── Draw a dummy invisible graph first to set axes ────────────────────────
+    // ── Draw frame to establish axes ──────────────────────────────────────────
     {
-        std::vector<double> allX = fwhmAllX_;
-        std::vector<double> allY(allX.size());
-        for (size_t i = 0; i < allX.size(); i++) allY[i] = toY(fwhmAllY_[i], allX[i]);
-        TGraphErrors* grAxis = new TGraphErrors((Int_t)allX.size(),
-                                                 allX.data(), allY.data());
-        grAxis->SetTitle(title.c_str());
-        grAxis->SetMarkerSize(0);
-        grAxis->SetMinimum(0.0); grAxis->SetMaximum(yAxisMax);
-        grAxis->Draw("A");  // sets axes without drawing markers
-        if (grAxis->GetXaxis()) {
-            grAxis->GetXaxis()->SetTitle("Energy (keV)");
-            grAxis->GetXaxis()->SetTitleSize(0.05);
-            grAxis->GetXaxis()->SetLabelSize(0.04);
-        }
-        if (grAxis->GetYaxis()) {
-            grAxis->GetYaxis()->SetTitle(yLabel.c_str());
-            grAxis->GetYaxis()->SetTitleSize(0.05);
-            grAxis->GetYaxis()->SetLabelSize(0.04);
-            grAxis->GetYaxis()->SetTitleOffset(1.2);
-        }
+        double xmin = *std::min_element(fwhmAllX_.begin(), fwhmAllX_.end());
+        double frameXlo = showResolution ? 1.0 : std::max(0.0, xmin * 0.85);
+        TH1F* frame = static_cast<TH1F*>(c->DrawFrame(frameXlo, 0.0, xhi, yAxisMax));
+        frame->SetTitle(title.c_str());
+        frame->GetXaxis()->SetTitle("Energy (keV)");
+        frame->GetXaxis()->SetTitleSize(0.05);
+        frame->GetXaxis()->SetLabelSize(0.04);
+        frame->GetYaxis()->SetTitle(yLabel.c_str());
+        frame->GetYaxis()->SetTitleSize(0.05);
+        frame->GetYaxis()->SetLabelSize(0.04);
+        frame->GetYaxis()->SetTitleOffset(1.2);
     }
 
     // ── Included points — one TGraphErrors per source histogram ──────────────
@@ -313,7 +304,7 @@ void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine
                                              sp.ex.data(), sp.ey.data());
         gr->SetMarkerStyle(mst); gr->SetMarkerSize(0.9);
         gr->SetMarkerColor(col); gr->SetLineColor(col);
-        gr->Draw("P same");
+        gr->Draw(showErrBars ? "EP same" : "P same");
     }
 
     // ── Excluded points (gray hollow circles, all sources) ───────────────────
@@ -443,7 +434,7 @@ void GammaFitGUI::RedrawFWHM()
     bool showRes      = fwhmShowResChk_   && fwhmShowResChk_->IsOn();
     TCanvas* c = canvas_->GetCanvas();
     c->Clear(); c->cd();
-    DrawFWHMToCanvas(c, showSigma, showStatLine, showRes);
+    DrawFWHMToCanvas(c, showSigma, showStatLine, showRes, showErrorBars_);
     c->Modified(); c->Update();
 }
 

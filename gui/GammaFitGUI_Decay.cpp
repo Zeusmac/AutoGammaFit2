@@ -60,6 +60,22 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
         TGGroupFrame* grp = new TGGroupFrame(p, "Fitted Peaks");
         p->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
 
+        // Cache picker — which fit cache provides the peak list
+        TGHorizontalFrame* cacheRow = new TGHorizontalFrame(grp);
+        grp->AddFrame(cacheRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 2));
+        cacheRow->AddFrame(new TGLabel(cacheRow, "Peaks cache:"),
+                           new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        decayCacheCombo_ = new TGComboBox(cacheRow, 804);
+        decayCacheCombo_->Resize(160, 22);
+        cacheRow->AddFrame(decayCacheCombo_,
+                           new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 0, 4, 0, 0));
+        TGTextButton* scanBtn = new TGTextButton(cacheRow, "Scan");
+        cacheRow->AddFrame(scanBtn, new TGLayoutHints(kLHintsCenterY));
+        scanBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecayScanCaches()");
+        scanBtn->SetToolTipText(
+            "Scan fit_caches/ and populate the dropdown.\n"
+            "Select any cache here before clicking Refresh to load its peaks.");
+
         TGHorizontalFrame* row = new TGHorizontalFrame(grp);
         grp->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
         row->AddFrame(new TGLabel(row, "sigma window:"),
@@ -74,6 +90,8 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
         TGTextButton* refreshBtn = new TGTextButton(row, "Refresh");
         row->AddFrame(refreshBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
         refreshBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRefreshDecayPeaks()");
+        refreshBtn->SetToolTipText(
+            "Load peaks from the selected cache (or from the TH2 projection if no cache is chosen).");
 
         TGTextButton* previewBtn = new TGTextButton(row, "Preview");
         row->AddFrame(previewBtn, new TGLayoutHints(kLHintsLeft));
@@ -115,17 +133,15 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
         decayLabelEntry_->SetWidth(120);
         lblRow->AddFrame(decayLabelEntry_, new TGLayoutHints(kLHintsLeft, 0, 8, 0, 0));
 
-        // Class is managed via Isotopes tab "Set Label & Decay"; not assigned here.
-
         TGTextButton* applyLblBtn = new TGTextButton(grp, "Apply Label to Peak");
         grp->AddFrame(applyLblBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
         applyLblBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecayApplyLabel()");
-        applyLblBtn->SetToolTipText("Save label and class to the gamma-projection cache entry for this peak");
+        applyLblBtn->SetToolTipText("Save label and class to the cache entry for this peak");
 
         TGTextButton* loadDecCacheBtn = new TGTextButton(grp, "Load Decay Cache");
         grp->AddFrame(loadDecCacheBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
         loadDecCacheBtn->Connect("Clicked()", "GammaFitGUI", this, "OnLoadDecayCache()");
-        loadDecCacheBtn->SetToolTipText("Reload saved decay fit results for the current TH2");
+        loadDecCacheBtn->SetToolTipText("Reload saved decay fit results (half-lives etc.) for the current TH2");
     }
 
     // ── Model ─────────────────────────────────────────────────────────────────
@@ -261,6 +277,7 @@ void GammaFitGUI::OnDecayTh2Changed(Int_t /*id*/)
     decayPeakEs_.clear();
     decayPeakSigs_.clear();
     decayPeakKeys_.clear();
+    decayPeakCacheNames_.clear();
     decayFitStore_.clear();
     decayGammaProjName_.clear();
     decayPeakList_->RemoveAll();
@@ -312,11 +329,14 @@ void GammaFitGUI::OnLoadDecayCache()
 void GammaFitGUI::OnDecayPeakSelected(Int_t id)
 {
     if (id < 1 || (size_t)id > decayPeakKeys_.size()) return;
-    if (decayGammaProjName_.empty()) return;
+    const std::string& cacheName = (id <= (Int_t)decayPeakCacheNames_.size())
+                                   ? decayPeakCacheNames_[id - 1]
+                                   : decayGammaProjName_;
+    if (cacheName.empty()) return;
 
     // Populate label/class from gamma projection cache
     FitDatabase fdb;
-    fdb.Load(CacheFileFor(decayGammaProjName_));
+    fdb.Load(CacheFileFor(cacheName));
     const auto& entries = fdb.GetEntries();
     auto it = entries.find(decayPeakKeys_[id - 1]);
     if (it != entries.end()) {
@@ -354,30 +374,49 @@ void GammaFitGUI::OnRefreshDecayPeaks()
     decayPeakEs_.clear();
     decayPeakSigs_.clear();
     decayPeakKeys_.clear();
+    decayPeakCacheNames_.clear();
     decayPeakList_->RemoveAll();
 
-    TGLBEntry* selE = decayTh2Combo_->GetSelectedEntry();
-    if (!selE) { AppendLog("[Decay] No TH2 selected"); return; }
-    decayTh2Name_ = selE->GetTitle();
+    // Determine which cache to load peaks from.
+    // Priority: explicitly selected cache combo entry > TH2-derived projection name.
+    std::string peakCacheName;
+    TGLBEntry* cacheSelE = decayCacheCombo_ ? decayCacheCombo_->GetSelectedEntry() : nullptr;
+    if (cacheSelE) {
+        peakCacheName = cacheSelE->GetTitle();
+    } else {
+        // Fall back to auto-derive from selected TH2
+        TGLBEntry* th2SelE = decayTh2Combo_->GetSelectedEntry();
+        if (!th2SelE) { AppendLog("[Decay] No TH2 or cache selected"); return; }
+        decayTh2Name_ = th2SelE->GetTitle();
+        int axisId = decayGammaAxisCombo_->GetSelected();
+        peakCacheName = decayTh2Name_ + (axisId == 1 ? "_px" : "_py");
+    }
 
-    int axisId = decayGammaAxisCombo_->GetSelected();
-    decayGammaProjName_ = decayTh2Name_ + (axisId == 1 ? "_px" : "_py");
+    // Update active TH2 name if it's not already set (needed for projection later)
+    if (decayTh2Name_.empty()) {
+        TGLBEntry* th2SelE = decayTh2Combo_->GetSelectedEntry();
+        if (th2SelE) decayTh2Name_ = th2SelE->GetTitle();
+    }
+
+    decayGammaProjName_ = peakCacheName;
 
     FitDatabase fdb;
-    fdb.Load(CacheFileFor(decayGammaProjName_));
+    fdb.Load(CacheFileFor(peakCacheName));
 
     int listIdx = 1;
     for (const auto& kv : fdb.GetEntries()) {
         const FitEntry& e = kv.second;
         if (e.params.size() < 5) continue;
-        int nPeaks = ((int)e.params.size() - 2) / 3;
-        for (int i = 0; i < nPeaks; i++) {
-            double Ep  = e.params[3 * i + 1];
-            double sig = std::abs(e.params[3 * i + 2]);
-            if (sig <= 0 || sig > 100) continue;
+        FitLayout lay = DetectLayout((int)e.params.size());
+        if (!lay.valid()) continue;
+        for (int i = 0; i < lay.n; i++) {
+            double Ep  = e.params[3*i + 1];
+            double sig = std::abs(e.params[3*i + 2]);
+            if (sig <= 0 || sig > 100 || Ep <= 0) continue;
             decayPeakEs_.push_back(Ep);
             decayPeakSigs_.push_back(sig);
             decayPeakKeys_.push_back(kv.first);
+            decayPeakCacheNames_.push_back(peakCacheName);
             std::string lbl = Form("%.2f keV  (sig=%.3f)", Ep, sig);
             if (!e.label.empty()) lbl = e.label + "  " + lbl;
             if (!e.classification.empty()) lbl += "  [" + e.classification + "]";
@@ -388,8 +427,8 @@ void GammaFitGUI::OnRefreshDecayPeaks()
     decayPeakList_->MapSubwindows();
     decayPeakList_->Layout();
     LoadDecayFitCache();
-    AppendLog(Form("[Decay] %d peaks loaded from cache of %s",
-                   (int)decayPeakEs_.size(), decayGammaProjName_.c_str()));
+    AppendLog(Form("[Decay] %d peaks loaded from cache: %s",
+                   (int)decayPeakEs_.size(), peakCacheName.c_str()));
 }
 
 void GammaFitGUI::OnFitDecay()
@@ -615,11 +654,14 @@ void GammaFitGUI::OnFitDecay()
         std::string suggestedCls = (modelId >= 1 && modelId <= 4) ? kModelCls[modelId] : "";
 
         if (!suggestedCls.empty()) {
-            // Save to gamma projection cache automatically
-            if (!decayGammaProjName_.empty() && peakSel >= 1 &&
+            // Save to the appropriate cache for this peak
+            const std::string& peakCache = (peakSel <= (Int_t)decayPeakCacheNames_.size())
+                                           ? decayPeakCacheNames_[peakSel - 1]
+                                           : decayGammaProjName_;
+            if (!peakCache.empty() && peakSel >= 1 &&
                 (size_t)peakSel <= decayPeakKeys_.size()) {
                 FitDatabase fdb;
-                fdb.Load(CacheFileFor(decayGammaProjName_));
+                fdb.Load(CacheFileFor(peakCache));
                 const auto& ents = fdb.GetEntries();
                 auto eit = ents.find(decayPeakKeys_[peakSel - 1]);
                 if (eit != ents.end()) {
@@ -627,8 +669,8 @@ void GammaFitGUI::OnFitDecay()
                     if (fe.classification.empty())
                         fe.classification = suggestedCls;
                     fdb.ForceStore(decayPeakKeys_[peakSel - 1], fe);
-                    mkdir(kCacheDir, 0755);
-                    fdb.Save(CacheFileFor(decayGammaProjName_));
+                    EnsureCacheDir();
+                    fdb.Save(CacheFileFor(peakCache));
                 }
             }
             decayResultView_->AddLine(
@@ -648,14 +690,14 @@ void GammaFitGUI::OnFitDecay()
 std::string GammaFitGUI::DecayCacheFileFor() const
 {
     if (decayTh2Name_.empty()) return "";
-    return std::string(kCacheDir) + "/decay_fits_" + decayTh2Name_ + ".dat";
+    return CacheDirFor() + "/decay_fits_" + decayTh2Name_ + ".dat";
 }
 
 void GammaFitGUI::SaveDecayFitCache()
 {
     std::string path = DecayCacheFileFor();
     if (path.empty()) return;
-    mkdir(kCacheDir, 0755);
+    EnsureCacheDir();
     std::ofstream out(path);
     if (!out.is_open()) return;
     out << std::fixed << std::setprecision(8);
@@ -794,10 +836,13 @@ void GammaFitGUI::OnDecayApplyLabel()
     if (peakSel < 1 || (size_t)peakSel > decayPeakKeys_.size()) {
         AppendLog("[Decay] Select a peak first"); return;
     }
-    if (decayGammaProjName_.empty()) { AppendLog("[Decay] Refresh first"); return; }
+    const std::string& cacheName = (peakSel <= (Int_t)decayPeakCacheNames_.size())
+                                   ? decayPeakCacheNames_[peakSel - 1]
+                                   : decayGammaProjName_;
+    if (cacheName.empty()) { AppendLog("[Decay] No cache associated with this peak"); return; }
 
     FitDatabase fdb;
-    fdb.Load(CacheFileFor(decayGammaProjName_));
+    fdb.Load(CacheFileFor(cacheName));
     const auto& entries = fdb.GetEntries();
     const std::string& key = decayPeakKeys_[peakSel - 1];
     auto it = entries.find(key);
@@ -812,8 +857,8 @@ void GammaFitGUI::OnDecayApplyLabel()
     if (!e.label.empty() && labelClassMap_.count(e.label))
         e.classification = labelClassMap_.at(e.label);
     fdb.ForceStore(key, e);
-    mkdir(kCacheDir, 0755);
-    fdb.Save(CacheFileFor(decayGammaProjName_));
+    EnsureCacheDir();
+    fdb.Save(CacheFileFor(cacheName));
     AppendLog("[Decay] Saved label=" + e.label + "  class=" + e.classification +
               "  → " + key);
     OnRefreshDecayPeaks();
@@ -856,8 +901,8 @@ void GammaFitGUI::OnMakePeakCountVsTime()
     const double kSqrt2Pi = 2.5066282746310002;
 
     // Open output ROOT file for slice histograms (recreate each run)
-    mkdir(kCacheDir, 0755);
-    std::string sliceRootPath = std::string(kCacheDir) + "/decay_slices_" +
+    EnsureCacheDir();
+    std::string sliceRootPath = CacheDirFor() + "/decay_slices_" +
                                 decayTh2Name_ + Form("_%.2fkeV.root", E);
     TFile* sliceFile = TFile::Open(sliceRootPath.c_str(), "RECREATE");
 
@@ -958,6 +1003,61 @@ void GammaFitGUI::OnDecayRebinReset()
 {
     if (decayRebinEntry_) decayRebinEntry_->SetNumber(1);
     OnPreviewDecay();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OnDecayScanCaches — populate cache picker with all non-decay .dat files
+// ─────────────────────────────────────────────────────────────────────────────
+
+void GammaFitGUI::OnDecayScanCaches()
+{
+    if (!decayCacheCombo_) return;
+    decayCacheCombo_->RemoveAll();
+
+    // Collect histogram names from caches found in both the current per-file
+    // subdirectory and the legacy flat directory.
+    static const std::string kPrefix = "fit_cache_";
+    static const std::string kSuffix = ".dat";
+
+    std::vector<std::string> names;
+    auto scanDir = [&](const std::string& dirPath) {
+        void* d = gSystem->OpenDirectory(dirPath.c_str());
+        if (!d) return;
+        const char* ent;
+        while ((ent = gSystem->GetDirEntry(d)) != nullptr) {
+            std::string n = ent;
+            if (n.size() <= kPrefix.size() + kSuffix.size()) continue;
+            if (n.substr(0, kPrefix.size()) != kPrefix) continue;
+            if (n.substr(n.size() - kSuffix.size()) != kSuffix) continue;
+            // Strip prefix and suffix to get histogram name
+            std::string hname = n.substr(kPrefix.size(),
+                                         n.size() - kPrefix.size() - kSuffix.size());
+            if (!hname.empty()) names.push_back(hname);
+        }
+        gSystem->FreeDirectory(d);
+    };
+
+    scanDir(CacheDirFor());  // current per-file cache dir
+
+    // Also scan legacy flat dir if it differs from the current one
+    std::string legacyDir = (launchDir_.empty() ? std::string(kCacheDir)
+                                                 : launchDir_ + "/" + kCacheDir);
+    if (legacyDir != CacheDirFor()) scanDir(legacyDir);
+
+    // De-duplicate and sort
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+
+    int idx = 1;
+    for (const auto& nm : names)
+        decayCacheCombo_->AddEntry(nm.c_str(), idx++);
+    decayCacheCombo_->MapSubwindows();
+    decayCacheCombo_->Layout();
+
+    if (names.empty())
+        AppendLog("[Decay] No fit caches found — run AutoFit on a histogram first");
+    else
+        AppendLog(Form("[Decay] Found %d cache(s)", (int)names.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

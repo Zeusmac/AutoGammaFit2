@@ -11,6 +11,9 @@ bin/
 
 # Dat files
 *.dat
+*.pdf
+*.png
+
 # Runtime fit cache files
 fit_caches/
 
