@@ -52,19 +52,21 @@ static int SymbolToZ(const std::string& sym) {
     return 0;
 }
 
-// Beta-minus decay chain: given parent (Z0,N0), compute (Z,N) for a class.
-// Each step: Z+1, N-1 (beta-minus emission).
-// Returns false if parent not set or class is not in the beta-minus chain.
+// Beta-minus decay chain: given parent (Z0,N0,A0=Z0+N0), compute (Z,N) for a class.
+// Beta-minus:   Z→Z+1, N→N-1, A unchanged.
+// Beta-minus-n: Z→Z+1, N→N-2, A→A-1  (one neutron also emitted).
+// Beta-minus-2n:Z→Z+1, N→N-3, A→A-2  (two neutrons also emitted).
+// "Granddaughter" and deeper are successive beta-minus products of the daughter.
 static bool ClassZN(const std::string& cls, int Z0, int N0, int& Z, int& N)
 {
     if (Z0 <= 0 || N0 <= 0) return false;
     if      (cls == "Parent")                { Z = Z0;   N = N0;   }
     else if (cls == "Daughter")              { Z = Z0+1; N = N0-1; }
-    else if (cls == "Granddaughter"         ||
-             cls == "Beta-n Daughter")       { Z = Z0+2; N = N0-2; }
-    else if (cls == "Beta-n Granddaughter"  ||
-             cls == "Beta-2n Daughter")      { Z = Z0+3; N = N0-3; }
-    else if (cls == "Beta-2n Granddaughter") { Z = Z0+4; N = N0-4; }
+    else if (cls == "Granddaughter")         { Z = Z0+2; N = N0-2; }
+    else if (cls == "Beta-n Daughter")       { Z = Z0+1; N = N0-2; }  // β⁻n from parent
+    else if (cls == "Beta-2n Daughter")      { Z = Z0+1; N = N0-3; }  // β⁻2n from parent
+    else if (cls == "Beta-n Granddaughter")  { Z = Z0+2; N = N0-3; }  // β⁻n from daughter
+    else if (cls == "Beta-2n Granddaughter") { Z = Z0+2; N = N0-4; }  // β⁻2n from daughter
     else return false;
     return (Z > 0 && N > 0);
 }

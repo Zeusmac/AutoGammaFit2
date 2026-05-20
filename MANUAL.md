@@ -3,14 +3,15 @@
 ## Contents
 1. [Overview](#1-overview)
 2. [Quick Start](#2-quick-start)
-3. [AutoFit Tab](#3-autofit-tab)
-4. [Manual Fit Tab](#4-manual-fit-tab)
-5. [FWHM Tab](#5-fwhm-tab)
-6. [Source Tab](#6-source-tab)
-7. [Fit Results Tab](#7-fit-results-tab)
-8. [Isotopes Tab](#8-isotopes-tab)
-9. [Decay Tab](#9-decay-tab)
-10. [Fitting Models and Mathematics](#10-fitting-models-and-mathematics)
+3. [Keyboard Shortcuts](#3-keyboard-shortcuts)
+4. [AutoFit Tab](#4-autofit-tab)
+5. [Manual Fit Tab](#5-manual-fit-tab)
+6. [FWHM Tab](#6-fwhm-tab)
+7. [Source Tab](#7-source-tab)
+8. [Fit Results Tab](#8-fit-results-tab)
+9. [Isotopes Tab](#9-isotopes-tab)
+10. [Decay Tab](#10-decay-tab)
+11. [Fitting Models and Mathematics](#11-fitting-models-and-mathematics)
     - [10.1 Standard N-Gaussian + Linear Background](#101-standard-n-gaussian--linear-background)
     - [10.2 Quadratic Background](#102-quadratic-background)
     - [10.3 Compton Step Model](#103-compton-step-model)
@@ -68,7 +69,42 @@ cd /path/to/AutoGammaFit && bin/gamma_gui
 
 ---
 
-## 3. AutoFit Tab
+## 3. Keyboard Shortcuts
+
+All shortcuts are global — they fire regardless of which panel or text field currently
+has keyboard focus.
+
+| Default | Action |
+|---------|--------|
+| **Ctrl+P** | Toggle **Choose Peaks** mode (place / remove seed markers on the canvas) |
+| **Ctrl+F** | **Run Fit** — execute Manual Fit on the current peak seeds |
+| **Ctrl+R** | **Run AutoFit (selected)** — fit the selected histogram |
+| **Ctrl+L** | **Load Cache (selected)** — overlay stored fits on the canvas |
+| **Ctrl+K** | **Clear Peaks** — remove all manual peak seed markers |
+| **Ctrl+O** | **Open ROOT File** |
+| **Ctrl+←** | Navigate to the **previous** fitted peak group |
+| **Ctrl+→** | Navigate to the **next** fitted peak group |
+| **Ctrl+B** | Toggle **Show BG curve** overlay |
+| **Ctrl+E** | Toggle **Error Bars** on the histogram |
+| **Ctrl+I** | Toggle **Isotope label** overlays on fitted peaks |
+| **Esc** | Exit **Choose Peaks** mode (does nothing if already inactive) |
+
+### Changing shortcuts
+
+Click **Shortcuts…** (button row above the log panel) to open the shortcut editor.
+Each row shows the action name and the current binding.
+
+- **Rebind** — click the binding button, then press the desired key combination.
+  Ctrl, Shift, and Alt modifiers are captured automatically.
+- **Clear** — removes the binding for that action (shortcut is disabled).
+- **Reset Defaults** — restores all bindings to the factory defaults shown above.
+- **Save** — writes the current bindings to `.agf_shortcuts.conf` in the working
+  directory and registers them immediately. Changes take effect without restarting.
+- **Close** — closes the dialog; unsaved changes are discarded.
+
+---
+
+## 4. AutoFit Tab
 
 AutoFit runs the full automated pipeline: background subtraction → peak finding →
 peak grouping → adaptive multi-peak fitting → cache storage. It operates on one or
@@ -200,7 +236,7 @@ Toggle per-module diagnostic output to the log strip at the bottom of the window
 
 ---
 
-## 4. Manual Fit Tab
+## 5. Manual Fit Tab
 
 Manual fitting gives full analyst control over peak placement, fit range, background
 model, and parameter bounds. It uses MINUIT2 MIGRAD for precise parameter estimation
@@ -460,7 +496,7 @@ Use **+ / −** or the X range boxes to adjust the zoom level.
 
 ---
 
-## 5. FWHM Tab
+## 6. FWHM Tab
 
 Measures and models the detector energy resolution FWHM(E).
 
@@ -494,7 +530,7 @@ FWHM(E)² = a + b·E + c·E²
 
 ---
 
-## 6. Source Tab
+## 7. Source Tab
 
 Calibration and efficiency analysis using a known radioactive source.
 
@@ -589,7 +625,7 @@ to `TH1::GetXaxis()->SetLimits(E_min, E_max)`.
 
 ---
 
-## 7. Fit Results Tab
+## 8. Fit Results Tab
 
 Lists all histograms with cached fits. Selecting an entry redraws the histogram
 with all cached Gaussian overlays, energy labels, and isotope names.
@@ -628,7 +664,7 @@ maxXY × maxXY matrix.
 
 ---
 
-## 8. Isotopes Tab
+## 9. Isotopes Tab
 
 Browse the gamma database and assign isotope labels to fitted peaks.
 
@@ -650,7 +686,7 @@ Classifications are stored per peak label and used in the Decay tab and CSV expo
 
 ---
 
-## 9. Decay Tab
+## 10. Decay Tab
 
 Extracts time-dependent gamma peak intensities from a TH2 histogram (e.g. gamma
 energy on one axis, time-since-beam-stop on the other).
@@ -673,7 +709,7 @@ the fitted Gaussian within ±N·σ of the centroid.
 
 ---
 
-## 10. Fitting Models and Mathematics
+## 11. Fitting Models and Mathematics
 
 ### 10.1 Standard N-Gaussian + Linear Background
 
@@ -1404,7 +1440,7 @@ Sec. 4.5–4.7; [Leo (1994)](#ref-17), Ch. 7*
 
 ---
 
-## 11. Algorithms
+## 12. Algorithms
 
 ### 11.1 AutoFit Pipeline
 
@@ -1509,7 +1545,7 @@ at least 0.05 to be favoured.
 
 ---
 
-## 12. Cache System
+## 13. Cache System
 
 Fit results are stored as plain-text cache files in `fit_caches/<rootfile>/`:
 ```
@@ -1536,7 +1572,7 @@ editor if needed.
 
 ---
 
-## 13. References
+## 14. References
 
 <a id="ref-1"></a>
 1. **MIGRAD minimisation and MINOS errors:**

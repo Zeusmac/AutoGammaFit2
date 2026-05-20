@@ -151,6 +151,18 @@ inline void SetYMaxFromVisible(TH1* h, double margin = 1.30) {
     h->SetMaximum(ymax > 0.0 ? ymax * margin : 1.0);
 }
 
+// Set Y-axis title based on actual bin width — works for both rebinned and
+// original histograms with non-unit bins.
+inline void SetHistYTitle(TH1* h, bool isDecay = false) {
+    double bw = h->GetBinWidth(1);
+    if (bw > 1.01) {
+        const char* unit = isDecay ? "ms" : "keV";
+        h->GetYaxis()->SetTitle(Form("Counts / (%.4g %s)", bw, unit));
+    } else {
+        h->GetYaxis()->SetTitle("Counts");
+    }
+}
+
 inline std::string Fmt(double v, int n = 3) {
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(n) << v;

@@ -392,6 +392,15 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
         nucGammaRefView_ = new TGTextView(gammaRefGrp, 285, 120);
         gammaRefGrp->AddFrame(nucGammaRefView_,
             new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+
+        {
+            TGTextButton* confirmBtn = new TGTextButton(gammaRefGrp, "Confirm Chain → Isotope DB");
+            gammaRefGrp->AddFrame(confirmBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            confirmBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNucConfirmChainToIsoDB()");
+            confirmBtn->SetToolTipText(
+                "Load all gamma lines for the current decay chain into the Isotope DB\n"
+                "used by the Peak Matching tab.  Existing DB entries are preserved.");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -405,10 +414,30 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
         sc->SetContainer(cf);
         TGCompositeFrame* p2 = cf;
 
+        // ── Isotope DB load row ────────────────────────────────────────────
+        {
+            TGGroupFrame* isoDbLoadGrp = new TGGroupFrame(p2, "Isotope Database");
+            p2->AddFrame(isoDbLoadGrp, new TGLayoutHints(kLHintsExpandX, 4, 4, 4, 2));
+
+            TGHorizontalFrame* isoRow = new TGHorizontalFrame(isoDbLoadGrp);
+            isoDbLoadGrp->AddFrame(isoRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 1));
+            TGTextButton* isoBtn = new TGTextButton(isoRow, "Open Isotope DB...");
+            isoRow->AddFrame(isoBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+            isoBtn->Connect("Clicked()", "GammaFitGUI", this, "OnOpenIsotopeDB()");
+            isoBtn->SetToolTipText("Browse for and load an isotope energy database text file");
+            TGTextButton* reloadBtn = new TGTextButton(isoRow, "Reload");
+            isoRow->AddFrame(reloadBtn, new TGLayoutHints(kLHintsLeft));
+            reloadBtn->Connect("Clicked()", "GammaFitGUI", this, "OnReloadIsotopeDB()");
+            reloadBtn->SetToolTipText("Reload the database from the current file");
+
+            isotopeLbl_ = new TGLabel(isoDbLoadGrp, "(not loaded)");
+            isoDbLoadGrp->AddFrame(isotopeLbl_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 2));
+        }
+
         // ── Controls row ──────────────────────────────────────────────────
         {
             TGHorizontalFrame* topRow = new TGHorizontalFrame(p2);
-            p2->AddFrame(topRow, new TGLayoutHints(kLHintsExpandX, 4, 4, 4, 2));
+            p2->AddFrame(topRow, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
 
             TGTextButton* refreshBtn = new TGTextButton(topRow, "Refresh");
             topRow->AddFrame(refreshBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
@@ -644,23 +673,28 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
         nucIsoCombo_->Resize(285, 22);
         p3->AddFrame(nucIsoCombo_, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 4));
 
-        TGTextButton* drawBtn = new TGTextButton(p3, "Draw Level Scheme");
+        TGTextButton* drawBtn = new TGTextButton(p3, "Draw Level Scheme (ROOT canvas)");
         p3->AddFrame(drawBtn, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
-        drawBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNucFetchAll()");
-        drawBtn->SetToolTipText("Draw level scheme for selected isotope");
-        // Note: we reuse OnNucFetchAll as a trigger; actual drawing happens there
-        // OR override with a direct connection if desired:
-        // Actually connect to a lambda-equivalent via a named slot isn't easily
-        // possible in ROOT CINT without a dedicated slot.  Use the Draw button
-        // to call DrawLevelScheme via OnNucReloadCache (which also shows levels).
+        drawBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNucDrawLevelScheme()");
+        drawBtn->SetToolTipText("Draw level scheme for selected isotope on the main canvas");
+
+        TGTextButton* interactBtn = new TGTextButton(p3, "Open Interactive (browser)");
+        p3->AddFrame(interactBtn, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+        interactBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNucOpenInteractive()");
+        interactBtn->SetToolTipText(
+            "Open an interactive Plotly level scheme in your browser.\n"
+            "Requires internet access to load Plotly.js from CDN.\n"
+            "Click levels/gammas to see details.");
 
         TGTextButton* schemBtn2 = new TGTextButton(p3, "Draw Decay Schematic");
-        p3->AddFrame(schemBtn2, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+        p3->AddFrame(schemBtn2, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 6));
         schemBtn2->Connect("Clicked()", "GammaFitGUI", this, "OnIsoDrawSchematic()");
-        schemBtn2->SetToolTipText("Draw the decay chain schematic for the current histogram");
+        schemBtn2->SetToolTipText("Draw the full decay chain schematic for the current histogram");
 
-        p3->AddFrame(new TGLabel(p3, "(Level scheme appears on main canvas)"),
-                     new TGLayoutHints(kLHintsLeft, 4, 4, 4, 2));
+        p3->AddFrame(new TGLabel(p3, "ROOT canvas: level scheme drawn on main view."),
+                     new TGLayoutHints(kLHintsLeft, 4, 4, 4, 0));
+        p3->AddFrame(new TGLabel(p3, "Browser: interactive, click to inspect levels."),
+                     new TGLayoutHints(kLHintsLeft, 4, 4, 0, 4));
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -780,9 +814,11 @@ void GammaFitGUI::OnNucAutoTraceChain()
     int Z = isoParentZval_, N = isoParentNval_;
     int A = Z + N;
 
-    static const char* kChainClasses[] = {
-        "Parent", "Daughter", "Granddaughter",
-        "Beta-n Granddaughter", "Beta-2n Granddaughter"
+    // Main-chain class by step: step 0=Parent, 1=Daughter, 2+=Granddaughter
+    auto chainClass = [](int step) -> const char* {
+        if (step == 0) return "Parent";
+        if (step == 1) return "Daughter";
+        return "Granddaughter";
     };
 
     int step = 0;
@@ -791,7 +827,21 @@ void GammaFitGUI::OnNucAutoTraceChain()
         std::string isoID = std::to_string(A) + sym;
         if (sym == "?" || sym.empty()) break;
 
-        std::string cls = (step < 5) ? kChainClasses[step] : "Granddaughter";
+        // Q-value check: beta-minus Q = ME(Z,A) - ME(Z+1,A).  Skip step if Q < 0.
+        if (ameLoaded_) {
+            auto itP = ameTable_.find({Z, A});
+            auto itD = ameTable_.find({Z+1, A});
+            if (itP != ameTable_.end() && itD != ameTable_.end()) {
+                double Q = itP->second - itD->second;  // keV
+                if (Q < 0.0) {
+                    AppendLog("  " + isoID + "  Q_β⁻ = " + Fmt(Q, 1) +
+                              " keV < 0 — energetically forbidden, stopping.");
+                    break;
+                }
+            }
+        }
+
+        std::string cls = chainClass(step);
         labelClassMap_[isoID] = cls;
 
         bool found = false;
@@ -840,26 +890,33 @@ void GammaFitGUI::OnNucAutoTraceChain()
             break;
         }
 
-        // Beta-n and Beta-2n daughters from NUBASE
+        // Beta-n and Beta-2n products from NUBASE.
+        // β⁻n  daughter: same Z as β⁻ daughter (Z+1), A-1, N-2 from this nucleus.
+        // β⁻2n daughter: same Z as β⁻ daughter (Z+1), A-2, N-3 from this nucleus.
+        // Label as "Daughter" when emitted from Parent (step 0), "Granddaughter" otherwise.
         if (nubaseLoaded_) {
             auto nbit = nubaseTable_.find({Z, A});
             if (nbit != nubaseTable_.end()) {
                 const NubaseEntry& nb = nbit->second;
+                const char* bnCls  = (step == 0) ? "Beta-n Daughter"  : "Beta-n Granddaughter";
+                const char* b2nCls = (step == 0) ? "Beta-2n Daughter" : "Beta-2n Granddaughter";
                 if (nb.brBetaN > 1.0) {
+                    // Z+1 = same proton number as the β⁻ daughter; A-1 = one neutron emitted
                     std::string bnID = std::to_string(A - 1) + NucZToSymbol(Z + 1);
-                    labelClassMap_[bnID] = "Beta-n Daughter";
+                    labelClassMap_[bnID] = bnCls;
                     bool bf = false;
                     for (const auto& id : nucChainIsotopes_) if (id == bnID) { bf = true; break; }
                     if (!bf) nucChainIsotopes_.push_back(bnID);
-                    AppendLog("  Chain[B-n]: " + bnID);
+                    AppendLog("  Chain[B-n]: " + bnID + "  [" + bnCls + "]");
                 }
                 if (nb.brBeta2N > 1.0) {
+                    // Z+1 = same proton number as the β⁻ daughter; A-2 = two neutrons emitted
                     std::string b2nID = std::to_string(A - 2) + NucZToSymbol(Z + 1);
-                    labelClassMap_[b2nID] = "Beta-2n Daughter";
+                    labelClassMap_[b2nID] = b2nCls;
                     bool bf = false;
                     for (const auto& id : nucChainIsotopes_) if (id == b2nID) { bf = true; break; }
                     if (!bf) nucChainIsotopes_.push_back(b2nID);
-                    AppendLog("  Chain[B-2n]: " + b2nID);
+                    AppendLog("  Chain[B-2n]: " + b2nID + "  [" + b2nCls + "]");
                 }
             }
         }
@@ -1165,4 +1222,323 @@ void GammaFitGUI::OnNucLoadNNDCTxt()
               "  (" + std::to_string(iso.gammas.size()) + " gammas, " +
               std::to_string(iso.levels.size()) + " levels)");
     if (nucStatusLbl_) nucStatusLbl_->SetText(("Loaded: " + isoID).c_str());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OnNucDrawLevelScheme — draw on the embedded ROOT canvas
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnNucDrawLevelScheme()
+{
+    if (!nucIsoCombo_) return;
+    TGLBEntry* e = nucIsoCombo_->GetSelectedEntry();
+    if (!e) { AppendLog("[Nuclear] No isotope selected"); return; }
+    std::string isoID = e->GetTitle();
+    if (isoID == "(none)" || isoID.empty()) {
+        AppendLog("[Nuclear] No isotope selected"); return;
+    }
+    if (nuclearDB_.find(isoID) == nuclearDB_.end()) {
+        AppendLog("[Nuclear] No data for " + isoID + " — fetch first");
+        return;
+    }
+    DrawLevelScheme(isoID);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OnNucOpenInteractive — generate Plotly HTML and open in browser
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnNucOpenInteractive()
+{
+    if (!nucIsoCombo_) return;
+    TGLBEntry* e = nucIsoCombo_->GetSelectedEntry();
+    if (!e) { AppendLog("[Nuclear] No isotope selected"); return; }
+    std::string isoID = e->GetTitle();
+    if (isoID == "(none)" || isoID.empty()) {
+        AppendLog("[Nuclear] No isotope selected"); return;
+    }
+    if (nuclearDB_.find(isoID) == nuclearDB_.end()) {
+        AppendLog("[Nuclear] No data for " + isoID + " — fetch first");
+        return;
+    }
+
+    std::string html = GenerateLevelSchemePlotlyHTML(isoID);
+    if (html.empty()) {
+        AppendLog("[Nuclear] Could not generate level scheme for " + isoID);
+        return;
+    }
+
+    std::string outPath = "/tmp/agf_level_scheme_" + isoID + ".html";
+    std::ofstream f(outPath);
+    if (!f.is_open()) {
+        AppendLog("[Nuclear] Cannot write to " + outPath);
+        return;
+    }
+    f << html;
+    f.close();
+
+    std::string cmd = "xdg-open \"" + outPath + "\" &";
+    int ret = system(cmd.c_str());
+    if (ret != 0)
+        AppendLog("[Nuclear] Could not open browser — file saved to " + outPath);
+    else
+        AppendLog("[Nuclear] Opened interactive level scheme: " + outPath);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GenerateLevelSchemePlotlyHTML — build a self-contained Plotly HTML string
+// ─────────────────────────────────────────────────────────────────────────────
+std::string GammaFitGUI::GenerateLevelSchemePlotlyHTML(const std::string& isoID) const
+{
+    auto it = nuclearDB_.find(isoID);
+    if (it == nuclearDB_.end()) return "";
+    const NucIsotope& iso = it->second;
+    if (iso.levels.empty() && iso.gammas.empty()) return "";
+
+    // Sort levels by energy
+    std::vector<NucLevel> levels = iso.levels;
+    std::sort(levels.begin(), levels.end(),
+        [](const NucLevel& a, const NucLevel& b){ return a.energy < b.energy; });
+
+    // Ensure ground state is present
+    if (levels.empty() || levels[0].energy > 1.0) {
+        NucLevel gs; gs.energy = 0.0; gs.jpi = iso.jpi;
+        gs.hl_str = iso.hl_str; gs.halflife_s = iso.halflife_s;
+        levels.insert(levels.begin(), gs);
+    }
+
+    // Cap at 80 levels for readability
+    if (levels.size() > 80) levels.resize(80);
+
+    // Max energy for axis
+    double maxE = 200.0;
+    for (auto& lv : levels) maxE = std::max(maxE, lv.energy);
+    maxE *= 1.12;
+
+    // Helper: find closest level energy within 20 keV tolerance
+    auto closestLevelE = [&](double E) -> double {
+        double best = E; double bestD = 20.0;
+        for (auto& lv : levels) {
+            double d = std::abs(lv.energy - E);
+            if (d < bestD) { bestD = d; best = lv.energy; }
+        }
+        return best;
+    };
+
+    // Escape string for JSON
+    auto jsStr = [](const std::string& s) -> std::string {
+        std::string out;
+        for (char c : s) {
+            if      (c == '"')  out += "\\\"";
+            else if (c == '\\') out += "\\\\";
+            else if (c == '\n') out += "<br>";
+            else                out += c;
+        }
+        return out;
+    };
+
+    std::ostringstream shapes, annots, hx, hy, htxt;
+    shapes << "[";
+    annots << "[";
+    bool firstS = true, firstA = true, firstH = true;
+
+    // ── Level lines ──────────────────────────────────────────────────────────
+    for (auto& lv : levels) {
+        double y = lv.energy;
+
+        // Line shape
+        if (!firstS) shapes << ",";
+        shapes << "{\"type\":\"line\","
+               << "\"x0\":0.04,\"x1\":0.72,"
+               << "\"y0\":" << y << ",\"y1\":" << y << ","
+               << "\"line\":{\"color\":\"#7788cc\",\"width\":2}}";
+        firstS = false;
+
+        // Energy label (left)
+        std::string eStr = (y == 0.0) ? "0 g.s." : Form("%.1f", y);
+        if (!firstA) annots << ",";
+        annots << "{\"x\":0.03,\"y\":" << y << ","
+               << "\"text\":\"" << jsStr(eStr) << "\","
+               << "\"showarrow\":false,\"xanchor\":\"right\","
+               << "\"font\":{\"color\":\"#99aade\",\"size\":9}}";
+        firstA = false;
+
+        // Jpi label (right)
+        std::string jpi = lv.jpi.empty() ? "?" : lv.jpi;
+        std::string hl  = lv.hl_str.empty() ? (y == 0.0 ? iso.hl_str : "?") : lv.hl_str;
+        annots << ",{\"x\":0.74,\"y\":" << y << ","
+               << "\"text\":\"" << jsStr(jpi) << "\","
+               << "\"showarrow\":false,\"xanchor\":\"left\","
+               << "\"font\":{\"color\":\"#ccd4ff\",\"size\":9}}";
+
+        // Hover scatter point
+        if (!firstH) { hx << ","; hy << ","; htxt << ","; }
+        hx   << "0.38";
+        hy   << y;
+        htxt << "\"E=" << Form("%.3f", y) << " keV"
+             << "<br>Jπ=" << jsStr(jpi)
+             << "<br>T½=" << jsStr(hl) << "\"";
+        firstH = false;
+    }
+
+    // ── Gamma arrows ─────────────────────────────────────────────────────────
+    // Group by start level so we can spread x positions
+    std::map<double, std::vector<size_t>> byStart;
+    for (size_t i = 0; i < iso.gammas.size(); i++) {
+        double sl = closestLevelE(iso.gammas[i].start_level);
+        byStart[sl].push_back(i);
+    }
+
+    // Limit total arrows to 120 (keep highest intensity)
+    std::vector<const NucGamma*> sorted;
+    for (auto& gm : iso.gammas) sorted.push_back(&gm);
+    std::sort(sorted.begin(), sorted.end(),
+        [](const NucGamma* a, const NucGamma* b){ return a->intensity > b->intensity; });
+    std::set<size_t> topIdx;
+    for (size_t i = 0; i < std::min((size_t)120, sorted.size()); i++) {
+        topIdx.insert(sorted[i] - iso.gammas.data());
+    }
+
+    for (auto& kv : byStart) {
+        const auto& indices = kv.second;
+        int n = (int)indices.size();
+        for (int j = 0; j < n; j++) {
+            size_t gi = indices[j];
+            if (topIdx.find(gi) == topIdx.end()) continue;
+            const NucGamma& gm = iso.gammas[gi];
+
+            double startE = closestLevelE(gm.start_level);
+            double endE   = closestLevelE(startE - gm.energy);
+            if (startE <= endE + 0.5) continue;
+
+            double xPos  = 0.10 + (n > 1 ? (double)j / (n - 1) * 0.56 : 0.28);
+            double width = std::max(0.8, std::min(5.0, gm.intensity / 20.0));
+            double alpha = std::max(0.25, std::min(1.0, 0.25 + gm.intensity / 70.0));
+
+            std::string color = Form("rgba(255,210,30,%.2f)", alpha);
+            std::string label;
+            if (gm.intensity > 2.0)
+                label = Form("%.1f keV", gm.energy);
+
+            annots << ",{\"x\":" << xPos << ",\"y\":" << endE << ","
+                   << "\"ax\":" << xPos << ",\"ay\":" << startE << ","
+                   << "\"axref\":\"x\",\"ayref\":\"y\","
+                   << "\"arrowhead\":2,\"arrowsize\":1,"
+                   << "\"arrowwidth\":" << Form("%.1f", width) << ","
+                   << "\"arrowcolor\":\"" << color << "\","
+                   << "\"text\":\"" << jsStr(label) << "\","
+                   << "\"font\":{\"color\":\"#ffe060\",\"size\":8},"
+                   << "\"showarrow\":true,"
+                   << "\"hovertext\":\"Eγ=" << Form("%.3f", gm.energy)
+                   << " keV<br>I=" << Form("%.1f", gm.intensity) << "%"
+                   << "<br>from " << Form("%.1f", startE) << " keV\","
+                   << "\"bgcolor\":\"rgba(20,20,40,0.85)\","
+                   << "\"borderpad\":2}";
+        }
+    }
+    shapes << "]";
+    annots << "]";
+
+    std::string title = Form("<sup>%d</sup>%s Level Scheme", iso.A, iso.symbol.c_str());
+    std::string sub   = "Jπ=" + iso.jpi + "  T½=" + iso.hl_str
+                      + Form("  (%d levels, %d γs shown)",
+                             (int)levels.size(),
+                             (int)std::min((size_t)120, iso.gammas.size()));
+
+    std::ostringstream html;
+    html << R"(<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>)" << isoID << R"( Level Scheme</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+<style>body{margin:0;background:#13131f;font-family:sans-serif;}
+#info{position:fixed;bottom:8px;left:8px;color:#556;font-size:11px;}
+</style>
+</head>
+<body>
+<div id="plot" style="width:100%;height:100vh;"></div>
+<div id="info">AutoGammaFit — hover over levels and arrows for details</div>
+<script>
+var trace = {
+  x:[)" << hx.str() << R"(],
+  y:[)" << hy.str() << R"(],
+  text:[)" << htxt.str() << R"(],
+  mode:'markers', type:'scatter',
+  marker:{size:18,opacity:0},
+  hoverinfo:'text',
+  hoverlabel:{bgcolor:'#1e1e3e',bordercolor:'#445',font:{color:'#ddeeff',size:12}},
+  showlegend:false
+};
+var layout = {
+  paper_bgcolor:'#13131f', plot_bgcolor:'#13131f',
+  title:{text:')" << title << "<br><sup>" << jsStr(sub) << R"(</sup>',
+         font:{color:'#c8d8ff',size:15},x:0.5},
+  xaxis:{visible:false,range:[0,1],fixedrange:true},
+  yaxis:{
+    title:{text:'Energy (keV)',font:{color:'#8899bb',size:12},standoff:8},
+    tickfont:{color:'#8899bb',size:10},
+    gridcolor:'#222233', gridwidth:1,
+    zeroline:true, zerolinecolor:'#3344aa', zerolinewidth:1.5,
+    range:[-)" << maxE * 0.05 << "," << maxE << R"(]
+  },
+  shapes:)" << shapes.str() << R"(,
+  annotations:)" << annots.str() << R"(,
+  margin:{l:65,r:100,t:75,b:40},
+  hovermode:'closest'
+};
+Plotly.newPlot('plot',[trace],layout,
+  {responsive:true,displayModeBar:true,
+   modeBarButtonsToRemove:['lasso2d','select2d']});
+</script>
+</body></html>)";
+
+    return html.str();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OnNucConfirmChainToIsoDB
+// Load all gamma lines for the current decay chain into the Isotope DB (db_).
+// Existing entries are preserved; duplicates (same isotope + energy within
+// 0.1 keV) are skipped so re-clicking is safe.
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnNucConfirmChainToIsoDB()
+{
+    if (nucChainIsotopes_.empty()) {
+        AppendLog("Nuclear: chain is empty — trace a chain first.");
+        return;
+    }
+
+    int nAdded = 0;
+    for (const auto& isoID : nucChainIsotopes_) {
+        auto it = nuclearDB_.find(isoID);
+        if (it == nuclearDB_.end() || !it->second.valid()) continue;
+        const NucIsotope& iso = it->second;
+        if (iso.gammas.empty()) continue;
+
+        for (const auto& gm : iso.gammas) {
+            if (gm.energy <= 0.0) continue;
+            // Skip if already in db_ for this isotope within 0.1 keV
+            bool dup = false;
+            for (const auto& line : db_.db) {
+                if (line.isotope == isoID &&
+                    std::abs(line.energy - gm.energy) < 0.1) { dup = true; break; }
+            }
+            if (dup) continue;
+            GammaLine gl;
+            gl.isotope      = isoID;
+            gl.energy       = gm.energy;
+            gl.intensity    = gm.intensity;
+            gl.hasIntensity = (gm.intensity > 0.0);
+            db_.db.push_back(gl);
+            ++nAdded;
+        }
+    }
+
+    dbLoaded_ = !db_.db.empty();
+    if (isotopeLbl_)
+        isotopeLbl_->SetText(
+            (std::string("Chain DB  (") + std::to_string(db_.db.size()) + " lines)").c_str());
+    PopulateIsoDbList();
+    AppendLog("Confirm Chain: added " + std::to_string(nAdded) +
+              " lines from " + std::to_string(nucChainIsotopes_.size()) +
+              " isotopes to Isotope DB.  Total: " + std::to_string(db_.db.size()) + " lines.");
+    SetStatus("Isotope DB updated from chain.");
 }

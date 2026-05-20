@@ -5,6 +5,8 @@ ClassImp(GammaFitGUI)
 
 #include "TGFileDialog.h"
 #include "TGMsgBox.h"
+#include "KeySymbols.h"
+#include "TVirtualX.h"
 #include "TGTextEntry.h"
 #include "TMath.h"
 #include "TH2.h"
@@ -45,6 +47,7 @@ ClassImp(GammaFitGUI)
 GammaFitGUI::GammaFitGUI(const TGWindow* p, UInt_t w, UInt_t h)
     : TGMainFrame(p, w, h)
     , launchDir_(gSystem->WorkingDirectory())
+    , optDeps_(OptionalDeps::Probe())
 {
     SetWindowName("AutoGammaFit 2.0  —  Interactive Fitting GUI");
     SetCleanup(kDeepCleanup);
@@ -113,6 +116,11 @@ GammaFitGUI::GammaFitGUI(const TGWindow* p, UInt_t w, UInt_t h)
         btnRow->AddFrame(errorBarsBtn_, new TGLayoutHints(kLHintsRight, 2, 2, 1, 1));
         errorBarsBtn_->Connect("Clicked()", "GammaFitGUI", this, "OnToggleErrorBars()");
         errorBarsBtn_->SetToolTipText("Toggle Poisson error bars on all histogram displays");
+
+        TGTextButton* shortcutsBtn = new TGTextButton(btnRow, "  Shortcuts...  ");
+        btnRow->AddFrame(shortcutsBtn, new TGLayoutHints(kLHintsRight, 2, 2, 1, 1));
+        shortcutsBtn->Connect("Clicked()", "GammaFitGUI", this, "OnConfigureShortcuts()");
+        shortcutsBtn->SetToolTipText("View and change keyboard shortcuts");
     }
 
     // Log strip below canvas
@@ -127,26 +135,18 @@ GammaFitGUI::GammaFitGUI(const TGWindow* p, UInt_t w, UInt_t h)
     statusBar_->SetParts(parts, 3);
     AddFrame(statusBar_, new TGLayoutHints(kLHintsBottom | kLHintsExpandX));
 
+    // ── Keyboard shortcuts ────────────────────────────────────────────────────
+    InitShortcuts();
+    LoadShortcuts();
+    ApplyShortcuts();
+
     // ── Finalise ──────────────────────────────────────────────────────────────
     MapSubwindows();
     Resize(GetDefaultSize());
     MapWindow();
 
-    // Load isotope database
-    isotopePath_ = kIsotopeDBDefault;
-    if (db_.Load(isotopePath_)) {
-        dbLoaded_ = true;
-        AppendLog("Isotope DB loaded: " + isotopePath_ +
-                  "  (" + std::to_string(db_.db.size()) + " lines)");
-        isotopeLbl_->SetText(isotopePath_.c_str());
-        PopulateIsoDbList();
-    } else {
-        AppendLog("WARNING: Could not load isotope DB from " +
-                  isotopePath_ + " — matches will be empty");
-        isotopeLbl_->SetText("(not loaded)");
-    }
-
     AppendLog("AutoGammaFit 2.0 GUI ready.  Open a ROOT file to begin.");
+    AppendLog("Optional packages: " + optDeps_.Summary());
     SetStatus("Ready");
 }
 
@@ -160,6 +160,285 @@ GammaFitGUI::~GammaFitGUI()
     delete fwhmTF1_;
     for (TF1* c : fitComponents_) delete c;
     fitComponents_.clear();
+}
+
+Bool_t GammaFitGUI::HandleKey(Event_t* event)
+{
+    if (event->fType != kGKeyPress)
+        return TGMainFrame::HandleKey(event);
+
+    UInt_t keysym = 0;
+    char   buf[2]  = {};
+    gVirtualX->LookupString(event, buf, sizeof(buf), keysym);
+    UInt_t modifier = event->fState & (kKeyControlMask | kKeyShiftMask | kKeyMod1Mask);
+
+    // Capture mode — user clicked a binding button in the shortcuts dialog
+    if (capturingShortcutIdx_ >= 0 &&
+        capturingShortcutIdx_ < (int)shortcuts_.size()) {
+        KbShortcut& s = shortcuts_[capturingShortcutIdx_];
+        s.keysym   = keysym;
+        s.modifier = modifier;
+        if (s.dlgBtn)
+            s.dlgBtn->SetText(KeybindingText(keysym, modifier).c_str());
+        capturingShortcutIdx_ = -1;
+        return kTRUE;
+    }
+
+    // Normal dispatch via shortcuts table
+    for (const auto& s : shortcuts_) {
+        if (s.keysym == 0) continue;
+        if (s.keysym == keysym && s.modifier == modifier) {
+            DispatchShortcut(s.id);
+            return kTRUE;
+        }
+    }
+
+    return TGMainFrame::HandleKey(event);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keyboard shortcut infrastructure
+// ─────────────────────────────────────────────────────────────────────────────
+
+void GammaFitGUI::InitShortcuts()
+{
+    shortcuts_ = {
+        {"choose_peaks",  "Toggle Choose Peaks",     kKey_p,      kKeyControlMask, kKey_p,      kKeyControlMask},
+        {"run_fit",       "Run Fit (Manual)",         kKey_f,      kKeyControlMask, kKey_f,      kKeyControlMask},
+        {"run_autofit",   "Run AutoFit (Selected)",   kKey_r,      kKeyControlMask, kKey_r,      kKeyControlMask},
+        {"load_cache",    "Load Cache (Selected)",    kKey_l,      kKeyControlMask, kKey_l,      kKeyControlMask},
+        {"clear_peaks",   "Clear Peaks",              kKey_k,      kKeyControlMask, kKey_k,      kKeyControlMask},
+        {"open_file",     "Open ROOT File",           kKey_o,      kKeyControlMask, kKey_o,      kKeyControlMask},
+        {"prev_peak",     "Previous Peak",            kKey_Left,   kKeyControlMask, kKey_Left,   kKeyControlMask},
+        {"next_peak",     "Next Peak",                kKey_Right,  kKeyControlMask, kKey_Right,  kKeyControlMask},
+        {"toggle_bg",     "Toggle BG Curve Overlay",  kKey_b,      kKeyControlMask, kKey_b,      kKeyControlMask},
+        {"toggle_errors", "Toggle Error Bars",        kKey_e,      kKeyControlMask, kKey_e,      kKeyControlMask},
+        {"toggle_iso",    "Toggle Isotope Labels",    kKey_i,      kKeyControlMask, kKey_i,      kKeyControlMask},
+        {"exit_peaks",    "Exit Choose-Peaks Mode",   kKey_Escape, 0,               kKey_Escape, 0              },
+    };
+}
+
+void GammaFitGUI::ApplyShortcuts()
+{
+    for (auto& [kc, mod] : boundKeys_)
+        gVirtualX->GrabKey(GetId(), kc, mod, kFALSE);
+    boundKeys_.clear();
+
+    for (const auto& s : shortcuts_) {
+        if (s.keysym == 0) continue;
+        Int_t kc  = (Int_t)gVirtualX->KeysymToKeycode(s.keysym);
+        Int_t mod = (Int_t)s.modifier;
+        gVirtualX->GrabKey(GetId(), kc, mod, kTRUE);
+        boundKeys_.push_back({kc, mod});
+    }
+}
+
+std::string GammaFitGUI::ShortcutsFilePath() const
+{
+    return launchDir_ + "/.agf_shortcuts.conf";
+}
+
+void GammaFitGUI::LoadShortcuts()
+{
+    std::ifstream f(ShortcutsFilePath());
+    if (!f) return;
+    std::map<std::string, std::pair<UInt_t,UInt_t>> loaded;
+    std::string id;
+    unsigned long ks;
+    UInt_t mod;
+    while (f >> id >> std::hex >> ks >> std::dec >> mod)
+        loaded[id] = {(UInt_t)ks, mod};
+    for (auto& s : shortcuts_) {
+        auto it = loaded.find(s.id);
+        if (it != loaded.end()) {
+            s.keysym   = it->second.first;
+            s.modifier = it->second.second;
+        }
+    }
+}
+
+void GammaFitGUI::SaveShortcuts() const
+{
+    std::ofstream f(ShortcutsFilePath());
+    for (const auto& s : shortcuts_)
+        f << s.id << " " << std::hex << s.keysym
+          << " " << std::dec << s.modifier << "\n";
+}
+
+std::string GammaFitGUI::KeybindingText(UInt_t keysym, UInt_t modifier)
+{
+    if (keysym == 0) return "(none)";
+    std::string s;
+    if (modifier & kKeyControlMask) s += "Ctrl+";
+    if (modifier & kKeyShiftMask)   s += "Shift+";
+    if (modifier & kKeyMod1Mask)    s += "Alt+";
+    switch (keysym) {
+        case kKey_Escape:    s += "Esc";   break;
+        case kKey_Left:      s += "Left";  break;
+        case kKey_Right:     s += "Right"; break;
+        case kKey_Up:        s += "Up";    break;
+        case kKey_Down:      s += "Down";  break;
+        case kKey_Return:    s += "Enter"; break;
+        case kKey_Delete:    s += "Del";   break;
+        case kKey_Backspace: s += "Bksp";  break;
+        case kKey_Space:     s += "Space"; break;
+        case kKey_Tab:       s += "Tab";   break;
+        default:
+            if (keysym >= (UInt_t)'a' && keysym <= (UInt_t)'z')
+                s += (char)(keysym - 'a' + 'A');
+            else if (keysym >= (UInt_t)'A' && keysym <= (UInt_t)'Z')
+                s += (char)keysym;
+            else if (keysym >= (UInt_t)'0' && keysym <= (UInt_t)'9')
+                s += (char)keysym;
+            else {
+                std::ostringstream os;
+                os << "0x" << std::hex << keysym;
+                s += os.str();
+            }
+            break;
+    }
+    return s;
+}
+
+void GammaFitGUI::DispatchShortcut(const std::string& id)
+{
+    if      (id == "choose_peaks")  OnTogglePeakPlaceMode();
+    else if (id == "run_fit")       OnManualFit();
+    else if (id == "run_autofit")   OnRunSelected();
+    else if (id == "load_cache")    OnLoadCacheSelected();
+    else if (id == "clear_peaks")   OnClearPeaks();
+    else if (id == "open_file")     OnOpenFile();
+    else if (id == "prev_peak")     OnPrevPeak();
+    else if (id == "next_peak")     OnNextPeak();
+    else if (id == "toggle_bg")     OnToggleShowBgLine();
+    else if (id == "toggle_errors") OnToggleErrorBars();
+    else if (id == "toggle_iso")    OnToggleIsoLabels();
+    else if (id == "exit_peaks")    { if (peakPlaceMode_) OnTogglePeakPlaceMode(); }
+}
+
+void GammaFitGUI::OnConfigureShortcuts()
+{
+    if (shortcutDlg_) { shortcutDlg_->RaiseWindow(); return; }
+
+    shortcutDlg_ = new TGTransientFrame(gClient->GetRoot(), this, 460, 520);
+    shortcutDlg_->SetWindowName("Keyboard Shortcuts");
+    shortcutDlg_->SetCleanup(kDeepCleanup);
+    shortcutDlg_->Connect("CloseWindow()", "GammaFitGUI", this, "OnShortcutDialogClose()");
+
+    // Reset dialog-button pointers from previous open
+    for (auto& s : shortcuts_) { s.dlgBtn = nullptr; s.clearBtn = nullptr; }
+
+    // Scrollable list of shortcuts
+    TGCanvas* sc = new TGCanvas(shortcutDlg_, 450, 360, kSunkenFrame);
+    shortcutDlg_->AddFrame(sc, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 4, 4, 6, 4));
+    TGCompositeFrame* vf = new TGCompositeFrame(sc->GetViewPort(), 1, 1, kVerticalFrame);
+    sc->SetContainer(vf);
+
+    // Header row
+    {
+        TGHorizontalFrame* hdr = new TGHorizontalFrame(vf, 440, 20);
+        vf->AddFrame(hdr, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+        TGLabel* l1 = new TGLabel(hdr, "Action");
+        l1->SetWidth(200);
+        hdr->AddFrame(l1, new TGLayoutHints(kLHintsLeft, 2, 4, 0, 0));
+        TGLabel* l2 = new TGLabel(hdr, "Shortcut");
+        l2->SetWidth(140);
+        hdr->AddFrame(l2, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+    }
+
+    for (auto& s : shortcuts_) {
+        TGHorizontalFrame* row = new TGHorizontalFrame(vf, 440, 26);
+        vf->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+
+        TGLabel* lbl = new TGLabel(row, s.label.c_str());
+        lbl->SetWidth(200);
+        row->AddFrame(lbl, new TGLayoutHints(kLHintsLeft | kLHintsCenterY, 2, 4, 0, 0));
+
+        s.dlgBtn = new TGTextButton(row, KeybindingText(s.keysym, s.modifier).c_str());
+        s.dlgBtn->Resize(140, 22);
+        row->AddFrame(s.dlgBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        s.dlgBtn->Connect("Clicked()", "GammaFitGUI", this, "OnShortcutCaptureNext()");
+        s.dlgBtn->SetToolTipText("Click, then press the desired key combination");
+
+        s.clearBtn = new TGTextButton(row, " Clear ");
+        row->AddFrame(s.clearBtn, new TGLayoutHints(kLHintsLeft, 0, 2, 0, 0));
+        s.clearBtn->Connect("Clicked()", "GammaFitGUI", this, "OnShortcutClear()");
+        s.clearBtn->SetToolTipText("Remove this shortcut binding");
+    }
+
+    // Bottom buttons
+    TGHorizontalFrame* btnRow = new TGHorizontalFrame(shortcutDlg_);
+    shortcutDlg_->AddFrame(btnRow, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 6));
+
+    TGTextButton* resetBtn = new TGTextButton(btnRow, " Reset Defaults ");
+    btnRow->AddFrame(resetBtn, new TGLayoutHints(kLHintsLeft, 2, 4, 2, 2));
+    resetBtn->Connect("Clicked()", "GammaFitGUI", this, "OnShortcutResetDefaults()");
+    resetBtn->SetToolTipText("Restore all shortcuts to their factory defaults");
+
+    TGTextButton* saveBtn = new TGTextButton(btnRow, " Save ");
+    btnRow->AddFrame(saveBtn, new TGLayoutHints(kLHintsRight, 2, 2, 2, 2));
+    saveBtn->Connect("Clicked()", "GammaFitGUI", this, "OnShortcutSave()");
+    saveBtn->SetToolTipText("Apply and save shortcuts to disk");
+
+    TGTextButton* closeBtn = new TGTextButton(btnRow, " Close ");
+    btnRow->AddFrame(closeBtn, new TGLayoutHints(kLHintsRight, 2, 4, 2, 2));
+    closeBtn->Connect("Clicked()", "GammaFitGUI", this, "OnShortcutDialogClose()");
+
+    shortcutDlg_->MapSubwindows();
+    shortcutDlg_->Layout();
+    shortcutDlg_->MapWindow();
+    shortcutDlg_->CenterOnParent();
+}
+
+void GammaFitGUI::OnShortcutCaptureNext()
+{
+    TGTextButton* btn = (TGTextButton*)gTQSender;
+    for (int i = 0; i < (int)shortcuts_.size(); i++) {
+        if (shortcuts_[i].dlgBtn == btn) {
+            capturingShortcutIdx_ = i;
+            btn->SetText("Press a key...");
+            return;
+        }
+    }
+}
+
+void GammaFitGUI::OnShortcutClear()
+{
+    TGTextButton* btn = (TGTextButton*)gTQSender;
+    for (auto& s : shortcuts_) {
+        if (s.clearBtn == btn) {
+            s.keysym   = 0;
+            s.modifier = 0;
+            if (s.dlgBtn) s.dlgBtn->SetText("(none)");
+            return;
+        }
+    }
+}
+
+void GammaFitGUI::OnShortcutResetDefaults()
+{
+    capturingShortcutIdx_ = -1;
+    for (auto& s : shortcuts_) {
+        s.keysym   = s.defKeysym;
+        s.modifier = s.defModifier;
+        if (s.dlgBtn)
+            s.dlgBtn->SetText(KeybindingText(s.keysym, s.modifier).c_str());
+    }
+}
+
+void GammaFitGUI::OnShortcutSave()
+{
+    capturingShortcutIdx_ = -1;
+    ApplyShortcuts();
+    SaveShortcuts();
+    AppendLog("Keyboard shortcuts saved to " + ShortcutsFilePath());
+}
+
+void GammaFitGUI::OnShortcutDialogClose()
+{
+    capturingShortcutIdx_ = -1;
+    for (auto& s : shortcuts_) { s.dlgBtn = nullptr; s.clearBtn = nullptr; }
+    shortcutDlg_ = nullptr;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -202,21 +481,6 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
     fileLbl_ = new TGLabel(fg, "No file loaded");
     fg->AddFrame(fileLbl_, new TGLayoutHints(kLHintsLeft, 4, 4, 0, 4));
 
-    {
-        TGHorizontalFrame* isoRow = new TGHorizontalFrame(fg);
-        fg->AddFrame(isoRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 2));
-        TGTextButton* isoBtn = new TGTextButton(isoRow, "Open Isotope DB...");
-        isoRow->AddFrame(isoBtn, new TGLayoutHints(kLHintsExpandX, 0, 2, 0, 0));
-        isoBtn->Connect("Clicked()", "GammaFitGUI", this, "OnOpenIsotopeDB()");
-        isoBtn->SetToolTipText("Browse for and load a new isotope energy database text file");
-        TGTextButton* reloadBtn = new TGTextButton(isoRow, "Reload DB");
-        isoRow->AddFrame(reloadBtn, new TGLayoutHints(kLHintsLeft));
-        reloadBtn->Connect("Clicked()", "GammaFitGUI", this, "OnReloadIsotopeDB()");
-        reloadBtn->SetToolTipText("Reload the isotope database from the current file and refresh all isotope matches");
-    }
-
-    isotopeLbl_ = new TGLabel(fg, "(not loaded)");
-    fg->AddFrame(isotopeLbl_, new TGLayoutHints(kLHintsLeft, 4, 4, 0, 4));
 
     // ── Histogram list ────────────────────────────────────────────────────────
     TGGroupFrame* hg = new TGGroupFrame(p, "Histograms");
@@ -327,6 +591,14 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
         "so you can see what gets subtracted.");
     showBgLineChk_->Connect("Clicked()", "GammaFitGUI", this, "OnToggleShowBgLine()");
 
+    showNegBinsChk_ = new TGCheckButton(bgGrpAuto, "Highlight negative bins (red)");
+    showNegBinsChk_->SetState(kButtonDown);
+    bgGrpAuto->AddFrame(showNegBinsChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 2));
+    showNegBinsChk_->SetToolTipText(
+        "Fill bins with negative content in red.\n"
+        "Useful after histogram subtraction to spot over-subtracted regions.");
+    showNegBinsChk_->Connect("Clicked()", "GammaFitGUI", this, "OnToggleNegBinsRed()");
+
     {
         TGHorizontalFrame* btnRow = new TGHorizontalFrame(bgGrpAuto);
         bgGrpAuto->AddFrame(btnRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 4));
@@ -378,6 +650,61 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
         tspecThreshEntry_->GetNumberEntry()->SetToolTipText(
             "Minimum peak height as a fraction of the tallest peak (0.001–0.99).\n"
             "Lower = finds weaker peaks. Default 0.02 = peaks ≥ 2% of max.");
+    }
+
+    // ── Rebin Histogram ───────────────────────────────────────────────────────
+    TGGroupFrame* rbg = new TGGroupFrame(p, "Rebin Histogram");
+    p->AddFrame(rbg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
+
+    {
+        TGHorizontalFrame* r1 = new TGHorizontalFrame(rbg);
+        rbg->AddFrame(r1, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+        r1->AddFrame(new TGLabel(r1, "Rebin Factor:"),
+                     new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+        rebinEntry_ = new TGNumberEntry(r1, 1, 4, -1,
+            TGNumberFormat::kNESInteger,
+            TGNumberFormat::kNEAPositive,
+            TGNumberFormat::kNELLimitMinMax, 1, 1000);
+        rebinEntry_->SetWidth(60);
+        r1->AddFrame(rebinEntry_, new TGLayoutHints(kLHintsLeft));
+        rebinEntry_->GetNumberEntry()->SetToolTipText(
+            "Merge N bins into one. 1 = no rebin. Stored per histogram in metadata.");
+    }
+    {
+        TGHorizontalFrame* r2 = new TGHorizontalFrame(rbg);
+        rbg->AddFrame(r2, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 4));
+        TGTextButton* prevBtn = new TGTextButton(r2, " Preview ");
+        r2->AddFrame(prevBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        prevBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRebinPreview()");
+        prevBtn->SetToolTipText("Show rebinned histogram on canvas without storing the factor");
+        TGTextButton* applyBtn = new TGTextButton(r2, " Apply ");
+        r2->AddFrame(applyBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        applyBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRebinApply()");
+        applyBtn->SetToolTipText("Store this rebin factor for the selected histogram (saved to cache metadata)");
+        TGTextButton* resetBtn = new TGTextButton(r2, " Reset ");
+        r2->AddFrame(resetBtn, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
+        resetBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRebinReset()");
+        resetBtn->SetToolTipText("Remove stored rebin factor and redisplay at original binning");
+    }
+
+    // ── S/N Pre-screen ────────────────────────────────────────────────────────
+    TGGroupFrame* sng = new TGGroupFrame(p, "S/N Pre-screen (AutoFit)");
+    p->AddFrame(sng, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
+
+    {
+        TGHorizontalFrame* r = new TGHorizontalFrame(sng);
+        sng->AddFrame(r, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        r->AddFrame(new TGLabel(r, "Min S/N ratio:"),
+                    new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+        snThreshEntry_ = new TGNumberEntry(r, 0.0, 6, -1,
+            TGNumberFormat::kNESRealOne,
+            TGNumberFormat::kNEAAnyNumber,
+            TGNumberFormat::kNELLimitMin, 0.0);
+        r->AddFrame(snThreshEntry_, new TGLayoutHints(kLHintsLeft));
+        snThreshEntry_->GetNumberEntry()->SetToolTipText(
+            "Minimum S/N for a peak group to be fitted (0 = all groups fitted).\n"
+            "S/N = signal in peak window / sqrt(scaled sideband noise).\n"
+            "Set to 3-5 to suppress weak/spurious peaks.");
     }
 
     // ── Run ───────────────────────────────────────────────────────────────────
@@ -528,61 +855,6 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
             "Creates: result = source - scale * background\n"
             "Sumw2() is applied so error bars are correctly propagated.\n"
             "Tag source histograms as 'Background' type to populate the background list.");
-    }
-
-    // ── Rebin Histogram ───────────────────────────────────────────────────────
-    TGGroupFrame* rbg = new TGGroupFrame(p, "Rebin Histogram");
-    p->AddFrame(rbg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
-
-    {
-        TGHorizontalFrame* r1 = new TGHorizontalFrame(rbg);
-        rbg->AddFrame(r1, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        r1->AddFrame(new TGLabel(r1, "Rebin Factor:"),
-                     new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
-        rebinEntry_ = new TGNumberEntry(r1, 1, 4, -1,
-            TGNumberFormat::kNESInteger,
-            TGNumberFormat::kNEAPositive,
-            TGNumberFormat::kNELLimitMinMax, 1, 1000);
-        rebinEntry_->SetWidth(60);
-        r1->AddFrame(rebinEntry_, new TGLayoutHints(kLHintsLeft));
-        rebinEntry_->GetNumberEntry()->SetToolTipText(
-            "Merge N bins into one. 1 = no rebin. Stored per histogram in metadata.");
-    }
-    {
-        TGHorizontalFrame* r2 = new TGHorizontalFrame(rbg);
-        rbg->AddFrame(r2, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 4));
-        TGTextButton* prevBtn = new TGTextButton(r2, " Preview ");
-        r2->AddFrame(prevBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-        prevBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRebinPreview()");
-        prevBtn->SetToolTipText("Show rebinned histogram on canvas without storing the factor");
-        TGTextButton* applyBtn = new TGTextButton(r2, " Apply ");
-        r2->AddFrame(applyBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-        applyBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRebinApply()");
-        applyBtn->SetToolTipText("Store this rebin factor for the selected histogram (saved to cache metadata)");
-        TGTextButton* resetBtn = new TGTextButton(r2, " Reset ");
-        r2->AddFrame(resetBtn, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
-        resetBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRebinReset()");
-        resetBtn->SetToolTipText("Remove stored rebin factor and redisplay at original binning");
-    }
-
-    // ── S/N Pre-screen ────────────────────────────────────────────────────────
-    TGGroupFrame* sng = new TGGroupFrame(p, "S/N Pre-screen (AutoFit)");
-    p->AddFrame(sng, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
-
-    {
-        TGHorizontalFrame* r = new TGHorizontalFrame(sng);
-        sng->AddFrame(r, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
-        r->AddFrame(new TGLabel(r, "Min S/N ratio:"),
-                    new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
-        snThreshEntry_ = new TGNumberEntry(r, 0.0, 6, -1,
-            TGNumberFormat::kNESRealOne,
-            TGNumberFormat::kNEAAnyNumber,
-            TGNumberFormat::kNELLimitMin, 0.0);
-        r->AddFrame(snThreshEntry_, new TGLayoutHints(kLHintsLeft));
-        snThreshEntry_->GetNumberEntry()->SetToolTipText(
-            "Minimum S/N for a peak group to be fitted (0 = all groups fitted).\n"
-            "S/N = signal in peak window / sqrt(scaled sideband noise).\n"
-            "Set to 3-5 to suppress weak/spurious peaks.");
     }
 
     // ── Efficiency Correction ─────────────────────────────────────────────────
@@ -1383,7 +1655,7 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
     p->AddFrame(lblGrp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
 
     showIsoLabelsChk_ = new TGCheckButton(lblGrp, "Show isotope matches on peaks");
-    showIsoLabelsChk_->SetState(kButtonDown);
+    showIsoLabelsChk_->SetState(kButtonUp);
     lblGrp->AddFrame(showIsoLabelsChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 2, 4));
     showIsoLabelsChk_->SetToolTipText(
         "Show the matched isotope name above each peak energy label.\n"
@@ -1606,6 +1878,8 @@ void GammaFitGUI::PopulateHistWidgets()
     PopulateDecayTh2Combo();
 }
 
+static void DrawNegBinsRed(TH1*, bool);  // defined near DrawOnCanvas below
+
 void GammaFitGUI::OnHistogramSelected(Int_t id)
 {
     if (!inputFile_ || id < 1 || (size_t)id > histNames_.size()) return;
@@ -1688,6 +1962,7 @@ void GammaFitGUI::OnLoadCache()
     ApplyHistStyle(h, currentHist_.c_str());
     if (!currentHist_.empty() && ClassOf(currentHist_) == "Decay")
         h->GetXaxis()->SetTitle("Time (ms)");
+    SetHistYTitle(h, !currentHist_.empty() && ClassOf(currentHist_) == "Decay");
     h->SetLineColor(kBlack);
     h->SetMarkerSize(0);
     if (viewXmin_ < viewXmax_)
@@ -1697,6 +1972,7 @@ void GammaFitGUI::OnLoadCache()
     SetYMaxFromVisible(h);
     h->Draw("hist");
     if (showErrorBars_) h->Draw("E1 same");
+    DrawNegBinsRed(h, showNegBinsRed_);
 
     // Cached fits overlay
     if (!mShowCacheFitsChk_ || mShowCacheFitsChk_->IsDown())
@@ -1957,6 +2233,16 @@ void GammaFitGUI::RunFitOnHistogram(const std::string& hname,
     const std::string& srcPath = overrideFile ? srcRootPath_ : inputPath_;
 
     if (!srcFile) { AppendLog("No ROOT file loaded."); return; }
+
+    // Persist the current rebinEntry_ value so AutoFit always uses what the
+    // user has set — even if they only previewed without clicking Apply.
+    if (!overrideFile && rebinEntry_) {
+        int n = (int)rebinEntry_->GetNumber();
+        if (n > 1)
+            rebinFactors_[hname] = n;
+        else
+            rebinFactors_.erase(hname);
+    }
 
     currentHist_ = hname;
     if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
@@ -3215,19 +3501,7 @@ void GammaFitGUI::RedrawView()
     h->SetMarkerSize(0);
     h->SetStats(0);
 
-    // Y-axis title: update when rebinned
-    if (!currentHist_.empty()) {
-        auto rbit = rebinFactors_.find(currentHist_);
-        if (rbit != rebinFactors_.end() && rbit->second > 1) {
-            double binW = h->GetBinWidth(1);
-            if (ClassOf(currentHist_) == "Decay")
-                h->GetYaxis()->SetTitle(Form("Counts / (%.4g ms)", binW));
-            else
-                h->GetYaxis()->SetTitle(Form("Counts / (%.4g keV)", binW));
-        } else {
-            h->GetYaxis()->SetTitle("Counts");
-        }
-    }
+    SetHistYTitle(h, !currentHist_.empty() && ClassOf(currentHist_) == "Decay");
 
     if (viewXmin_ < viewXmax_)
         h->GetXaxis()->SetRangeUser(viewXmin_, viewXmax_);
@@ -3236,6 +3510,7 @@ void GammaFitGUI::RedrawView()
     SetYMaxFromVisible(h);
     h->Draw("hist");
     if (showErrorBars_) h->Draw("E1 same");
+    DrawNegBinsRed(h, showNegBinsRed_);
 
     // TSpectrum BG curve overlay (drawn on top of raw or BG-sub histogram)
     if (showBgLine_ && rawHist_) {
@@ -3500,6 +3775,9 @@ TH1* GammaFitGUI::MakeBgSubHist(TH1* raw, bool doSubtract, int iterations)
     h->SetDirectory(0);
     if (!h->GetSumw2N()) h->Sumw2();
     if (doSubtract) {
+        // TSpectrum::Background requires non-negative bins — floor before passing
+        for (int b = 1; b <= h->GetNbinsX(); b++)
+            if (h->GetBinContent(b) < 0) h->SetBinContent(b, 0);
         TSpectrum sp;
         TH1* bkg = sp.Background(h, iterations);
         if (bkg) h->Add(bkg, -1);
@@ -3511,8 +3789,14 @@ TH1* GammaFitGUI::GetTSpectrumBg(TH1* raw, int iterations)
 {
     if (!raw) return nullptr;
     if (iterations < 1) iterations = 14;
+    // TSpectrum::Background requires non-negative bins — work on a floored clone
+    TH1* floored = (TH1*)raw->Clone(Form("%s_floored_gui", raw->GetName()));
+    floored->SetDirectory(nullptr);
+    for (int b = 1; b <= floored->GetNbinsX(); b++)
+        if (floored->GetBinContent(b) < 0) floored->SetBinContent(b, 0);
     TSpectrum sp;
-    TH1* bkg = sp.Background(raw, iterations);
+    TH1* bkg = sp.Background(floored, iterations);
+    delete floored;
     if (!bkg) return nullptr;
     TH1* result = (TH1*)bkg->Clone(Form("%s_bgcurve_gui", raw->GetName()));
     result->SetDirectory(nullptr);
@@ -3538,6 +3822,18 @@ void GammaFitGUI::OnToggleErrorBars()
 void GammaFitGUI::OnToggleShowBgLine()
 {
     showBgLine_ = showBgLineChk_ && showBgLineChk_->IsOn();
+    if (!rawHist_) return;
+    if (!residualsOn_) {
+        TCanvas* c = canvas_->GetCanvas();
+        double ux1 = c->GetUxmin(), ux2 = c->GetUxmax();
+        if (ux1 < ux2) { viewXmin_ = ux1; viewXmax_ = ux2; }
+    }
+    RedrawView();
+}
+
+void GammaFitGUI::OnToggleNegBinsRed()
+{
+    showNegBinsRed_ = showNegBinsChk_ && showNegBinsChk_->IsOn();
     if (!rawHist_) return;
     if (!residualsOn_) {
         TCanvas* c = canvas_->GetCanvas();
@@ -3943,19 +4239,7 @@ void GammaFitGUI::OnHistViewChanged(Int_t id)
     h->SetLineColor(kBlack);
     h->SetMarkerSize(0);
 
-    // Y-axis title: update when rebinned
-    if (!currentHist_.empty()) {
-        auto rbit = rebinFactors_.find(currentHist_);
-        if (rbit != rebinFactors_.end() && rbit->second > 1) {
-            double binW = h->GetBinWidth(1);
-            if (ClassOf(currentHist_) == "Decay")
-                h->GetYaxis()->SetTitle(Form("Counts / (%.4g ms)", binW));
-            else
-                h->GetYaxis()->SetTitle(Form("Counts / (%.4g keV)", binW));
-        } else {
-            h->GetYaxis()->SetTitle("Counts");
-        }
-    }
+    SetHistYTitle(h, !currentHist_.empty() && ClassOf(currentHist_) == "Decay");
 
     if (viewXmin_ < viewXmax_)
         h->GetXaxis()->SetRangeUser(viewXmin_, viewXmax_);
@@ -3964,6 +4248,7 @@ void GammaFitGUI::OnHistViewChanged(Int_t id)
     SetYMaxFromVisible(h);
     h->Draw("hist");
     if (showErrorBars_) h->Draw("E1 same");
+    DrawNegBinsRed(h, showNegBinsRed_);
 
     // TSpectrum BG curve overlay
     if (showBgLine_ && rawHist_) {
@@ -5719,6 +6004,29 @@ void GammaFitGUI::UpdatePeakStats(TF1* f, TH1* h, double xlo, double xhi,
     peakStatsView_->Layout();
 }
 
+// Overlay bins with negative content in red (drawn on top of existing histogram).
+static void DrawNegBinsRed(TH1* h, bool enabled)
+{
+    if (!enabled) return;
+    bool hasNeg = false;
+    for (int b = 1; b <= h->GetNbinsX(); b++)
+        if (h->GetBinContent(b) < 0) { hasNeg = true; break; }
+    if (!hasNeg) return;
+    TH1* neg = (TH1*)h->Clone("_neg_overlay_gui_");
+    neg->SetDirectory(nullptr);
+    neg->Reset();
+    for (int b = 1; b <= h->GetNbinsX(); b++) {
+        double v = h->GetBinContent(b);
+        if (v < 0) neg->SetBinContent(b, v);
+    }
+    neg->SetFillColor(kRed);
+    neg->SetFillStyle(1001);
+    neg->SetLineColor(kRed);
+    neg->SetStats(0);
+    neg->SetBit(kCanDelete);
+    neg->Draw("hist same");
+}
+
 void GammaFitGUI::DrawOnCanvas(TH1* h, TF1* fit)
 {
     if (!h) return;
@@ -5799,23 +6107,12 @@ void GammaFitGUI::DrawOnCanvas(TH1* h, TF1* fit)
     h->SetMarkerSize(0);
     h->SetStats(0);
 
-    // Y-axis title: update when rebinned
-    if (!currentHist_.empty()) {
-        auto rbit = rebinFactors_.find(currentHist_);
-        if (rbit != rebinFactors_.end() && rbit->second > 1) {
-            double binW = h->GetBinWidth(1);
-            if (ClassOf(currentHist_) == "Decay")
-                h->GetYaxis()->SetTitle(Form("Counts / (%.4g ms)", binW));
-            else
-                h->GetYaxis()->SetTitle(Form("Counts / (%.4g keV)", binW));
-        } else {
-            h->GetYaxis()->SetTitle("Counts");
-        }
-    }
+    SetHistYTitle(h, !currentHist_.empty() && ClassOf(currentHist_) == "Decay");
 
     SetYMaxFromVisible(h);
     h->Draw("hist");
     if (showErrorBars_) h->Draw("E1 same");
+    DrawNegBinsRed(h, showNegBinsRed_);
 
     // TSpectrum BG curve overlay
     if (showBgLine_ && rawHist_) {

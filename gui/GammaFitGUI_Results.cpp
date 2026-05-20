@@ -180,12 +180,19 @@ void GammaFitGUI::ShowFitResult(const std::string& hname)
     ApplyHistStyle(viewHist_, hname.c_str());
     viewHist_->SetLineColor(kBlack);
     viewHist_->SetMarkerSize(0);
+    SetHistYTitle(viewHist_, ClassOf(hname) == "Decay");
     viewHist_->GetXaxis()->UnZoom();
     SetYMaxFromVisible(viewHist_);
     viewHist_->Draw("hist");
     if (showErrorBars_) viewHist_->Draw("E1 same");
 
     OverlayFitPeaks(hname, c);
+
+    // Sync the rebin entry widget to the stored factor for this histogram
+    if (rebinEntry_) {
+        auto rbit = rebinFactors_.find(hname);
+        rebinEntry_->SetNumber(rbit != rebinFactors_.end() ? rbit->second : 1);
+    }
 
     c->Modified(); c->Update();
     gSystem->ProcessEvents();

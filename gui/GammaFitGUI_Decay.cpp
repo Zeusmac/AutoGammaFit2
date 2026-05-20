@@ -13,6 +13,8 @@
 #include "TROOT.h"
 #include "TSystem.h"
 #include "TFile.h"
+#include "TLine.h"
+#include "TLegend.h"
 
 #include <fstream>
 #include <iostream>
@@ -21,6 +23,38 @@
 #include <cmath>
 #include <algorithm>
 #include <sys/stat.h>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// File-scope decay model functions — shared by OnFitDecay and replay code.
+// ─────────────────────────────────────────────────────────────────────────────
+static double DecayModelDaughter(double* x, double* p)
+{
+    double t  = x[0];
+    double A  = p[0], T1 = p[1], T2 = p[2], BG = p[3];
+    if (T1 <= 0 || T2 <= 0) return BG;
+    const double ln2 = 0.6931471805599453;
+    double lP = ln2/T1, lD = ln2/T2;
+    double denom = lD - lP;
+    if (std::abs(denom) < 1e-10 * std::max(lP, lD))
+        return A * lP * t * TMath::Exp(-lP * t) + BG;
+    return A * lD / denom * (TMath::Exp(-lP*t) - TMath::Exp(-lD*t)) + BG;
+}
+
+static double DecayModelGranddaughter(double* x, double* p)
+{
+    double t  = x[0];
+    double A  = p[0], T1 = p[1], T2 = p[2], T3 = p[3], BG = p[4];
+    if (T1 <= 0 || T2 <= 0 || T3 <= 0) return BG;
+    const double ln2 = 0.6931471805599453;
+    double lP = ln2/T1, lD = ln2/T2, lG = ln2/T3;
+    double eps = 1e-10 * std::max({lP, lD, lG});
+    if (std::abs(lD-lP) < eps || std::abs(lG-lP) < eps || std::abs(lG-lD) < eps)
+        return A * TMath::Exp(-lP * t) + BG;
+    double t1 = TMath::Exp(-lP*t) / ((lD-lP) * (lG-lP));
+    double t2 = TMath::Exp(-lD*t) / ((lP-lD) * (lG-lD));
+    double t3 = TMath::Exp(-lG*t) / ((lP-lG) * (lD-lG));
+    return A * lP * lD * lG * (t1 + t2 + t3) + BG;
+}
 
 void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
 {
@@ -138,10 +172,20 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
         applyLblBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecayApplyLabel()");
         applyLblBtn->SetToolTipText("Save label and class to the cache entry for this peak");
 
-        TGTextButton* loadDecCacheBtn = new TGTextButton(grp, "Load Decay Cache");
-        grp->AddFrame(loadDecCacheBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        TGHorizontalFrame* cacheRow2 = new TGHorizontalFrame(grp);
+        grp->AddFrame(cacheRow2, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+
+        TGTextButton* loadDecCacheBtn = new TGTextButton(cacheRow2, "Load Cache");
+        cacheRow2->AddFrame(loadDecCacheBtn,
+                            new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 0, 2, 0, 0));
         loadDecCacheBtn->Connect("Clicked()", "GammaFitGUI", this, "OnLoadDecayCache()");
-        loadDecCacheBtn->SetToolTipText("Reload saved decay fit results (half-lives etc.) for the current TH2");
+        loadDecCacheBtn->SetToolTipText("Reload saved decay fit results for the current TH2");
+
+        TGTextButton* saveDecCacheBtn = new TGTextButton(cacheRow2, "Save Cache");
+        cacheRow2->AddFrame(saveDecCacheBtn,
+                            new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 2, 0, 0, 0));
+        saveDecCacheBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSaveDecayCache()");
+        saveDecCacheBtn->SetToolTipText("Explicitly save all decay fit results for the current TH2");
     }
 
     // ── Model ─────────────────────────────────────────────────────────────────
@@ -317,12 +361,28 @@ void GammaFitGUI::OnLoadDecayCache()
         return;
     }
     LoadDecayFitCache();
-    // Re-select current peak to restore its values from the freshly loaded cache
     if (decayPeakList_) {
         Int_t sel = decayPeakList_->GetSelected();
         if (sel >= 1) OnDecayPeakSelected(sel);
     }
     SetStatus("Decay cache loaded: " + decayTh2Name_);
+}
+
+void GammaFitGUI::OnSaveDecayCache()
+{
+    if (decayTh2Name_.empty()) {
+        AppendLog("[Decay] Run 'Refresh' first to set the active TH2");
+        return;
+    }
+    if (decayFitStore_.empty()) {
+        AppendLog("[Decay] No decay fits in memory to save");
+        return;
+    }
+    SaveDecayFitCache();
+    std::string path = DecayCacheFileFor();
+    AppendLog(Form("[Decay] Saved %d fit(s) → %s",
+                   (int)decayFitStore_.size(), path.c_str()));
+    SetStatus("Decay cache saved: " + decayTh2Name_);
 }
 
 
@@ -334,7 +394,7 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
                                    : decayGammaProjName_;
     if (cacheName.empty()) return;
 
-    // Populate label/class from gamma projection cache
+    // Populate label from gamma projection cache
     FitDatabase fdb;
     fdb.Load(CacheFileFor(cacheName));
     const auto& entries = fdb.GetEntries();
@@ -344,29 +404,177 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
             decayLabelEntry_->SetText(it->second.label.c_str());
     }
 
-    // Restore stored decay fit half-lives, label and class for this peak
-    double E = decayPeakEs_[id - 1];
-    auto fit = decayFitStore_.find(E);
-    if (fit != decayFitStore_.end()) {
-        const DecayFitResult& r = fit->second;
+    double E   = decayPeakEs_[id - 1];
+    double sig = decayPeakSigs_[id - 1];
+
+    // Restore stored decay fit parameters
+    auto fitIt = decayFitStore_.find(E);
+    if (fitIt != decayFitStore_.end()) {
+        const DecayFitResult& r = fitIt->second;
         if (decayModelCombo_) decayModelCombo_->Select(r.model, kFALSE);
-        // Half-life parameter indices depend on model
-        // model 1: [A, T_P, BG]  → T_P at index 1
-        // model 2: [A, T_P, T_D, BG] → T_P=1, T_D=2
-        // model 3: [A, T_P, T_D, T_G, BG] → T_P=1, T_D=2, T_G=3
         if (r.params.size() >= 2 && decayThalfP_)
             decayThalfP_->SetNumber(r.params[1]);
         if (r.params.size() >= 3 && r.model >= 2 && decayThalfD_)
             decayThalfD_->SetNumber(r.params[2]);
         if (r.params.size() >= 4 && r.model >= 3 && decayThalfG_)
             decayThalfG_->SetNumber(r.params[3]);
-        // Restore label/class from decay cache (overrides gamma proj cache)
         if (!r.label.empty() && decayLabelEntry_)
             decayLabelEntry_->SetText(r.label.c_str());
-        // Restore sigma window
         if (r.Nsig > 0 && decaySigRangeEntry_)
             decaySigRangeEntry_->SetNumber(r.Nsig);
+
+        // ── Replay cached decay fit on canvas ─────────────────────────────────
+        if (inputFile_ && !r.histName.empty()) {
+            TH2* h2 = (TH2*)inputFile_->Get(r.histName.c_str());
+            if (h2) {
+                int axisId = decayGammaAxisCombo_ ? decayGammaAxisCombo_->GetSelected() : 1;
+                TH1* hDecay = nullptr;
+                if (axisId == 1) {
+                    int b1 = h2->GetXaxis()->FindBin(r.eMin);
+                    int b2 = h2->GetXaxis()->FindBin(r.eMax);
+                    hDecay = h2->ProjectionY(Form("hDecayReplay_%.1f", E), b1, b2);
+                } else {
+                    int b1 = h2->GetYaxis()->FindBin(r.eMin);
+                    int b2 = h2->GetYaxis()->FindBin(r.eMax);
+                    hDecay = h2->ProjectionX(Form("hDecayReplay_%.1f", E), b1, b2);
+                }
+
+                if (hDecay && hDecay->GetEntries() > 0) {
+                    hDecay->SetDirectory(nullptr);
+                    int rebin = decayRebinEntry_ ? (int)decayRebinEntry_->GetNumber() : 1;
+                    if (rebin > 1) hDecay->Rebin(rebin);
+
+                    double tLo = std::max(0.0, hDecay->GetXaxis()->GetXmin());
+                    double tHi = hDecay->GetXaxis()->GetXmax();
+                    hDecay->GetXaxis()->SetRangeUser(tLo, tHi);
+                    hDecay->GetXaxis()->SetTitle("Time (ms)");
+                    hDecay->GetYaxis()->SetTitle("Counts");
+                    hDecay->SetLineColor(kBlack);
+                    hDecay->SetMarkerSize(0);
+
+                    // Rebuild TF1 from stored model + params
+                    int modelId = r.model;
+                    TF1* fStored = nullptr;
+                    if (modelId == 4) {
+                        fStored = new TF1("fDecayReplayBG", "[0]", tLo, tHi);
+                    } else if (modelId == 1) {
+                        fStored = new TF1("fDecayReplayP",
+                            "[0]*exp(-0.6931471805599453*x/[1]) + [2]", tLo, tHi);
+                    } else if (modelId == 2) {
+                        fStored = new TF1("fDecayReplayD",
+                            DecayModelDaughter, tLo, tHi, 4);
+                    } else {
+                        fStored = new TF1("fDecayReplayG",
+                            DecayModelGranddaughter, tLo, tHi, 5);
+                    }
+
+                    if (fStored && (int)r.params.size() >= fStored->GetNpar()) {
+                        for (int i = 0; i < fStored->GetNpar(); i++)
+                            fStored->SetParameter(i, r.params[i]);
+                        fStored->SetLineColor(kRed);
+                        fStored->SetLineWidth(2);
+
+                        TCanvas* c = canvas_->GetCanvas();
+                        c->Clear(); c->cd();
+                        hDecay->Draw(showErrorBars_ ? "hist E" : "hist");
+                        fStored->Draw("same");
+
+                        // Components
+                        if (modelId != 4) {
+                            int   npar = fStored->GetNpar();
+                            double BG  = fStored->GetParameter(npar - 1);
+                            TF1* fSig = (TF1*)fStored->Clone("fDecayReplaySig");
+                            fSig->FixParameter(npar - 1, 0.0);
+                            fSig->SetLineColor(kBlue+1);
+                            fSig->SetLineWidth(1);
+                            fSig->SetLineStyle(2);
+                            fSig->Draw("same");
+
+                            TLine* bgLine = new TLine(tLo, BG, tHi, BG);
+                            bgLine->SetLineColor(kGreen+2);
+                            bgLine->SetLineWidth(2);
+                            bgLine->SetLineStyle(2);
+                            bgLine->Draw();
+
+                            TLegend* leg = new TLegend(0.60, 0.72, 0.92, 0.92);
+                            leg->SetBorderSize(1);
+                            leg->AddEntry(hDecay,  "Data",       "l");
+                            leg->AddEntry(fStored, "Total fit",  "l");
+                            leg->AddEntry(fSig,    "Signal",     "l");
+                            leg->AddEntry(bgLine,  "Background", "l");
+                            leg->Draw();
+                        }
+
+                        c->Modified(); c->Update();
+                        gSystem->ProcessEvents();
+                    }
+
+                    // Update result view with cached values
+                    decayResultView_->Clear();
+                    decayResultView_->AddLine(
+                        Form("Cached fit: E=%.2f keV  window:[%.2f, %.2f]", E, r.eMin, r.eMax));
+                    decayResultView_->AddLine(
+                        Form("Model: %d  chi2/ndf=%.4g  status=%d", r.model, r.chi2ndf, r.status));
+                    if (fStored) {
+                        for (int i = 0; i < fStored->GetNpar(); i++) {
+                            decayResultView_->AddLine(
+                                Form("  par[%d] = %11.5g +/- %.4g",
+                                     i, r.params[i],
+                                     (i < (int)r.errors.size()) ? r.errors[i] : 0.0));
+                        }
+                    }
+                    decayResultView_->ShowBottom();
+                    SetStatus(Form("Cached decay fit: E=%.2f keV  chi2/ndf=%.3f", E, r.chi2ndf));
+                } else {
+                    delete hDecay;
+                }
+            }
+        }
+        return;  // done — fit was replayed, no need for gamma preview
     }
+
+    // ── No stored fit — show gamma cut preview ────────────────────────────────
+    if (!inputFile_ || decayTh2Name_.empty()) return;
+
+    double Nsig = decaySigRangeEntry_ ? decaySigRangeEntry_->GetNumber() : 1.0;
+    double eMin = E - Nsig * sig;
+    double eMax = E + Nsig * sig;
+
+    TH2* h2 = (TH2*)inputFile_->Get(decayTh2Name_.c_str());
+    if (!h2) return;
+
+    int axisId = decayGammaAxisCombo_ ? decayGammaAxisCombo_->GetSelected() : 1;
+    TH1* hGamma = (axisId == 1)
+        ? h2->ProjectionX(Form("hGamPreview_%.1f", E))
+        : h2->ProjectionY(Form("hGamPreview_%.1f", E));
+    if (!hGamma || hGamma->GetEntries() == 0) { delete hGamma; return; }
+    hGamma->SetDirectory(nullptr);
+
+    hGamma->GetXaxis()->SetRangeUser(E - 6.0*sig, E + 6.0*sig);
+    hGamma->GetXaxis()->SetTitle("Energy (keV)");
+    hGamma->GetYaxis()->SetTitle("Counts");
+    hGamma->SetLineColor(kBlack);
+    hGamma->SetMarkerSize(0);
+
+    TCanvas* c = canvas_->GetCanvas();
+    c->Clear(); c->cd();
+    hGamma->Draw("hist");
+    c->Modified(); c->Update();
+
+    double ylo = gPad->GetUymin();
+    double yhi = gPad->GetUymax();
+
+    TLine* lineLo = new TLine(eMin, ylo, eMin, yhi);
+    lineLo->SetLineColor(kRed); lineLo->SetLineWidth(2); lineLo->SetLineStyle(2);
+    lineLo->Draw();
+
+    TLine* lineHi = new TLine(eMax, ylo, eMax, yhi);
+    lineHi->SetLineColor(kRed); lineHi->SetLineWidth(2); lineHi->SetLineStyle(2);
+    lineHi->Draw();
+
+    c->Modified(); c->Update();
+    gSystem->ProcessEvents();
+    SetStatus(Form("Cut preview: %.2f keV  [%.2f, %.2f]  (+/-%.1f sig)", E, eMin, eMax, Nsig));
 }
 
 void GammaFitGUI::OnRefreshDecayPeaks()
@@ -523,20 +731,7 @@ void GammaFitGUI::OnFitDecay()
         if (decayFixP_->IsOn()) fDecay->FixParameter(1, T);
 
     } else if (modelId == 2) {
-        auto lambdaD = [](double* x, double* p) -> double {
-            double t  = x[0];
-            double A  = p[0];
-            double T1 = p[1], T2 = p[2];
-            double BG = p[3];
-            if (T1 <= 0 || T2 <= 0) return BG;
-            const double ln2 = 0.6931471805599453;
-            double lP = ln2 / T1, lD = ln2 / T2;
-            double denom = lD - lP;
-            if (std::abs(denom) < 1e-10 * std::max(lP, lD))
-                return A * lP * t * TMath::Exp(-lP * t) + BG;
-            return A * lD / denom * (TMath::Exp(-lP * t) - TMath::Exp(-lD * t)) + BG;
-        };
-        fDecay = new TF1("fDecayD", lambdaD, xlo, xhi, 4);
+        fDecay = new TF1("fDecayD", DecayModelDaughter, xlo, xhi, 4);
         fDecay->SetParName(0, "A");
         fDecay->SetParName(1, "T_{1/2}^{P}");
         fDecay->SetParName(2, "T_{1/2}^{D}");
@@ -554,23 +749,7 @@ void GammaFitGUI::OnFitDecay()
 
     } else {
         // Granddaughter
-        auto lambdaG = [](double* x, double* p) -> double {
-            double t  = x[0];
-            double A  = p[0];
-            double T1 = p[1], T2 = p[2], T3 = p[3];
-            double BG = p[4];
-            if (T1 <= 0 || T2 <= 0 || T3 <= 0) return BG;
-            const double ln2 = 0.6931471805599453;
-            double lP = ln2/T1, lD = ln2/T2, lG = ln2/T3;
-            double eps = 1e-10 * std::max({lP, lD, lG});
-            if (std::abs(lD-lP) < eps || std::abs(lG-lP) < eps || std::abs(lG-lD) < eps)
-                return A * TMath::Exp(-lP * t) + BG;
-            double t1 = TMath::Exp(-lP*t) / ((lD-lP) * (lG-lP));
-            double t2 = TMath::Exp(-lD*t) / ((lP-lD) * (lG-lD));
-            double t3 = TMath::Exp(-lG*t) / ((lP-lG) * (lD-lG));
-            return A * lP * lD * lG * (t1 + t2 + t3) + BG;
-        };
-        fDecay = new TF1("fDecayG", lambdaG, xlo, xhi, 5);
+        fDecay = new TF1("fDecayG", DecayModelGranddaughter, xlo, xhi, 5);
         fDecay->SetParName(0, "A");
         fDecay->SetParName(1, "T_{1/2}^{P}");
         fDecay->SetParName(2, "T_{1/2}^{D}");
@@ -599,6 +778,37 @@ void GammaFitGUI::OnFitDecay()
 
     hDecay->Draw(showErrorBars_ ? "hist E" : "hist");
     fDecay->Draw("same");
+
+    // ── Draw fit components ────────────────────────────────────────────────────
+    if (modelId != 4) {
+        int   npar = fDecay->GetNpar();
+        double BG  = fDecay->GetParameter(npar - 1);
+
+        // Signal = total - BG (clone the fitted function, zero out BG)
+        TF1* fSig = (TF1*)fDecay->Clone("fDecaySigComp");
+        fSig->FixParameter(npar - 1, 0.0);
+        fSig->SetLineColor(kBlue + 1);
+        fSig->SetLineWidth(1);
+        fSig->SetLineStyle(2);
+        fSig->Draw("same");
+
+        // Background = horizontal line at BG level
+        TLine* bgLine = new TLine(xlo, BG, xhi, BG);
+        bgLine->SetLineColor(kGreen + 2);
+        bgLine->SetLineWidth(2);
+        bgLine->SetLineStyle(2);
+        bgLine->Draw();
+
+        // Legend
+        TLegend* leg = new TLegend(0.60, 0.72, 0.92, 0.92);
+        leg->SetBorderSize(1);
+        leg->AddEntry(hDecay,  "Data",       "l");
+        leg->AddEntry(fDecay,  "Total fit",  "l");
+        leg->AddEntry(fSig,    "Signal",     "l");
+        leg->AddEntry(bgLine,  "Background", "l");
+        leg->Draw();
+    }
+
     c->Modified(); c->Update();
 
     // ── Report ────────────────────────────────────────────────────────────────
@@ -646,6 +856,80 @@ void GammaFitGUI::OnFitDecay()
         }
         decayFitStore_[E] = r;
         SaveDecayFitCache();
+    }
+
+    // ── Peak count estimates ──────────────────────────────────────────────────
+    if (modelId != 4) {  // background-only model has no signal
+        int    npar = fDecay->GetNpar();
+        double A    = fDecay->GetParameter(0);              // amplitude (counts/bin at t=0)
+        double TP   = fDecay->GetParameter(1);              // parent half-life (ms)
+        double BG   = fDecay->GetParameter(npar - 1);       // always last param
+        double binW = hDecay->GetBinWidth(1);               // ms per bin
+        const double ln2 = 0.6931471805599453;
+
+        // ── (1) Counts in fit window ────────────────────────────────────────
+        // ∫[xlo,xhi] (f(t) - BG) dt / binW
+        // BG cancels analytically (∂signal/∂BG = 0), so zero BG row/col in cov.
+        double totalInteg   = fDecay->Integral(xlo, xhi);
+        double windowCounts = (totalInteg - BG * (xhi - xlo)) / binW;
+
+        double windowErr = -1.0;
+        if (fitRes.Get() && fitRes->IsValid()) {
+            const TMatrixDSym& cov = fitRes->GetCovarianceMatrix();
+            if (cov.GetNrows() == npar) {
+                std::vector<double> covMod(npar * npar, 0.0);
+                for (int ii = 0; ii < npar - 1; ii++)
+                    for (int jj = 0; jj < npar - 1; jj++)
+                        covMod[ii * npar + jj] = cov(ii, jj);
+                std::vector<double> pv(npar);
+                for (int ii = 0; ii < npar; ii++) pv[ii] = fDecay->GetParameter(ii);
+                double ie = fDecay->IntegralError(xlo, xhi,
+                                                  pv.data(), covMod.data(), 1e-4);
+                windowErr = ie / binW;
+            }
+        }
+
+        // ── (2) Extrapolated total: N₀ = A · τ_P / binW ────────────────────
+        // For all models (Parent, Daughter, Granddaughter), integrating the
+        // signal from 0 → ∞ gives A · τ_P regardless of daughter half-lives.
+        // This is the total number of peak counts the full decay would produce.
+        double tau       = (TP > 0) ? TP / ln2 : 0.0;
+        double totalN0   = (tau > 0 && binW > 0) ? A * tau / binW : -1.0;
+
+        double totalErr = -1.0;
+        if (totalN0 > 0 && fitRes.Get() && fitRes->IsValid()) {
+            const TMatrixDSym& cov = fitRes->GetCovarianceMatrix();
+            if (cov.GetNrows() == npar && A > 0 && TP > 0) {
+                // σ²(N₀) = (τ/bw)²·σA² + (A/(ln2·bw))²·σTP²
+                //         + 2·(τ/bw)·(A/(ln2·bw))·cov(A,TP)
+                double dA  = tau / binW;             // ∂N₀/∂A
+                double dTP = A / (ln2 * binW);       // ∂N₀/∂TP
+                double varN = dA*dA*cov(0,0)
+                            + dTP*dTP*cov(1,1)
+                            + 2.0*dA*dTP*cov(0,1);
+                if (varN > 0) totalErr = std::sqrt(varN);
+            }
+        }
+
+        decayResultView_->AddLine("─────────────────────────────────");
+        if (windowErr > 0.0)
+            decayResultView_->AddLine(
+                Form("Counts in fit window:         %.0f +/- %.0f", windowCounts, windowErr));
+        else
+            decayResultView_->AddLine(
+                Form("Counts in fit window:         %.0f", windowCounts));
+
+        if (totalN0 > 0) {
+            if (totalErr > 0.0)
+                decayResultView_->AddLine(
+                    Form("Total peak counts (0→∞):     %.0f +/- %.0f", totalN0, totalErr));
+            else
+                decayResultView_->AddLine(
+                    Form("Total peak counts (0→∞):     %.0f", totalN0));
+            decayResultView_->AddLine(
+                Form("  [A=%.4g, T1/2=%.4g ms, tau=%.4g ms, bw=%.4g ms]",
+                     A, TP, tau, binW));
+        }
     }
 
     // Auto-classify and save to gamma projection cache

@@ -27,6 +27,7 @@
 #include "FitDatabase.h"
 #include "Debug.h"
 #include "NuclearData.h"
+#include "OptionalDeps.h"
 
 class TH1;
 class TH2;
@@ -43,6 +44,18 @@ struct CustomProjDef {
     double      lo, hi;  // cut range on the non-projected axis
 };
 
+// Keyboard shortcut descriptor — one per configurable action.
+struct KbShortcut {
+    std::string   id;           // unique action ID, e.g. "choose_peaks"
+    std::string   label;        // human-readable label shown in dialog
+    UInt_t        keysym     = 0;  // current binding (0 = unbound)
+    UInt_t        modifier   = 0;  // current modifier mask (kKeyControlMask etc.)
+    UInt_t        defKeysym  = 0;  // factory default
+    UInt_t        defModifier = 0;
+    TGTextButton* dlgBtn   = nullptr;  // binding button in the shortcuts dialog
+    TGTextButton* clearBtn = nullptr;  // clear button in the shortcuts dialog
+};
+
 struct BgSubtractDef {
     std::string srcName;  // histogram being subtracted from
     std::string bgName;   // background histogram to subtract
@@ -57,17 +70,25 @@ struct SourceLine {
 
 struct PeakTableRow {
     std::string histName;
-    int         histIdx    = 0;
-    double      energy     = 0.0;
-    double      energyErr  = 0.0;
-    double      sigma      = 0.0;
-    double      fwhm       = 0.0;
-    double      area       = 0.0;
-    double      areaErr    = 0.0;
-    double      chi2ndf    = -1.0;
+    int         histIdx      = 0;
+    double      energy       = 0.0;
+    double      energyErr    = 0.0;
+    double      sigma        = 0.0;
+    double      fwhm         = 0.0;
+    double      area         = 0.0;
+    double      areaErr      = 0.0;
+    double      chi2ndf      = -1.0;
+    double      intensity    = 0.0;  // absolute emission probability (0 = not computed)
+    double      intensityErr = 0.0;
     std::string label;
     std::string classification;
     std::string cacheFile;
+};
+
+// Named efficiency fit: ln(ε) = a - b·ln(E) + c·ln(E)² - d/E²
+struct EfficiencyCache {
+    std::string name;
+    double a = 0.0, b = 0.0, c = 0.0, d = 0.0;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,6 +102,8 @@ public:
     explicit GammaFitGUI(const TGWindow* p,
                          UInt_t w = 1400, UInt_t h = 920);
     ~GammaFitGUI() override;
+
+    Bool_t HandleKey(Event_t* event) override;
 
     // ── File & histogram ──────────────────────────────────────────────────────
     void OnOpenFile();
@@ -98,6 +121,7 @@ public:
     void OnResetBgSub();
     void OnApplyBgToCurrent();
     void OnToggleShowBgLine();
+    void OnToggleNegBinsRed();
     void OnTogglePeakClickZoom();
     void OnDeleteHistogram();
     void OnDebugAllOn();
@@ -132,6 +156,7 @@ public:
     void OnDecayApplyLabel();
     void OnMakePeakCountVsTime();
     void OnLoadDecayCache();
+    void OnSaveDecayCache();
     void OnDecayScanCaches();
 
     // ── Histogram classification ──────────────────────────────────────────────
@@ -201,6 +226,8 @@ public:
     void OnIsoDbApply();
 
     // ── Nuclear tab ───────────────────────────────────────────────────────────
+    void OnNucDrawLevelScheme();
+    void OnNucOpenInteractive();
     void OnNucSetParentFromChain();
     void OnNucAutoTraceChain();
     void OnNucFetchAll();
@@ -210,6 +237,7 @@ public:
     void OnNucClearChain();
     void OnNucAddBackground();
     void OnNucLoadNNDCTxt();
+    void OnNucConfirmChainToIsoDB();
 
     // ── Peak Table tab ────────────────────────────────────────────────────────
     void OnPTScanAll();
@@ -217,10 +245,16 @@ public:
     void OnPTRemoveCache();
     void OnPTClearCaches();
     void OnPTRebuildTable();
+    void OnPTRowSelected(Int_t id);
     void OnPTPlot();
     void OnPTExportCSV();
     void LoadPeakCacheIntoTable(const std::string& cachePath,
                                 const std::string& histName);
+    // Intensity / efficiency
+    void OnPTScanEffCaches();
+    void OnPTSaveEffCache();
+    void OnPTEffSelected(Int_t id);
+    void OnPTCalculateIntensity();
 
     // ── FWHM tab ──────────────────────────────────────────────────────────────
     void OnLoadFWHM();
@@ -279,6 +313,14 @@ public:
     void OnApplyTh2Labels();
     void OnApplySrcTh2Labels();
 
+    // ── Keyboard shortcuts configuration ─────────────────────────────────────
+    void OnConfigureShortcuts();
+    void OnShortcutCaptureNext();
+    void OnShortcutClear();
+    void OnShortcutResetDefaults();
+    void OnShortcutSave();
+    void OnShortcutDialogClose();
+
     // ── Utilities ─────────────────────────────────────────────────────────────
     void AppendLog(const std::string& msg);
     void SetStatus(const std::string& msg);
@@ -300,6 +342,7 @@ private:
 
     // ── Run-time state ────────────────────────────────────────────────────────
     std::string  launchDir_;    // CWD at construction — all cache paths anchored here
+    OptionalDeps optDeps_;      // probed once at construction
     TFile*       inputFile_   = nullptr;
     std::string  inputPath_;
     std::vector<std::string> histNames_;
@@ -338,7 +381,9 @@ private:
     TGLabel*       isotopeLbl_       = nullptr;
     TGCheckButton* bgSubtractChk_    = nullptr;
     TGCheckButton* showBgLineChk_    = nullptr;
+    TGCheckButton* showNegBinsChk_   = nullptr;
     bool           showBgLine_       = false;
+    bool           showNegBinsRed_   = true;
     bool           showErrorBars_    = true;
     TGTextButton*  errorBarsBtn_     = nullptr;
     TGNumberEntry* bgIterEntry_      = nullptr;
@@ -473,12 +518,25 @@ private:
     TGTextEntry* ptFilterLabel_ = nullptr;
     TGComboBox*  ptClassFilter_ = nullptr;
     TGComboBox*  ptSortCombo_   = nullptr;
-    TGTextView*  ptTableView_   = nullptr;
+    TGListBox*   ptTableList_   = nullptr;
     TGComboBox*  ptXAxisCombo_  = nullptr;
     TGComboBox*  ptYAxisCombo_  = nullptr;
     TGTextEntry* ptGraphLabel_  = nullptr;
     std::vector<PeakTableRow>   ptRows_;
     std::vector<std::string>    ptLoadedCaches_;
+    std::vector<size_t>         ptFilteredRows_;
+
+    // Intensity calculation widgets
+    TGComboBox*    ptEffCombo_      = nullptr;  // select efficiency cache
+    TGTextEntry*   ptEffNameEntry_  = nullptr;  // name when saving a new cache
+    TGNumberEntry* ptActivityEntry_ = nullptr;  // source activity (Bq)
+    TGNumberEntry* ptTimeEntry_     = nullptr;  // measurement time (s)
+    TGNumberEntry* ptEnergyEntry_   = nullptr;  // peak energy (auto-filled)
+    TGNumberEntry* ptEffValEntry_   = nullptr;  // efficiency at E (auto-filled or manual)
+    TGNumberEntry* ptAreaEntry_     = nullptr;  // peak area (auto-filled)
+    TGNumberEntry* ptAreaErrEntry_  = nullptr;  // peak area error (auto-filled)
+    TGLabel*       ptIntensityLbl_  = nullptr;  // computed intensity result
+    std::vector<EfficiencyCache> ptEffCaches_;  // loaded efficiency fits
 
     // ── Fit Results tab widgets ───────────────────────────────────────────────
     TGListBox*           fitResultsList_ = nullptr;
@@ -543,7 +601,7 @@ private:
     TGTextButton*        markRefitBtn_       = nullptr;  // mark/unmark current peak for refit
     TGCheckButton*       mShowCompChk_     = nullptr;  // show BG + individual Gaussian components
     TGCheckButton*       showIsoLabelsChk_ = nullptr;  // toggle isotope name above peak labels
-    bool                 showIsoLabels_    = true;
+    bool                 showIsoLabels_    = false;
     TGCheckButton*       mBgQuadChk_      = nullptr;  // quadratic background term
     TGCheckButton*       mComptonStepChk_ = nullptr;  // Compton step (Erfc term per peak)
     TGCheckButton*       mTieWidthsChk_   = nullptr;  // tie sigma to resolution model
@@ -705,6 +763,12 @@ private:
     double viewXmin_ = 0.0;
     double viewXmax_ = 0.0;
 
+    // ── Keyboard shortcuts state ──────────────────────────────────────────────
+    std::vector<KbShortcut>              shortcuts_;
+    int                                  capturingShortcutIdx_ = -1;
+    TGTransientFrame*                    shortcutDlg_          = nullptr;
+    std::vector<std::pair<Int_t,Int_t>>  boundKeys_;   // (keycode, modifier) registered
+
     // ── Build helpers ─────────────────────────────────────────────────────────
     void BuildAutoFitTab    (TGCompositeFrame* parent);
     void BuildSourceTab     (TGCompositeFrame* parent);
@@ -716,6 +780,7 @@ private:
     void BuildNuclearTab    (TGCompositeFrame* parent);
     void PopulateHistWidgets();
     std::string NucCacheDirPath() const;
+    std::string GenerateLevelSchemePlotlyHTML(const std::string& isoID) const;
     void PopulateNucGammaRef();
     void RefreshIsoComboHelper(TGComboBox* combo,
                                const std::vector<std::string>& chain,
@@ -798,6 +863,15 @@ private:
     std::string MetadataFileFor() const;
     void        SaveMetadata() const;
     void        LoadMetadata();
+
+    // Keyboard shortcut helpers
+    void        InitShortcuts();
+    void        ApplyShortcuts();
+    void        LoadShortcuts();
+    void        SaveShortcuts() const;
+    void        DispatchShortcut(const std::string& id);
+    std::string ShortcutsFilePath() const;
+    static std::string KeybindingText(UInt_t keysym, UInt_t modifier);
 
     // Returns histogram for hname from inputFile_; creates projection if needed.
     // Sets owned=true when caller must delete the returned pointer.
