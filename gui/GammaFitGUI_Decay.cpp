@@ -25,276 +25,499 @@
 #include <sys/stat.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
-// File-scope decay model functions — shared by OnFitDecay and replay code.
+// File-scope decay model helpers
 // ─────────────────────────────────────────────────────────────────────────────
-static double DecayModelDaughter(double* x, double* p)
-{
-    double t  = x[0];
-    double A  = p[0], T1 = p[1], T2 = p[2], BG = p[3];
-    if (T1 <= 0 || T2 <= 0) return BG;
-    const double ln2 = 0.6931471805599453;
-    double lP = ln2/T1, lD = ln2/T2;
-    double denom = lD - lP;
-    if (std::abs(denom) < 1e-10 * std::max(lP, lD))
-        return A * lP * t * TMath::Exp(-lP * t) + BG;
-    return A * lD / denom * (TMath::Exp(-lP*t) - TMath::Exp(-lD*t)) + BG;
+
+// Map model ID → signal type (1=Parent, 2=Daughter, 3=Granddaughter, 4=BGonly)
+static int DecaySignalType(int modelId) {
+    if (modelId == 4) return 4;
+    if (modelId == 1) return 1;
+    if (modelId == 2 || modelId == 5 || modelId == 6) return 2;
+    if (modelId == 3 || modelId == 7 || modelId == 8) return 3;
+    return 1;
+}
+// Number of signal parameters (not counting BG)
+static int DecaySigNpar(int sigType) {
+    switch (sigType) {
+        case 1: return 2;  // A, T_P
+        case 2: return 3;  // A, T_P, T_D
+        case 3: return 4;  // A, T_P, T_D, T_G
+        default: return 0; // BG only
+    }
+}
+// Number of BG parameters
+static int DecayBGNpar(int bgType) {
+    if (bgType == 2) return 3;  // BG_flat, A_bg, T_bg
+    if (bgType == 3) return 2;  // A_bg, T_bg
+    return 1;                   // flat: BG
 }
 
-static double DecayModelGranddaughter(double* x, double* p)
+// Factory: build a TF1 for any (modelId, bgType) combination.
+// Parameter layout: [signal params...] [BG params...]
+//   signal params: sig==1 → A, T_P
+//                  sig==2 → A, T_P, T_D
+//                  sig==3 → A, T_P, T_D, T_G
+//                  sig==4 → (none)
+//   BG params:     bgType==1 → BG
+//                  bgType==2 → BG_flat, A_bg, T_bg
+//                  bgType==3 → A_bg, T_bg
+static TF1* BuildDecayTF1(const char* name, int modelId, int bgType,
+                           double xlo, double xhi)
 {
-    double t  = x[0];
-    double A  = p[0], T1 = p[1], T2 = p[2], T3 = p[3], BG = p[4];
-    if (T1 <= 0 || T2 <= 0 || T3 <= 0) return BG;
+    const int  sig  = DecaySignalType(modelId);
+    const int  nSig = DecaySigNpar(sig);
+    const int  nBG  = DecayBGNpar(bgType);
+    const int  npar = nSig + nBG;
     const double ln2 = 0.6931471805599453;
-    double lP = ln2/T1, lD = ln2/T2, lG = ln2/T3;
-    double eps = 1e-10 * std::max({lP, lD, lG});
-    if (std::abs(lD-lP) < eps || std::abs(lG-lP) < eps || std::abs(lG-lD) < eps)
-        return A * TMath::Exp(-lP * t) + BG;
-    double t1 = TMath::Exp(-lP*t) / ((lD-lP) * (lG-lP));
-    double t2 = TMath::Exp(-lD*t) / ((lP-lD) * (lG-lD));
-    double t3 = TMath::Exp(-lG*t) / ((lP-lG) * (lD-lG));
-    return A * lP * lD * lG * (t1 + t2 + t3) + BG;
+
+    TF1* f = new TF1(name,
+        [sig, nSig, bgType, ln2](double* x, double* p) -> double {
+            double t   = x[0];
+            double val = 0.0;
+            // Signal
+            if (sig == 1 && p[1] > 0) {
+                val = p[0] * TMath::Exp(-ln2 * t / p[1]);
+            } else if (sig == 2 && p[1] > 0 && p[2] > 0) {
+                double lP = ln2/p[1], lD = ln2/p[2];
+                double den = lD - lP;
+                val = (std::abs(den) < 1e-10 * std::max(lP,lD))
+                    ? p[0] * lP * t * TMath::Exp(-lP*t)
+                    : p[0] * lD / den * (TMath::Exp(-lP*t) - TMath::Exp(-lD*t));
+            } else if (sig == 3 && p[1] > 0 && p[2] > 0 && p[3] > 0) {
+                double lP = ln2/p[1], lD = ln2/p[2], lG = ln2/p[3];
+                double eps = 1e-10 * std::max({lP, lD, lG});
+                if (std::abs(lD-lP)<eps || std::abs(lG-lP)<eps || std::abs(lG-lD)<eps)
+                    val = p[0] * TMath::Exp(-lP*t);
+                else {
+                    double t1 = TMath::Exp(-lP*t)/((lD-lP)*(lG-lP));
+                    double t2 = TMath::Exp(-lD*t)/((lP-lD)*(lG-lD));
+                    double t3 = TMath::Exp(-lG*t)/((lP-lG)*(lD-lG));
+                    val = p[0] * lP * lD * lG * (t1 + t2 + t3);
+                }
+            }
+            // Background
+            if (bgType == 1) {
+                val += p[nSig];
+            } else if (bgType == 2) {
+                double Tbg = p[nSig+2];
+                val += p[nSig] + (Tbg > 0 ? p[nSig+1] * TMath::Exp(-ln2*t/Tbg) : 0.0);
+            } else {
+                double Tbg = p[nSig+1];
+                val += (Tbg > 0 ? p[nSig] * TMath::Exp(-ln2*t/Tbg) : 0.0);
+            }
+            return val;
+        },
+        xlo, xhi, npar);
+
+    // Par names
+    static const char* kSigNames[][4] = {
+        {"A", "T_{1/2}^{P}", "", ""},        // sig==1
+        {"A", "T_{1/2}^{P}", "T_{1/2}^{D}", ""},    // sig==2
+        {"A", "T_{1/2}^{P}", "T_{1/2}^{D}", "T_{1/2}^{G}"},  // sig==3
+    };
+    if (sig >= 1 && sig <= 3)
+        for (int i = 0; i < nSig; i++)
+            f->SetParName(i, kSigNames[sig-1][i]);
+
+    if (bgType == 1) {
+        f->SetParName(nSig, "BG");
+    } else if (bgType == 2) {
+        f->SetParName(nSig,   "BG_{flat}");
+        f->SetParName(nSig+1, "A_{BG}");
+        f->SetParName(nSig+2, "T_{BG}");
+    } else {
+        f->SetParName(nSig,   "A_{BG}");
+        f->SetParName(nSig+1, "T_{BG}");
+    }
+    return f;
+}
+
+
+// Shared helper: build T½ row with saved label pointer
+static void AddHalfLifeRow(TGCompositeFrame* par, const char* lbl,
+                            TGLabel*& lblPtr, TGNumberEntry*& entry,
+                            TGCheckButton*& fix, double defVal = 100.0)
+{
+    TGHorizontalFrame* row = new TGHorizontalFrame(par);
+    par->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
+    lblPtr = new TGLabel(row, lbl);
+    lblPtr->SetWidth(95);
+    row->AddFrame(lblPtr, new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+    entry = new TGNumberEntry(row, defVal, 10, -1,
+                              TGNumberFormat::kNESRealFour,
+                              TGNumberFormat::kNEAPositive);
+    entry->SetWidth(90);
+    row->AddFrame(entry, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+    fix = new TGCheckButton(row, "Fix");
+    row->AddFrame(fix, new TGLayoutHints(kLHintsCenterY));
 }
 
 void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
 {
-    TGCanvas* sc = new TGCanvas(p, 308, 860, kSunkenFrame);
-    p->AddFrame(sc, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY));
-    TGCompositeFrame* cf = new TGCompositeFrame(sc->GetViewPort(), 295, 10, kVerticalFrame);
-    sc->SetContainer(cf);
-    p = cf;
+    decaySubTabs_ = new TGTab(p, 305, 860);
+    p->AddFrame(decaySubTabs_, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY));
 
-    // ── TH2 selection ─────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Sub-tab 1: Cuts — TH2 selection, asymmetric peak cut, peak list, rebin,
+    //            peak counts vs time, decay model + T½ fitter, fit results
+    // ═══════════════════════════════════════════════════════════════════════════
     {
-        TGGroupFrame* grp = new TGGroupFrame(p, "2D Histogram");
-        p->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 4, 2));
+        TGCompositeFrame* tf = decaySubTabs_->AddTab("Cuts");
+        TGCanvas* sc = new TGCanvas(tf, 305, 820, kSunkenFrame);
+        tf->AddFrame(sc, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY));
+        TGCompositeFrame* cf = new TGCompositeFrame(sc->GetViewPort(), 293, 10, kVerticalFrame);
+        sc->SetContainer(cf);
+        TGCompositeFrame* p2 = cf;
 
-        decayTh2Combo_ = new TGComboBox(grp, 800);
-        decayTh2Combo_->Resize(280, 22);
-        grp->AddFrame(decayTh2Combo_, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        decayTh2Combo_->Connect("Selected(Int_t)", "GammaFitGUI", this,
-                                "OnDecayTh2Changed(Int_t)");
-
-        TGHorizontalFrame* axisRow = new TGHorizontalFrame(grp);
-        grp->AddFrame(axisRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        axisRow->AddFrame(new TGLabel(axisRow, "Gamma axis:"),
-                          new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
-        decayGammaAxisCombo_ = new TGComboBox(axisRow, 801);
-        decayGammaAxisCombo_->AddEntry("X axis", 1);
-        decayGammaAxisCombo_->AddEntry("Y axis", 2);
-        decayGammaAxisCombo_->Select(1, kFALSE);
-        decayGammaAxisCombo_->Resize(100, 22);
-        axisRow->AddFrame(decayGammaAxisCombo_, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
-        decayGammaAxisCombo_->Connect("Selected(Int_t)", "GammaFitGUI", this,
-                                      "OnDecayTh2Changed(Int_t)");
-    }
-
-    // ── Peak selection ────────────────────────────────────────────────────────
-    {
-        TGGroupFrame* grp = new TGGroupFrame(p, "Fitted Peaks");
-        p->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
-
-        // Cache picker — which fit cache provides the peak list
-        TGHorizontalFrame* cacheRow = new TGHorizontalFrame(grp);
-        grp->AddFrame(cacheRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 2));
-        cacheRow->AddFrame(new TGLabel(cacheRow, "Peaks cache:"),
-                           new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        decayCacheCombo_ = new TGComboBox(cacheRow, 804);
-        decayCacheCombo_->Resize(160, 22);
-        cacheRow->AddFrame(decayCacheCombo_,
-                           new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 0, 4, 0, 0));
-        TGTextButton* scanBtn = new TGTextButton(cacheRow, "Scan");
-        cacheRow->AddFrame(scanBtn, new TGLayoutHints(kLHintsCenterY));
-        scanBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecayScanCaches()");
-        scanBtn->SetToolTipText(
-            "Scan fit_caches/ and populate the dropdown.\n"
-            "Select any cache here before clicking Refresh to load its peaks.");
-
-        TGHorizontalFrame* row = new TGHorizontalFrame(grp);
-        grp->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        row->AddFrame(new TGLabel(row, "sigma window:"),
-                      new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        decaySigRangeEntry_ = new TGNumberEntry(row, 1.0, 5, -1,
-                                                TGNumberFormat::kNESRealTwo,
-                                                TGNumberFormat::kNEAPositive);
-        decaySigRangeEntry_->SetWidth(60);
-        row->AddFrame(decaySigRangeEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-        row->AddFrame(new TGLabel(row, "sigma"), new TGLayoutHints(kLHintsCenterY, 0, 8, 0, 0));
-
-        TGTextButton* refreshBtn = new TGTextButton(row, "Refresh");
-        row->AddFrame(refreshBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-        refreshBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRefreshDecayPeaks()");
-        refreshBtn->SetToolTipText(
-            "Load peaks from the selected cache (or from the TH2 projection if no cache is chosen).");
-
-        TGTextButton* previewBtn = new TGTextButton(row, "Preview");
-        row->AddFrame(previewBtn, new TGLayoutHints(kLHintsLeft));
-        previewBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPreviewDecay()");
-        previewBtn->SetToolTipText("Show decay projection for selected peak without fitting");
-
-        // Rebin row
-        TGHorizontalFrame* rebinRow = new TGHorizontalFrame(grp);
-        grp->AddFrame(rebinRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
-        rebinRow->AddFrame(new TGLabel(rebinRow, "Rebin:"),
-                           new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        decayRebinEntry_ = new TGNumberEntry(rebinRow, 1, 4, -1,
-                                             TGNumberFormat::kNESInteger,
-                                             TGNumberFormat::kNEAPositive,
-                                             TGNumberFormat::kNELLimitMinMax, 1, 1024);
-        decayRebinEntry_->SetWidth(55);
-        rebinRow->AddFrame(decayRebinEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-        TGTextButton* decayRebinApply = new TGTextButton(rebinRow, "Apply");
-        decayRebinApply->Connect("Clicked()", "GammaFitGUI", this, "OnPreviewDecay()");
-        decayRebinApply->SetToolTipText("Redraw projection with the selected rebin factor");
-        rebinRow->AddFrame(decayRebinApply, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-        TGTextButton* decayRebinReset = new TGTextButton(rebinRow, "Reset");
-        decayRebinReset->Connect("Clicked()", "GammaFitGUI", this, "OnDecayRebinReset()");
-        decayRebinReset->SetToolTipText("Reset rebin to 1 and redraw");
-        rebinRow->AddFrame(decayRebinReset, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
-
-        decayPeakList_ = new TGListBox(grp, 802);
-        decayPeakList_->Resize(280, 100);
-        grp->AddFrame(decayPeakList_, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        decayPeakList_->Connect("Selected(Int_t)", "GammaFitGUI", this,
-                                "OnDecayPeakSelected(Int_t)");
-
-        // Label / class for selected peak
-        TGHorizontalFrame* lblRow = new TGHorizontalFrame(grp);
-        grp->AddFrame(lblRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 0));
-        lblRow->AddFrame(new TGLabel(lblRow, "Label:"),
-                         new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        decayLabelEntry_ = new TGTextEntry(lblRow, "");
-        decayLabelEntry_->SetWidth(120);
-        lblRow->AddFrame(decayLabelEntry_, new TGLayoutHints(kLHintsLeft, 0, 8, 0, 0));
-
-        TGTextButton* applyLblBtn = new TGTextButton(grp, "Apply Label to Peak");
-        grp->AddFrame(applyLblBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        applyLblBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecayApplyLabel()");
-        applyLblBtn->SetToolTipText("Save label and class to the cache entry for this peak");
-
-        TGHorizontalFrame* cacheRow2 = new TGHorizontalFrame(grp);
-        grp->AddFrame(cacheRow2, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
-
-        TGTextButton* loadDecCacheBtn = new TGTextButton(cacheRow2, "Load Cache");
-        cacheRow2->AddFrame(loadDecCacheBtn,
-                            new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 0, 2, 0, 0));
-        loadDecCacheBtn->Connect("Clicked()", "GammaFitGUI", this, "OnLoadDecayCache()");
-        loadDecCacheBtn->SetToolTipText("Reload saved decay fit results for the current TH2");
-
-        TGTextButton* saveDecCacheBtn = new TGTextButton(cacheRow2, "Save Cache");
-        cacheRow2->AddFrame(saveDecCacheBtn,
-                            new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 2, 0, 0, 0));
-        saveDecCacheBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSaveDecayCache()");
-        saveDecCacheBtn->SetToolTipText("Explicitly save all decay fit results for the current TH2");
-    }
-
-    // ── Model ─────────────────────────────────────────────────────────────────
-    {
-        TGGroupFrame* grp = new TGGroupFrame(p, "Decay Model");
-        p->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
-
-        TGHorizontalFrame* modelRow = new TGHorizontalFrame(grp);
-        grp->AddFrame(modelRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        modelRow->AddFrame(new TGLabel(modelRow, "Model:"),
-                           new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
-        decayModelCombo_ = new TGComboBox(modelRow, 803);
-        decayModelCombo_->AddEntry("Parent + BG",         1);
-        decayModelCombo_->AddEntry("Daughter + BG",       2);
-        decayModelCombo_->AddEntry("Granddaughter + BG",  3);
-        decayModelCombo_->AddEntry("Background only",     4);
-        decayModelCombo_->Select(1, kFALSE);
-        decayModelCombo_->Resize(160, 22);
-        modelRow->AddFrame(decayModelCombo_, new TGLayoutHints(kLHintsLeft));
-        decayModelCombo_->Connect("Selected(Int_t)", "GammaFitGUI", this,
-                                  "OnDecayModelChanged(Int_t)");
-
-        // Equation label — updated by OnDecayModelChanged
-        decayEquationLabel_ = new TGLabel(grp,
-            "f(t) = A*exp(-ln2*t/T_P) + BG");
-        decayEquationLabel_->SetTextJustify(kTextLeft);
-        grp->AddFrame(decayEquationLabel_,
-                      new TGLayoutHints(kLHintsExpandX, 6, 2, 0, 4));
-
-        // Half-life seeds
-        auto AddHalfLifeRow = [&](TGCompositeFrame* par, const char* lbl,
-                                  TGNumberEntry*& entry, TGCheckButton*& fix) {
-            TGHorizontalFrame* row = new TGHorizontalFrame(par);
-            par->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 1, 1));
-            row->AddFrame(new TGLabel(row, lbl),
-                          new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-            entry = new TGNumberEntry(row, 100.0, 10, -1,
-                                      TGNumberFormat::kNESRealFour,
-                                      TGNumberFormat::kNEAPositive);
-            entry->SetWidth(90);
-            row->AddFrame(entry, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-            fix = new TGCheckButton(row, "Fix");
-            row->AddFrame(fix, new TGLayoutHints(kLHintsCenterY));
-        };
-
-        AddHalfLifeRow(grp, "T½ Parent:  ", decayThalfP_, decayFixP_);
-        AddHalfLifeRow(grp, "T½ Daughter:", decayThalfD_, decayFixD_);
-        AddHalfLifeRow(grp, "T½ GDaughter:", decayThalfG_, decayFixG_);
-
-        // Fit range
+        // ── TH2 selection ─────────────────────────────────────────────────────
         {
-            TGHorizontalFrame* rr = new TGHorizontalFrame(grp);
-            grp->AddFrame(rr, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 0));
-            rr->AddFrame(new TGLabel(rr, "Fit from:"),
-                         new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-            decayFitLo_ = new TGNumberEntry(rr, 0.0, 8, -1,
-                                            TGNumberFormat::kNESRealFour,
-                                            TGNumberFormat::kNEAAnyNumber);
-            decayFitLo_->SetWidth(80);
-            rr->AddFrame(decayFitLo_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-            rr->AddFrame(new TGLabel(rr, "to:"),
-                         new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-            decayFitHi_ = new TGNumberEntry(rr, 0.0, 8, -1,
-                                            TGNumberFormat::kNESRealFour,
-                                            TGNumberFormat::kNEAAnyNumber);
-            decayFitHi_->SetWidth(80);
-            rr->AddFrame(decayFitHi_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-            decayFitFullRange_ = new TGCheckButton(rr, "Full");
-            decayFitFullRange_->SetState(kButtonDown);
-            decayFitFullRange_->SetToolTipText("Use full time-axis range");
-            rr->AddFrame(decayFitFullRange_, new TGLayoutHints(kLHintsCenterY));
+            TGGroupFrame* grp = new TGGroupFrame(p2, "2D Histogram");
+            p2->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 4, 2));
+
+            decayTh2Combo_ = new TGComboBox(grp, 800);
+            decayTh2Combo_->Resize(280, 22);
+            grp->AddFrame(decayTh2Combo_, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            decayTh2Combo_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                                    "OnDecayTh2Changed(Int_t)");
+
+            TGHorizontalFrame* axisRow = new TGHorizontalFrame(grp);
+            grp->AddFrame(axisRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            axisRow->AddFrame(new TGLabel(axisRow, "Gamma axis:"),
+                              new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+            decayGammaAxisCombo_ = new TGComboBox(axisRow, 801);
+            decayGammaAxisCombo_->AddEntry("X axis", 1);
+            decayGammaAxisCombo_->AddEntry("Y axis", 2);
+            decayGammaAxisCombo_->Select(1, kFALSE);
+            decayGammaAxisCombo_->Resize(100, 22);
+            axisRow->AddFrame(decayGammaAxisCombo_, new TGLayoutHints(kLHintsLeft));
+            decayGammaAxisCombo_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                                          "OnDecayTh2Changed(Int_t)");
         }
 
-        TGTextButton* fitBtn = new TGTextButton(grp, "  Fit Decay  ");
-        grp->AddFrame(fitBtn, new TGLayoutHints(kLHintsCenterX, 0, 0, 6, 2));
-        fitBtn->Connect("Clicked()", "GammaFitGUI", this, "OnFitDecay()");
-    }
+        // ── Fitted Peaks ──────────────────────────────────────────────────────
+        {
+            TGGroupFrame* grp = new TGGroupFrame(p2, "Fitted Peaks");
+            p2->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
 
-    // ── Peak Counts vs Time ───────────────────────────────────────────────────
+            TGHorizontalFrame* cacheRow = new TGHorizontalFrame(grp);
+            grp->AddFrame(cacheRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 2));
+            cacheRow->AddFrame(new TGLabel(cacheRow, "Peaks cache:"),
+                               new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+            decayCacheCombo_ = new TGComboBox(cacheRow, 804);
+            decayCacheCombo_->Resize(150, 22);
+            cacheRow->AddFrame(decayCacheCombo_,
+                               new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 0, 4, 0, 0));
+            TGTextButton* scanBtn = new TGTextButton(cacheRow, "Scan");
+            cacheRow->AddFrame(scanBtn, new TGLayoutHints(kLHintsCenterY));
+            scanBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecayScanCaches()");
+            scanBtn->SetToolTipText("Scan fit_caches/ and populate the dropdown.");
+
+            // Asymmetric sigma window ─────────────────────────────────────────
+            TGHorizontalFrame* sigRow = new TGHorizontalFrame(grp);
+            grp->AddFrame(sigRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            sigRow->AddFrame(new TGLabel(sigRow, "Cut Lo σ:"),
+                             new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+            decaySigLoEntry_ = new TGNumberEntry(sigRow, 1.0, 5, -1,
+                                                 TGNumberFormat::kNESRealFour,
+                                                 TGNumberFormat::kNEAPositive);
+            decaySigLoEntry_->SetWidth(55);
+            sigRow->AddFrame(decaySigLoEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+            sigRow->AddFrame(new TGLabel(sigRow, "Hi σ:"),
+                             new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+            decaySigRangeEntry_ = new TGNumberEntry(sigRow, 1.0, 5, -1,
+                                                    TGNumberFormat::kNESRealFour,
+                                                    TGNumberFormat::kNEAPositive);
+            decaySigRangeEntry_->SetWidth(55);
+            sigRow->AddFrame(decaySigRangeEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+            TGTextButton* refreshBtn = new TGTextButton(sigRow, "Refresh");
+            sigRow->AddFrame(refreshBtn, new TGLayoutHints(kLHintsLeft, 0, 2, 0, 0));
+            refreshBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRefreshDecayPeaks()");
+            refreshBtn->SetToolTipText("Load peaks from the selected cache.");
+            TGTextButton* previewBtn = new TGTextButton(sigRow, "Preview");
+            sigRow->AddFrame(previewBtn, new TGLayoutHints(kLHintsLeft));
+            previewBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPreviewDecay()");
+            previewBtn->SetToolTipText("Show decay projection without fitting");
+
+            TGHorizontalFrame* rebinRow = new TGHorizontalFrame(grp);
+            grp->AddFrame(rebinRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+            rebinRow->AddFrame(new TGLabel(rebinRow, "Rebin:"),
+                               new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+            decayRebinEntry_ = new TGNumberEntry(rebinRow, 1, 4, -1,
+                                                 TGNumberFormat::kNESInteger,
+                                                 TGNumberFormat::kNEAPositive,
+                                                 TGNumberFormat::kNELLimitMinMax, 1, 1024);
+            decayRebinEntry_->SetWidth(55);
+            rebinRow->AddFrame(decayRebinEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+            TGTextButton* rebinApply = new TGTextButton(rebinRow, "Apply");
+            rebinApply->Connect("Clicked()", "GammaFitGUI", this, "OnPreviewDecay()");
+            rebinRow->AddFrame(rebinApply, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+            TGTextButton* rebinReset = new TGTextButton(rebinRow, "Reset");
+            rebinReset->Connect("Clicked()", "GammaFitGUI", this, "OnDecayRebinReset()");
+            rebinRow->AddFrame(rebinReset, new TGLayoutHints(kLHintsLeft));
+
+            decayPeakList_ = new TGListBox(grp, 802);
+            decayPeakList_->Resize(280, 110);
+            grp->AddFrame(decayPeakList_, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            decayPeakList_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                                    "OnDecayPeakSelected(Int_t)");
+
+            TGTextButton* previewPeakBtn = new TGTextButton(grp, " Preview Gamma Peak ");
+            grp->AddFrame(previewPeakBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+            previewPeakBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecayPreviewGammaPeak()");
+            previewPeakBtn->SetToolTipText(
+                "Show gamma spectrum zoomed to peak with asymmetric sigma-cut window marked");
+
+            TGHorizontalFrame* lblRow = new TGHorizontalFrame(grp);
+            grp->AddFrame(lblRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 0));
+            lblRow->AddFrame(new TGLabel(lblRow, "Label:"),
+                             new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+            decayLabelEntry_ = new TGTextEntry(lblRow, "");
+            decayLabelEntry_->SetWidth(120);
+            lblRow->AddFrame(decayLabelEntry_, new TGLayoutHints(kLHintsLeft, 0, 8, 0, 0));
+
+            TGTextButton* applyLblBtn = new TGTextButton(grp, "Apply Label to Peak");
+            grp->AddFrame(applyLblBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            applyLblBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecayApplyLabel()");
+            applyLblBtn->SetToolTipText("Save label to the cache entry for this peak");
+
+            TGHorizontalFrame* cacheRow2 = new TGHorizontalFrame(grp);
+            grp->AddFrame(cacheRow2, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+            TGTextButton* loadBtn = new TGTextButton(cacheRow2, "Load Cache");
+            cacheRow2->AddFrame(loadBtn, new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 0, 2, 0, 0));
+            loadBtn->Connect("Clicked()", "GammaFitGUI", this, "OnLoadDecayCache()");
+            TGTextButton* saveBtn = new TGTextButton(cacheRow2, "Save Cache");
+            cacheRow2->AddFrame(saveBtn, new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 2, 0, 0, 0));
+            saveBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSaveDecayCache()");
+        }
+
+        // ── Peak Counts vs Time ───────────────────────────────────────────────
+        {
+            TGGroupFrame* grp = new TGGroupFrame(p2, "Peak Counts vs Time");
+            p2->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+            TGHorizontalFrame* row = new TGHorizontalFrame(grp);
+            grp->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            row->AddFrame(new TGLabel(row, "Slice width:"),
+                          new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+            decaySliceWidthEntry_ = new TGNumberEntry(row, 10.0, 8, -1,
+                                                      TGNumberFormat::kNESRealFour,
+                                                      TGNumberFormat::kNEAPositive);
+            decaySliceWidthEntry_->SetWidth(80);
+            row->AddFrame(decaySliceWidthEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+            row->AddFrame(new TGLabel(row, "ms"), new TGLayoutHints(kLHintsCenterY));
+            TGTextButton* plotBtn = new TGTextButton(grp, "Plot Peak Counts vs Time");
+            grp->AddFrame(plotBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            plotBtn->Connect("Clicked()", "GammaFitGUI", this, "OnMakePeakCountVsTime()");
+            plotBtn->SetToolTipText(
+                "For each time slice (x>0), project gamma axis and fit the selected peak; plot counts vs time");
+        }
+
+        // ── Decay Model (per-peak fitter, merged from old Fitter sub-tab) ─────
+        {
+            TGGroupFrame* grp = new TGGroupFrame(p2, "Decay Model");
+            p2->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+
+            TGHorizontalFrame* modelRow = new TGHorizontalFrame(grp);
+            grp->AddFrame(modelRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            modelRow->AddFrame(new TGLabel(modelRow, "Model:"),
+                               new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+            decayModelCombo_ = new TGComboBox(modelRow, 803);
+            decayModelCombo_->AddEntry("Parent + BG",              1);
+            decayModelCombo_->AddEntry("Daughter (β⁻) + BG",       2);
+            decayModelCombo_->AddEntry("Granddaughter (β⁻) + BG",  3);
+            decayModelCombo_->AddEntry("Background only",          4);
+            decayModelCombo_->AddEntry("Daughter (β⁻n) + BG",      5);
+            decayModelCombo_->AddEntry("Daughter (β⁻2n) + BG",     6);
+            decayModelCombo_->AddEntry("Granddaughter (β⁻n)+BG",   7);
+            decayModelCombo_->AddEntry("Granddaughter (β⁻2n)+BG",  8);
+            decayModelCombo_->Select(1, kFALSE);
+            decayModelCombo_->Resize(200, 22);
+            modelRow->AddFrame(decayModelCombo_, new TGLayoutHints(kLHintsLeft));
+            decayModelCombo_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                                      "OnDecayModelChanged(Int_t)");
+
+            TGHorizontalFrame* bgRow = new TGHorizontalFrame(grp);
+            grp->AddFrame(bgRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            bgRow->AddFrame(new TGLabel(bgRow, "BG type:"),
+                            new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+            decayBGTypeCombo_ = new TGComboBox(bgRow, 805);
+            decayBGTypeCombo_->AddEntry("Flat",         1);
+            decayBGTypeCombo_->AddEntry("Flat + Exp",   2);
+            decayBGTypeCombo_->AddEntry("Exp only",     3);
+            decayBGTypeCombo_->Select(1, kFALSE);
+            decayBGTypeCombo_->Resize(120, 22);
+            bgRow->AddFrame(decayBGTypeCombo_, new TGLayoutHints(kLHintsLeft));
+            decayBGTypeCombo_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                                       "OnDecayBGTypeChanged(Int_t)");
+
+            decayEquationLabel_ = new TGLabel(grp, "f(t) = A*exp(-ln2*t/T_P) + BG");
+            decayEquationLabel_->SetTextJustify(kTextLeft);
+            grp->AddFrame(decayEquationLabel_,
+                          new TGLayoutHints(kLHintsExpandX, 6, 2, 2, 4));
+
+            AddHalfLifeRow(grp, "T½ Parent:",    decayThalfPLbl_, decayThalfP_,    decayFixP_);
+            AddHalfLifeRow(grp, "T½ Daughter:",  decayThalfDLbl_, decayThalfD_,    decayFixD_);
+            AddHalfLifeRow(grp, "T½ GDaughter:", decayThalfGLbl_, decayThalfG_,    decayFixG_);
+            AddHalfLifeRow(grp, "T½ Exp BG:",    decayThalfBGLbl_,decayThalfBGExp_,decayFixBGExp_, 1000.0);
+            decayThalfBGExp_->SetState(kFALSE);
+            if (decayFixBGExp_) decayFixBGExp_->SetEnabled(kFALSE);
+
+            TGHorizontalFrame* autoRow = new TGHorizontalFrame(grp);
+            grp->AddFrame(autoRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 2));
+            TGTextButton* autoBtn = new TGTextButton(autoRow, " Auto Model ");
+            autoRow->AddFrame(autoBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+            autoBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecayAutoModel()");
+            autoBtn->SetToolTipText("Auto-select model from classification; seeds T½.");
+            TGTextButton* seedBtn = new TGTextButton(autoRow, " Seed T½ ");
+            autoRow->AddFrame(seedBtn, new TGLayoutHints(kLHintsLeft));
+            seedBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecaySeedHalfLives()");
+            seedBtn->SetToolTipText("Seed T½ from nuclear DB (traverses chain).");
+
+            {
+                TGHorizontalFrame* rr = new TGHorizontalFrame(grp);
+                grp->AddFrame(rr, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 0));
+                rr->AddFrame(new TGLabel(rr, "Fit from:"),
+                             new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+                decayFitLo_ = new TGNumberEntry(rr, 0.0, 8, -1,
+                                                TGNumberFormat::kNESRealFour,
+                                                TGNumberFormat::kNEAAnyNumber);
+                decayFitLo_->SetWidth(70);
+                rr->AddFrame(decayFitLo_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+                rr->AddFrame(new TGLabel(rr, "to:"),
+                             new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+                decayFitHi_ = new TGNumberEntry(rr, 0.0, 8, -1,
+                                                TGNumberFormat::kNESRealFour,
+                                                TGNumberFormat::kNEAAnyNumber);
+                decayFitHi_->SetWidth(70);
+                rr->AddFrame(decayFitHi_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+                decayFitFullRange_ = new TGCheckButton(rr, "Full");
+                decayFitFullRange_->SetState(kButtonDown);
+                rr->AddFrame(decayFitFullRange_, new TGLayoutHints(kLHintsCenterY));
+            }
+
+            TGTextButton* fitBtn = new TGTextButton(grp, "  Fit Decay  ");
+            grp->AddFrame(fitBtn, new TGLayoutHints(kLHintsCenterX, 0, 0, 6, 4));
+            fitBtn->Connect("Clicked()", "GammaFitGUI", this, "OnFitDecay()");
+        }
+
+        // ── Fit Results ───────────────────────────────────────────────────────
+        {
+            TGGroupFrame* grp = new TGGroupFrame(p2, "Fit Results");
+            p2->AddFrame(grp, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 4, 4, 2, 4));
+            decayResultView_ = new TGTextView(grp, 280, 180);
+            grp->AddFrame(decayResultView_,
+                          new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 2, 2, 2, 2));
+        }
+    } // end Cuts sub-tab
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Sub-tab 2: Total Decay — sum multiple peaks, Bateman fit, population
+    // ═══════════════════════════════════════════════════════════════════════════
     {
-        TGGroupFrame* grp = new TGGroupFrame(p, "Peak Counts vs Time");
-        p->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+        TGCompositeFrame* tf = decaySubTabs_->AddTab("Total Decay");
+        TGCanvas* sc = new TGCanvas(tf, 305, 820, kSunkenFrame);
+        tf->AddFrame(sc, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY));
+        TGCompositeFrame* cf = new TGCompositeFrame(sc->GetViewPort(), 293, 10, kVerticalFrame);
+        sc->SetContainer(cf);
+        TGCompositeFrame* p2 = cf;
 
-        TGHorizontalFrame* row = new TGHorizontalFrame(grp);
-        grp->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        row->AddFrame(new TGLabel(row, "Slice width:"),
-                      new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        decaySliceWidthEntry_ = new TGNumberEntry(row, 10.0, 8, -1,
+        // ── Peak Selection ────────────────────────────────────────────────────
+        {
+            TGGroupFrame* grp = new TGGroupFrame(p2, "Peak Selection (uses Cuts peak list)");
+            p2->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 4, 2));
+            decayTdSumAll_ = new TGCheckButton(grp, "Sum all peaks in list");
+            decayTdSumAll_->SetState(kButtonDown);
+            grp->AddFrame(decayTdSumAll_, new TGLayoutHints(kLHintsLeft, 4, 2, 4, 2));
+            decayTdSumAll_->SetToolTipText(
+                "Checked: sum projections from every peak in the Cuts peak list.\n"
+                "Unchecked: use only the selected peak in the Cuts list.");
+        }
+
+        // ── Decay Model ───────────────────────────────────────────────────────
+        {
+            TGGroupFrame* grp = new TGGroupFrame(p2, "Decay Model");
+            p2->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+
+            TGHorizontalFrame* modelRow = new TGHorizontalFrame(grp);
+            grp->AddFrame(modelRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            modelRow->AddFrame(new TGLabel(modelRow, "Model:"),
+                               new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+            decayTdModelCombo_ = new TGComboBox(modelRow, 810);
+            decayTdModelCombo_->AddEntry("Parent + BG",              1);
+            decayTdModelCombo_->AddEntry("Daughter (β⁻) + BG",       2);
+            decayTdModelCombo_->AddEntry("Granddaughter (β⁻) + BG",  3);
+            decayTdModelCombo_->AddEntry("Background only",          4);
+            decayTdModelCombo_->AddEntry("Daughter (β⁻n) + BG",      5);
+            decayTdModelCombo_->AddEntry("Daughter (β⁻2n) + BG",     6);
+            decayTdModelCombo_->AddEntry("Granddaughter (β⁻n)+BG",   7);
+            decayTdModelCombo_->AddEntry("Granddaughter (β⁻2n)+BG",  8);
+            decayTdModelCombo_->Select(1, kFALSE);
+            decayTdModelCombo_->Resize(200, 22);
+            modelRow->AddFrame(decayTdModelCombo_, new TGLayoutHints(kLHintsLeft));
+            decayTdModelCombo_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                                        "OnDecayTdModelChanged(Int_t)");
+
+            TGHorizontalFrame* bgRow = new TGHorizontalFrame(grp);
+            grp->AddFrame(bgRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+            bgRow->AddFrame(new TGLabel(bgRow, "BG type:"),
+                            new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+            decayTdBGCombo_ = new TGComboBox(bgRow, 811);
+            decayTdBGCombo_->AddEntry("Flat",         1);
+            decayTdBGCombo_->AddEntry("Flat + Exp",   2);
+            decayTdBGCombo_->AddEntry("Exp only",     3);
+            decayTdBGCombo_->Select(1, kFALSE);
+            decayTdBGCombo_->Resize(120, 22);
+            bgRow->AddFrame(decayTdBGCombo_, new TGLayoutHints(kLHintsLeft));
+            decayTdBGCombo_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                                     "OnDecayTdBGTypeChanged(Int_t)");
+
+            decayTdEquationLbl_ = new TGLabel(grp, "f(t) = A*exp(-ln2*t/T_P) + BG");
+            decayTdEquationLbl_->SetTextJustify(kTextLeft);
+            grp->AddFrame(decayTdEquationLbl_,
+                          new TGLayoutHints(kLHintsExpandX, 6, 2, 2, 4));
+
+            AddHalfLifeRow(grp, "T½ Parent:",    decayTdPLbl_, decayTdThalfP_,    decayTdFixP_);
+            AddHalfLifeRow(grp, "T½ Daughter:",  decayTdDLbl_, decayTdThalfD_,    decayTdFixD_);
+            AddHalfLifeRow(grp, "T½ GDaughter:", decayTdGLbl_, decayTdThalfG_,    decayTdFixG_);
+            AddHalfLifeRow(grp, "T½ Exp BG:",    decayTdBGLbl_,decayTdThalfBGExp_,decayTdFixBGExp_, 1000.0);
+            decayTdThalfBGExp_->SetState(kFALSE);
+            if (decayTdFixBGExp_) decayTdFixBGExp_->SetEnabled(kFALSE);
+
+            {
+                TGHorizontalFrame* rr = new TGHorizontalFrame(grp);
+                grp->AddFrame(rr, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 0));
+                rr->AddFrame(new TGLabel(rr, "Fit from:"),
+                             new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+                decayTdFitLo_ = new TGNumberEntry(rr, 0.0, 8, -1,
                                                   TGNumberFormat::kNESRealFour,
-                                                  TGNumberFormat::kNEAPositive);
-        decaySliceWidthEntry_->SetWidth(80);
-        row->AddFrame(decaySliceWidthEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-        row->AddFrame(new TGLabel(row, "ms"),
-                      new TGLayoutHints(kLHintsCenterY, 0, 0, 0, 0));
+                                                  TGNumberFormat::kNEAAnyNumber);
+                decayTdFitLo_->SetWidth(70);
+                rr->AddFrame(decayTdFitLo_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+                rr->AddFrame(new TGLabel(rr, "to:"),
+                             new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+                decayTdFitHi_ = new TGNumberEntry(rr, 0.0, 8, -1,
+                                                  TGNumberFormat::kNESRealFour,
+                                                  TGNumberFormat::kNEAAnyNumber);
+                decayTdFitHi_->SetWidth(70);
+                rr->AddFrame(decayTdFitHi_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+                decayTdFullRange_ = new TGCheckButton(rr, "Full");
+                decayTdFullRange_->SetState(kButtonDown);
+                rr->AddFrame(decayTdFullRange_, new TGLayoutHints(kLHintsCenterY));
+            }
 
-        TGTextButton* plotBtn = new TGTextButton(grp, "Plot Peak Counts vs Time");
-        grp->AddFrame(plotBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        plotBtn->Connect("Clicked()", "GammaFitGUI", this, "OnMakePeakCountVsTime()");
-        plotBtn->SetToolTipText(
-            "For each time slice (x>0), project the gamma axis and fit the selected peak; plot counts vs time");
-    }
+            TGTextButton* fitTdBtn = new TGTextButton(grp, "  Fit Total Decay  ");
+            grp->AddFrame(fitTdBtn, new TGLayoutHints(kLHintsCenterX, 0, 0, 6, 4));
+            fitTdBtn->Connect("Clicked()", "GammaFitGUI", this, "OnFitTotalDecay()");
+        }
 
-    // ── Results ───────────────────────────────────────────────────────────────
-    {
-        TGGroupFrame* grp = new TGGroupFrame(p, "Fit Results");
-        p->AddFrame(grp, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 4, 4, 2, 4));
-        decayResultView_ = new TGTextView(grp, 280, 140);
-        grp->AddFrame(decayResultView_, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 2, 2, 2, 2));
-    }
+        // ── Fit Results ───────────────────────────────────────────────────────
+        {
+            TGGroupFrame* grp = new TGGroupFrame(p2, "Fit Results");
+            p2->AddFrame(grp, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 4, 4, 2, 4));
+            decayTdResultView_ = new TGTextView(grp, 280, 200);
+            grp->AddFrame(decayTdResultView_,
+                          new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 2, 2, 2, 2));
+        }
+    } // end Total Decay sub-tab
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -333,25 +556,166 @@ void GammaFitGUI::OnDecayTh2Changed(Int_t /*id*/)
 void GammaFitGUI::OnDecayModelChanged(Int_t id)
 {
     if (!decayEquationLabel_) return;
-    const char* eq = "";
-    switch (id) {
-        case 1:
-            eq = "f(t) = A*exp(-ln2*t/T_P) + BG";
-            break;
-        case 2:
-            eq = "f(t) = A*lD/(lD-lP)*(exp(-lP*t)-exp(-lD*t))+BG  [l=ln2/T]";
-            break;
-        case 3:
-            eq = "f(t) = A*lP*lD*lG*Sum[exp(-li*t)/((lj-li)(lk-li))]+BG";
-            break;
-        case 4:
-            eq = "f(t) = BG  (constant background)";
-            break;
-        default:
-            eq = "";
+    static const char* kEq[] = {
+        "",
+        "f(t) = A*exp(-ln2*t/T_P) + BG",                              // 1 Parent
+        "f(t) = A*lD/(lD-lP)*(e^-lP*t - e^-lD*t) + BG",             // 2 Daughter β⁻
+        "f(t) = A*lP*lD*lG*Sum[e^-li*t/(prod)] + BG",                // 3 GDaughter β⁻
+        "f(t) = BG  (constant background)",                            // 4 BG only
+        "f(t) = Daughter Bateman [β⁻n chain] + BG",                   // 5 Daughter β⁻n
+        "f(t) = Daughter Bateman [β⁻2n chain] + BG",                  // 6 Daughter β⁻2n
+        "f(t) = GDaughter Bateman [β⁻n chain] + BG",                  // 7 GDaughter β⁻n
+        "f(t) = GDaughter Bateman [β⁻2n chain] + BG",                 // 8 GDaughter β⁻2n
+    };
+    if (id >= 1 && id <= 8) {
+        decayEquationLabel_->SetText(kEq[id]);
+        decayEquationLabel_->Layout();
     }
-    decayEquationLabel_->SetText(eq);
-    decayEquationLabel_->Layout();
+
+    // Update T½ row labels to reflect the chain
+    if (decayThalfPLbl_ && decayThalfDLbl_ && decayThalfGLbl_) {
+        switch (id) {
+            case 5:
+                decayThalfPLbl_->SetText("T½ β⁻n product:");
+                decayThalfDLbl_->SetText("T½ Daughter:");
+                break;
+            case 6:
+                decayThalfPLbl_->SetText("T½ β⁻2n product:");
+                decayThalfDLbl_->SetText("T½ Daughter:");
+                break;
+            case 7:
+                decayThalfPLbl_->SetText("T½ Parent:");
+                decayThalfDLbl_->SetText("T½ β⁻n product:");
+                decayThalfGLbl_->SetText("T½ GDaughter:");
+                break;
+            case 8:
+                decayThalfPLbl_->SetText("T½ Parent:");
+                decayThalfDLbl_->SetText("T½ β⁻2n product:");
+                decayThalfGLbl_->SetText("T½ GDaughter:");
+                break;
+            default:
+                decayThalfPLbl_->SetText("T½ Parent:");
+                decayThalfDLbl_->SetText("T½ Daughter:");
+                decayThalfGLbl_->SetText("T½ GDaughter:");
+                break;
+        }
+    }
+}
+
+void GammaFitGUI::OnDecayBGTypeChanged(Int_t /*id*/)
+{
+    int bgType = decayBGTypeCombo_ ? decayBGTypeCombo_->GetSelected() : 1;
+    bool hasExp = (bgType >= 2);
+    if (decayThalfBGExp_) decayThalfBGExp_->SetState(hasExp ? kTRUE : kFALSE);
+    if (decayFixBGExp_)   decayFixBGExp_->SetEnabled(hasExp ? kTRUE : kFALSE);
+}
+
+void GammaFitGUI::OnDecayAutoModel()
+{
+    Int_t peakSel = decayPeakList_ ? decayPeakList_->GetSelected() : -1;
+    if (peakSel < 1 || (size_t)peakSel > decayPeakEs_.size()) {
+        AppendLog("[Decay] Select a peak first"); return;
+    }
+    // Get classification from gamma cache
+    const std::string& cacheName = (peakSel <= (Int_t)decayPeakCacheNames_.size())
+                                   ? decayPeakCacheNames_[peakSel-1] : decayGammaProjName_;
+    FitDatabase fdb;
+    fdb.Load(CacheFileFor(cacheName));
+    std::string cls;
+    auto it = fdb.GetEntries().find(decayPeakKeys_[peakSel-1]);
+    if (it != fdb.GetEntries().end()) cls = it->second.classification;
+    if (cls.empty() && decayLabelEntry_) {
+        std::string lbl = decayLabelEntry_->GetText();
+        if (labelClassMap_.count(lbl)) cls = labelClassMap_.at(lbl);
+    }
+    // Map classification string → model ID
+    static const struct { const char* key; int model; } kMap[] = {
+        {"Granddaughter",       3},
+        {"GDaughter",           3},
+        {"Parent",              1},
+        {"Daughter",            2},
+        {"Background",          4},
+        {"BG",                  4},
+        {"bn Granddaughter",    7},
+        {"b2n Granddaughter",   8},
+        {"bn Daughter",         5},
+        {"b2n Daughter",        6},
+        {nullptr, 0}
+    };
+    int model = 0;
+    for (int i = 0; kMap[i].key; ++i) {
+        if (cls.find(kMap[i].key) != std::string::npos) { model = kMap[i].model; break; }
+    }
+    if (model == 0) {
+        AppendLog(Form("[Decay] No model mapping for class '%s'", cls.c_str()));
+        return;
+    }
+    if (decayModelCombo_) decayModelCombo_->Select(model, kTRUE);
+    AppendLog(Form("[Decay] Auto model: '%s' → model %d", cls.c_str(), model));
+    OnDecaySeedHalfLives();
+}
+
+void GammaFitGUI::OnDecaySeedHalfLives()
+{
+    if (!decayLabelEntry_ || !decayThalfP_) return;
+    std::string lbl = decayLabelEntry_->GetText();
+    // Strip trailing spaces
+    while (!lbl.empty() && lbl.back() == ' ') lbl.pop_back();
+    if (lbl.empty()) { AppendLog("[Decay] Set a label first"); return; }
+
+    int modelId  = decayModelCombo_ ? decayModelCombo_->GetSelected() : 1;
+    int sigType  = DecaySignalType(modelId);
+
+    auto findHl = [this](const std::string& id) -> double {
+        // Try exact key
+        auto it = nuclearDB_.find(id);
+        if (it != nuclearDB_.end() && it->second.halflife_s > 0)
+            return it->second.halflife_s * 1000.0;  // s → ms
+        // Try without spaces
+        std::string clean = id;
+        clean.erase(std::remove(clean.begin(), clean.end(), ' '), clean.end());
+        it = nuclearDB_.find(clean);
+        if (it != nuclearDB_.end() && it->second.halflife_s > 0)
+            return it->second.halflife_s * 1000.0;
+        return -1.0;
+    };
+
+    double T_this = findHl(lbl);
+    if (T_this <= 0) {
+        AppendLog(Form("[Decay] '%s' not found in nuclear DB — seed manually", lbl.c_str()));
+        return;
+    }
+
+    switch (sigType) {
+        case 1: // This IS the parent
+            decayThalfP_->SetNumber(T_this);
+            break;
+        case 2: { // This IS the daughter
+            if (decayThalfD_) decayThalfD_->SetNumber(T_this);
+            auto pos = std::find(nucChainIsotopes_.begin(), nucChainIsotopes_.end(), lbl);
+            if (pos != nucChainIsotopes_.end() && pos != nucChainIsotopes_.begin()) {
+                double Tp = findHl(*std::prev(pos));
+                if (Tp > 0) decayThalfP_->SetNumber(Tp);
+            }
+            break;
+        }
+        case 3: { // This IS the granddaughter
+            if (decayThalfG_) decayThalfG_->SetNumber(T_this);
+            auto pos = std::find(nucChainIsotopes_.begin(), nucChainIsotopes_.end(), lbl);
+            if (pos != nucChainIsotopes_.end() && pos != nucChainIsotopes_.begin()) {
+                auto ppos = std::prev(pos);
+                double Td = findHl(*ppos);
+                if (Td > 0 && decayThalfD_) decayThalfD_->SetNumber(Td);
+                if (ppos != nucChainIsotopes_.begin()) {
+                    double Tp = findHl(*std::prev(ppos));
+                    if (Tp > 0) decayThalfP_->SetNumber(Tp);
+                }
+            }
+            break;
+        }
+        default: break;
+    }
+    AppendLog(Form("[Decay] Seeded T½ for '%s' = %.4g ms", lbl.c_str(), T_this));
 }
 
 void GammaFitGUI::OnLoadDecayCache()
@@ -404,24 +768,30 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
             decayLabelEntry_->SetText(it->second.label.c_str());
     }
 
-    double E   = decayPeakEs_[id - 1];
-    double sig = decayPeakSigs_[id - 1];
+    double E = decayPeakEs_[id - 1];
 
     // Restore stored decay fit parameters
     auto fitIt = decayFitStore_.find(E);
     if (fitIt != decayFitStore_.end()) {
         const DecayFitResult& r = fitIt->second;
         if (decayModelCombo_) decayModelCombo_->Select(r.model, kFALSE);
-        if (r.params.size() >= 2 && decayThalfP_)
+        if (decayBGTypeCombo_) decayBGTypeCombo_->Select(r.bgType > 0 ? r.bgType : 1, kFALSE);
+        OnDecayBGTypeChanged(0);
+        int sig = DecaySignalType(r.model);
+        if (sig >= 1 && r.params.size() >= 2 && decayThalfP_)
             decayThalfP_->SetNumber(r.params[1]);
-        if (r.params.size() >= 3 && r.model >= 2 && decayThalfD_)
+        if (sig >= 2 && r.params.size() >= 3 && decayThalfD_)
             decayThalfD_->SetNumber(r.params[2]);
-        if (r.params.size() >= 4 && r.model >= 3 && decayThalfG_)
+        if (sig >= 3 && r.params.size() >= 4 && decayThalfG_)
             decayThalfG_->SetNumber(r.params[3]);
         if (!r.label.empty() && decayLabelEntry_)
             decayLabelEntry_->SetText(r.label.c_str());
         if (r.Nsig > 0 && decaySigRangeEntry_)
             decaySigRangeEntry_->SetNumber(r.Nsig);
+        if (decaySigLoEntry_)
+            decaySigLoEntry_->SetNumber(r.NsigLo > 0 ? r.NsigLo : r.Nsig);
+        if (r.rebin > 1 && decayRebinEntry_)
+            decayRebinEntry_->SetNumber(r.rebin);
 
         // ── Replay cached decay fit on canvas ─────────────────────────────────
         if (inputFile_ && !r.histName.empty()) {
@@ -452,22 +822,9 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
                     hDecay->SetLineColor(kBlack);
                     hDecay->SetMarkerSize(0);
 
-                    // Rebuild TF1 from stored model + params
-                    int modelId = r.model;
-                    TF1* fStored = nullptr;
-                    if (modelId == 4) {
-                        fStored = new TF1("fDecayReplayBG", "[0]", tLo, tHi);
-                    } else if (modelId == 1) {
-                        fStored = new TF1("fDecayReplayP",
-                            "[0]*exp(-0.6931471805599453*x/[1]) + [2]", tLo, tHi);
-                    } else if (modelId == 2) {
-                        fStored = new TF1("fDecayReplayD",
-                            DecayModelDaughter, tLo, tHi, 4);
-                    } else {
-                        fStored = new TF1("fDecayReplayG",
-                            DecayModelGranddaughter, tLo, tHi, 5);
-                    }
-
+                    int bgType  = (r.bgType >= 1 && r.bgType <= 3) ? r.bgType : 1;
+                    int nSig    = DecaySigNpar(sig);
+                    TF1* fStored = BuildDecayTF1("fDecayReplay", r.model, bgType, tLo, tHi);
                     if (fStored && (int)r.params.size() >= fStored->GetNpar()) {
                         for (int i = 0; i < fStored->GetNpar(); i++)
                             fStored->SetParameter(i, r.params[i]);
@@ -479,29 +836,30 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
                         hDecay->Draw(showErrorBars_ ? "hist E" : "hist");
                         fStored->Draw("same");
 
-                        // Components
-                        if (modelId != 4) {
-                            int   npar = fStored->GetNpar();
-                            double BG  = fStored->GetParameter(npar - 1);
+                        // Signal component (zero all BG params)
+                        if (sig != 4) {
+                            int npar = fStored->GetNpar();
                             TF1* fSig = (TF1*)fStored->Clone("fDecayReplaySig");
-                            fSig->FixParameter(npar - 1, 0.0);
+                            for (int i = nSig; i < npar; i++) fSig->FixParameter(i, 0.0);
                             fSig->SetLineColor(kBlue+1);
                             fSig->SetLineWidth(1);
                             fSig->SetLineStyle(2);
                             fSig->Draw("same");
 
-                            TLine* bgLine = new TLine(tLo, BG, tHi, BG);
-                            bgLine->SetLineColor(kGreen+2);
-                            bgLine->SetLineWidth(2);
-                            bgLine->SetLineStyle(2);
-                            bgLine->Draw();
+                            // BG component
+                            TF1* fBG = (TF1*)fStored->Clone("fDecayReplayBG");
+                            if (sig >= 1) fBG->FixParameter(0, 0.0); // zero signal amplitude
+                            fBG->SetLineColor(kGreen+2);
+                            fBG->SetLineWidth(2);
+                            fBG->SetLineStyle(2);
+                            fBG->Draw("same");
 
                             TLegend* leg = new TLegend(0.60, 0.72, 0.92, 0.92);
                             leg->SetBorderSize(1);
                             leg->AddEntry(hDecay,  "Data",       "l");
                             leg->AddEntry(fStored, "Total fit",  "l");
                             leg->AddEntry(fSig,    "Signal",     "l");
-                            leg->AddEntry(bgLine,  "Background", "l");
+                            leg->AddEntry(fBG,     "Background", "l");
                             leg->Draw();
                         }
 
@@ -509,19 +867,19 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
                         gSystem->ProcessEvents();
                     }
 
-                    // Update result view with cached values
+                    // Update result view
                     decayResultView_->Clear();
                     decayResultView_->AddLine(
                         Form("Cached fit: E=%.2f keV  window:[%.2f, %.2f]", E, r.eMin, r.eMax));
                     decayResultView_->AddLine(
-                        Form("Model: %d  chi2/ndf=%.4g  status=%d", r.model, r.chi2ndf, r.status));
+                        Form("Model: %d  bgType: %d  chi2/ndf=%.4g  status=%d",
+                             r.model, bgType, r.chi2ndf, r.status));
                     if (fStored) {
-                        for (int i = 0; i < fStored->GetNpar(); i++) {
+                        for (int i = 0; i < fStored->GetNpar(); i++)
                             decayResultView_->AddLine(
-                                Form("  par[%d] = %11.5g +/- %.4g",
-                                     i, r.params[i],
+                                Form("  %-14s = %11.5g +/- %.4g",
+                                     fStored->GetParName(i), r.params[i],
                                      (i < (int)r.errors.size()) ? r.errors[i] : 0.0));
-                        }
                     }
                     decayResultView_->ShowBottom();
                     SetStatus(Form("Cached decay fit: E=%.2f keV  chi2/ndf=%.3f", E, r.chi2ndf));
@@ -530,18 +888,37 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
                 }
             }
         }
-        return;  // done — fit was replayed, no need for gamma preview
+        return;  // done
     }
 
-    // ── No stored fit — show gamma cut preview ────────────────────────────────
-    if (!inputFile_ || decayTh2Name_.empty()) return;
+    // ── No stored fit — reset sigma windows to 1.0 and show gamma preview ──────
+    if (decaySigRangeEntry_) decaySigRangeEntry_->SetNumber(1.0);
+    if (decaySigLoEntry_)    decaySigLoEntry_->SetNumber(1.0);
+    OnDecayPreviewGammaPeak();
+}
 
-    double Nsig = decaySigRangeEntry_ ? decaySigRangeEntry_->GetNumber() : 1.0;
-    double eMin = E - Nsig * sig;
-    double eMax = E + Nsig * sig;
+// ─────────────────────────────────────────────────────────────────────────────
+// OnDecayPreviewGammaPeak — show gamma spectrum zoomed to selected peak with cut
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnDecayPreviewGammaPeak()
+{
+    Int_t peakSel = decayPeakList_ ? decayPeakList_->GetSelected() : -1;
+    if (peakSel < 1 || (size_t)peakSel > decayPeakEs_.size()) {
+        AppendLog("[Decay] Select a peak first"); return;
+    }
+    if (!inputFile_ || decayTh2Name_.empty()) {
+        AppendLog("[Decay] No TH2 loaded — run Refresh first"); return;
+    }
+
+    double E      = decayPeakEs_[peakSel - 1];
+    double sig    = decayPeakSigs_[peakSel - 1];
+    double NsigHi = decaySigRangeEntry_ ? decaySigRangeEntry_->GetNumber() : 1.0;
+    double NsigLo = decaySigLoEntry_    ? decaySigLoEntry_->GetNumber()    : NsigHi;
+    double eMin   = E - NsigLo * sig;
+    double eMax   = E + NsigHi * sig;
 
     TH2* h2 = (TH2*)inputFile_->Get(decayTh2Name_.c_str());
-    if (!h2) return;
+    if (!h2) { AppendLog("[Decay] TH2 not found"); return; }
 
     int axisId = decayGammaAxisCombo_ ? decayGammaAxisCombo_->GetSelected() : 1;
     TH1* hGamma = (axisId == 1)
@@ -566,15 +943,16 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
 
     TLine* lineLo = new TLine(eMin, ylo, eMin, yhi);
     lineLo->SetLineColor(kRed); lineLo->SetLineWidth(2); lineLo->SetLineStyle(2);
-    lineLo->Draw();
+    lineLo->SetBit(kCanDelete); lineLo->Draw();
 
     TLine* lineHi = new TLine(eMax, ylo, eMax, yhi);
     lineHi->SetLineColor(kRed); lineHi->SetLineWidth(2); lineHi->SetLineStyle(2);
-    lineHi->Draw();
+    lineHi->SetBit(kCanDelete); lineHi->Draw();
 
     c->Modified(); c->Update();
     gSystem->ProcessEvents();
-    SetStatus(Form("Cut preview: %.2f keV  [%.2f, %.2f]  (+/-%.1f sig)", E, eMin, eMax, Nsig));
+    SetStatus(Form("Cut preview: %.4f keV  [%.4f, %.4f]  (lo=%.3f hi=%.3f sig)",
+                   E, eMin, eMax, NsigLo, NsigHi));
 }
 
 void GammaFitGUI::OnRefreshDecayPeaks()
@@ -611,7 +989,8 @@ void GammaFitGUI::OnRefreshDecayPeaks()
     FitDatabase fdb;
     fdb.Load(CacheFileFor(peakCacheName));
 
-    int listIdx = 1;
+    struct DPEntry { double E, sig; std::string key, cache, lbl; };
+    std::vector<DPEntry> dpEntries;
     for (const auto& kv : fdb.GetEntries()) {
         const FitEntry& e = kv.second;
         if (e.params.size() < 5) continue;
@@ -621,16 +1000,23 @@ void GammaFitGUI::OnRefreshDecayPeaks()
             double Ep  = e.params[3*i + 1];
             double sig = std::abs(e.params[3*i + 2]);
             if (sig <= 0 || sig > 100 || Ep <= 0) continue;
-            decayPeakEs_.push_back(Ep);
-            decayPeakSigs_.push_back(sig);
-            decayPeakKeys_.push_back(kv.first);
-            decayPeakCacheNames_.push_back(peakCacheName);
             std::string lbl = Form("%.2f keV  (sig=%.3f)", Ep, sig);
             if (!e.label.empty()) lbl = e.label + "  " + lbl;
             if (!e.classification.empty()) lbl += "  [" + e.classification + "]";
             if (e.needsRefit) lbl = "[R] " + lbl;
-            decayPeakList_->AddEntry(lbl.c_str(), listIdx++);
+            dpEntries.push_back({Ep, sig, kv.first, peakCacheName, lbl});
         }
+    }
+    std::sort(dpEntries.begin(), dpEntries.end(),
+              [](const DPEntry& a, const DPEntry& b){ return a.E < b.E; });
+
+    int listIdx = 1;
+    for (const auto& dp : dpEntries) {
+        decayPeakEs_.push_back(dp.E);
+        decayPeakSigs_.push_back(dp.sig);
+        decayPeakKeys_.push_back(dp.key);
+        decayPeakCacheNames_.push_back(dp.cache);
+        decayPeakList_->AddEntry(dp.lbl.c_str(), listIdx++);
     }
     decayPeakList_->MapSubwindows();
     decayPeakList_->Layout();
@@ -648,17 +1034,18 @@ void GammaFitGUI::OnFitDecay()
     if (peakSel < 1 || (size_t)peakSel > decayPeakEs_.size()) {
         AppendLog("[Decay] Select a peak first"); return;
     }
-    double E    = decayPeakEs_[peakSel - 1];
-    double sig  = decayPeakSigs_[peakSel - 1];
-    double Nsig = decaySigRangeEntry_->GetNumber();
+    double E      = decayPeakEs_[peakSel - 1];
+    double sig    = decayPeakSigs_[peakSel - 1];
+    double NsigHi = decaySigRangeEntry_ ? decaySigRangeEntry_->GetNumber() : 1.0;
+    double NsigLo = decaySigLoEntry_    ? decaySigLoEntry_->GetNumber()    : NsigHi;
 
     TH2* h2 = (TH2*)inputFile_->Get(decayTh2Name_.c_str());
     if (!h2) { AppendLog("[Decay] TH2 not found in file"); return; }
 
     int axisId = decayGammaAxisCombo_->GetSelected();
     TH1* hDecay = nullptr;
-    double eMin = E - Nsig * sig;
-    double eMax = E + Nsig * sig;
+    double eMin = E - NsigLo * sig;
+    double eMax = E + NsigHi * sig;
 
     if (axisId == 1) {
         // Gamma on X → project onto Y axis
@@ -703,72 +1090,66 @@ void GammaFitGUI::OnFitDecay()
     gSystem->ProcessEvents();
 
     // ── Build fit function ────────────────────────────────────────────────────
-    int modelId = decayModelCombo_->GetSelected();
+    int modelId = decayModelCombo_ ? decayModelCombo_->GetSelected() : 1;
+    int bgType  = decayBGTypeCombo_ ? decayBGTypeCombo_->GetSelected() : 1;
+    if (bgType < 1 || bgType > 3) bgType = 1;
+    int sigType = DecaySignalType(modelId);
+    int nSig    = DecaySigNpar(sigType);
+
     bool fullRange = !decayFitFullRange_ || decayFitFullRange_->IsOn();
     double xlo = fullRange ? tAxisMin : std::max(0.0, decayFitLo_->GetNumber());
     double xhi = fullRange ? hDecay->GetXaxis()->GetXmax() : decayFitHi_->GetNumber();
     if (xlo >= xhi) { xlo = tAxisMin; xhi = hDecay->GetXaxis()->GetXmax(); }
 
-    TF1* fDecay = nullptr;
+    TF1* fDecay = BuildDecayTF1("fDecay", modelId, bgType, xlo, xhi);
 
-    if (modelId == 4) {
-        fDecay = new TF1("fDecayBG", "[0]", xlo, xhi);
-        fDecay->SetParName(0, "BG");
-        fDecay->SetParameter(0, std::max(0.0, hDecay->GetMinimum()));
+    // Seed signal parameters
+    double initMax = std::max(1.0, hDecay->GetMaximum() - hDecay->GetMinimum());
+    double initMin = std::max(0.0, hDecay->GetMinimum());
+    double TP  = decayThalfP_  ? decayThalfP_->GetNumber()  : (xhi-xlo)/2.0;
+    double TD  = decayThalfD_  ? decayThalfD_->GetNumber()  : (xhi-xlo)/4.0;
+    double TG  = decayThalfG_  ? decayThalfG_->GetNumber()  : (xhi-xlo)/8.0;
 
-    } else if (modelId == 1) {
-        fDecay = new TF1("fDecayP",
-                         "[0]*exp(-0.6931471805599453*x/[1]) + [2]",
-                         xlo, xhi);
-        fDecay->SetParName(0, "A");
-        fDecay->SetParName(1, "T_{1/2}");
-        fDecay->SetParName(2, "BG");
-        double T = decayThalfP_->GetNumber();
-        fDecay->SetParameters(std::max(1.0, hDecay->GetMaximum() - hDecay->GetMinimum()),
-                              T > 0 ? T : (xhi - xlo) / 2.0,
-                              std::max(0.0, hDecay->GetMinimum()));
+    if (sigType == 1) {
+        fDecay->SetParameter(0, initMax);
+        fDecay->SetParameter(1, TP > 0 ? TP : (xhi-xlo)/2.0);
         fDecay->SetParLimits(1, 1e-6, 1e12);
-        if (decayFixP_->IsOn()) fDecay->FixParameter(1, T);
-
-    } else if (modelId == 2) {
-        fDecay = new TF1("fDecayD", DecayModelDaughter, xlo, xhi, 4);
-        fDecay->SetParName(0, "A");
-        fDecay->SetParName(1, "T_{1/2}^{P}");
-        fDecay->SetParName(2, "T_{1/2}^{D}");
-        fDecay->SetParName(3, "BG");
-        double TP = decayThalfP_->GetNumber();
-        double TD = decayThalfD_->GetNumber();
-        fDecay->SetParameters(hDecay->GetMaximum(),
-                              TP > 0 ? TP : (xhi - xlo) / 4.0,
-                              TD > 0 ? TD : (xhi - xlo) / 2.0,
-                              std::max(0.0, hDecay->GetMinimum()));
+        if (decayFixP_ && decayFixP_->IsOn()) fDecay->FixParameter(1, TP);
+    } else if (sigType == 2) {
+        fDecay->SetParameter(0, initMax);
+        fDecay->SetParameter(1, TP > 0 ? TP : (xhi-xlo)/4.0);
+        fDecay->SetParameter(2, TD > 0 ? TD : (xhi-xlo)/2.0);
         fDecay->SetParLimits(1, 1e-6, 1e12);
         fDecay->SetParLimits(2, 1e-6, 1e12);
-        if (decayFixP_->IsOn()) fDecay->FixParameter(1, TP);
-        if (decayFixD_->IsOn()) fDecay->FixParameter(2, TD);
-
-    } else {
-        // Granddaughter
-        fDecay = new TF1("fDecayG", DecayModelGranddaughter, xlo, xhi, 5);
-        fDecay->SetParName(0, "A");
-        fDecay->SetParName(1, "T_{1/2}^{P}");
-        fDecay->SetParName(2, "T_{1/2}^{D}");
-        fDecay->SetParName(3, "T_{1/2}^{G}");
-        fDecay->SetParName(4, "BG");
-        double TP = decayThalfP_->GetNumber();
-        double TD = decayThalfD_->GetNumber();
-        double TG = decayThalfG_->GetNumber();
-        fDecay->SetParameters(hDecay->GetMaximum(),
-                              TP > 0 ? TP : (xhi-xlo)/8.0,
-                              TD > 0 ? TD : (xhi-xlo)/4.0,
-                              TG > 0 ? TG : (xhi-xlo)/2.0,
-                              std::max(0.0, hDecay->GetMinimum()));
+        if (decayFixP_ && decayFixP_->IsOn()) fDecay->FixParameter(1, TP);
+        if (decayFixD_ && decayFixD_->IsOn()) fDecay->FixParameter(2, TD);
+    } else if (sigType == 3) {
+        fDecay->SetParameter(0, initMax);
+        fDecay->SetParameter(1, TP > 0 ? TP : (xhi-xlo)/8.0);
+        fDecay->SetParameter(2, TD > 0 ? TD : (xhi-xlo)/4.0);
+        fDecay->SetParameter(3, TG > 0 ? TG : (xhi-xlo)/2.0);
         fDecay->SetParLimits(1, 1e-6, 1e12);
         fDecay->SetParLimits(2, 1e-6, 1e12);
         fDecay->SetParLimits(3, 1e-6, 1e12);
-        if (decayFixP_->IsOn()) fDecay->FixParameter(1, TP);
-        if (decayFixD_->IsOn()) fDecay->FixParameter(2, TD);
-        if (decayFixG_->IsOn()) fDecay->FixParameter(3, TG);
+        if (decayFixP_ && decayFixP_->IsOn()) fDecay->FixParameter(1, TP);
+        if (decayFixD_ && decayFixD_->IsOn()) fDecay->FixParameter(2, TD);
+        if (decayFixG_ && decayFixG_->IsOn()) fDecay->FixParameter(3, TG);
+    }
+    // Seed BG parameters
+    double Tbg = decayThalfBGExp_ ? decayThalfBGExp_->GetNumber() : (xhi-xlo)*2.0;
+    if (bgType == 1) {
+        fDecay->SetParameter(nSig, initMin);
+    } else if (bgType == 2) {
+        fDecay->SetParameter(nSig,   initMin * 0.5);
+        fDecay->SetParameter(nSig+1, initMin * 0.5);
+        fDecay->SetParameter(nSig+2, Tbg > 0 ? Tbg : (xhi-xlo)*2.0);
+        fDecay->SetParLimits(nSig+2, 1e-6, 1e12);
+        if (decayFixBGExp_ && decayFixBGExp_->IsOn()) fDecay->FixParameter(nSig+2, Tbg);
+    } else {
+        fDecay->SetParameter(nSig,   initMin);
+        fDecay->SetParameter(nSig+1, Tbg > 0 ? Tbg : (xhi-xlo)*2.0);
+        fDecay->SetParLimits(nSig+1, 1e-6, 1e12);
+        if (decayFixBGExp_ && decayFixBGExp_->IsOn()) fDecay->FixParameter(nSig+1, Tbg);
     }
 
     fDecay->SetLineColor(kRed);
@@ -780,32 +1161,30 @@ void GammaFitGUI::OnFitDecay()
     fDecay->Draw("same");
 
     // ── Draw fit components ────────────────────────────────────────────────────
-    if (modelId != 4) {
-        int   npar = fDecay->GetNpar();
-        double BG  = fDecay->GetParameter(npar - 1);
-
-        // Signal = total - BG (clone the fitted function, zero out BG)
+    if (sigType != 4) {
+        int npar = fDecay->GetNpar();
+        // Signal: zero all BG params
         TF1* fSig = (TF1*)fDecay->Clone("fDecaySigComp");
-        fSig->FixParameter(npar - 1, 0.0);
-        fSig->SetLineColor(kBlue + 1);
+        for (int i = nSig; i < npar; i++) fSig->FixParameter(i, 0.0);
+        fSig->SetLineColor(kBlue+1);
         fSig->SetLineWidth(1);
         fSig->SetLineStyle(2);
         fSig->Draw("same");
 
-        // Background = horizontal line at BG level
-        TLine* bgLine = new TLine(xlo, BG, xhi, BG);
-        bgLine->SetLineColor(kGreen + 2);
-        bgLine->SetLineWidth(2);
-        bgLine->SetLineStyle(2);
-        bgLine->Draw();
+        // Background: zero signal amplitude (p[0])
+        TF1* fBGComp = (TF1*)fDecay->Clone("fDecayBGComp");
+        fBGComp->FixParameter(0, 0.0);
+        fBGComp->SetLineColor(kGreen+2);
+        fBGComp->SetLineWidth(2);
+        fBGComp->SetLineStyle(2);
+        fBGComp->Draw("same");
 
-        // Legend
         TLegend* leg = new TLegend(0.60, 0.72, 0.92, 0.92);
         leg->SetBorderSize(1);
-        leg->AddEntry(hDecay,  "Data",       "l");
-        leg->AddEntry(fDecay,  "Total fit",  "l");
-        leg->AddEntry(fSig,    "Signal",     "l");
-        leg->AddEntry(bgLine,  "Background", "l");
+        leg->AddEntry(hDecay,   "Data",       "l");
+        leg->AddEntry(fDecay,   "Total fit",  "l");
+        leg->AddEntry(fSig,     "Signal",     "l");
+        leg->AddEntry(fBGComp,  "Background", "l");
         leg->Draw();
     }
 
@@ -813,8 +1192,9 @@ void GammaFitGUI::OnFitDecay()
 
     // ── Report ────────────────────────────────────────────────────────────────
     decayResultView_->Clear();
-    decayResultView_->AddLine(Form("Peak: %.2f keV  window: +/-%.1f sigma  [%.2f, %.2f]",
-                                   E, Nsig, eMin, eMax));
+    decayResultView_->AddLine(Form("Peak: %.2f keV  [%.2f, %.2f]  cut: -%.2f/+%.2f sig  rebin:%d",
+                                   E, eMin, eMax, NsigLo, NsigHi,
+                                   decayRebinEntry_ ? (int)decayRebinEntry_->GetNumber() : 1));
     double chi2ndf = (fitRes.Get() && fitRes->Ndf() > 0)
                      ? fitRes->Chi2() / fitRes->Ndf() : -1.0;
     decayResultView_->AddLine(Form("Chi2/NDF: %.4g  status: %d",
@@ -828,12 +1208,15 @@ void GammaFitGUI::OnFitDecay()
         DecayFitResult r;
         r.peakE          = E;
         r.model          = modelId;
+        r.bgType         = bgType;
         r.chi2ndf        = chi2ndf;
         r.status         = fitRes.Get() ? fitRes->Status() : -1;
         r.histName       = decayTh2Name_;
         r.eMin           = eMin;
         r.eMax           = eMax;
-        r.Nsig           = Nsig;
+        r.Nsig           = NsigHi;
+        r.NsigLo         = NsigLo;
+        r.rebin          = decayRebinEntry_ ? (int)decayRebinEntry_->GetNumber() : 1;
         // Preserve existing label/class if already set
         auto existing = decayFitStore_.find(E);
         if (existing != decayFitStore_.end()) {
@@ -859,11 +1242,11 @@ void GammaFitGUI::OnFitDecay()
     }
 
     // ── Peak count estimates ──────────────────────────────────────────────────
-    if (modelId != 4) {  // background-only model has no signal
+    if (sigType != 4) {  // signal-bearing models only
         int    npar = fDecay->GetNpar();
         double A    = fDecay->GetParameter(0);              // amplitude (counts/bin at t=0)
-        double TP   = fDecay->GetParameter(1);              // parent half-life (ms)
-        double BG   = fDecay->GetParameter(npar - 1);       // always last param
+        double TP   = fDecay->GetParameter(1);              // parent T½ (ms)
+        double BG   = fDecay->GetParameter(nSig);           // flat BG param
         double binW = hDecay->GetBinWidth(1);               // ms per bin
         const double ln2 = 0.6931471805599453;
 
@@ -932,35 +1315,16 @@ void GammaFitGUI::OnFitDecay()
         }
     }
 
-    // Auto-classify and save to gamma projection cache
+    // Informational model note — does NOT write classification to gamma cache
     if (fitRes.Get() && fitRes->Status() == 0) {
-        static const char* kModelCls[] = { "", "Parent", "Daughter", "Granddaughter", "Background" };
-        std::string suggestedCls = (modelId >= 1 && modelId <= 4) ? kModelCls[modelId] : "";
-
-        if (!suggestedCls.empty()) {
-            // Save to the appropriate cache for this peak
-            const std::string& peakCache = (peakSel <= (Int_t)decayPeakCacheNames_.size())
-                                           ? decayPeakCacheNames_[peakSel - 1]
-                                           : decayGammaProjName_;
-            if (!peakCache.empty() && peakSel >= 1 &&
-                (size_t)peakSel <= decayPeakKeys_.size()) {
-                FitDatabase fdb;
-                fdb.Load(CacheFileFor(peakCache));
-                const auto& ents = fdb.GetEntries();
-                auto eit = ents.find(decayPeakKeys_[peakSel - 1]);
-                if (eit != ents.end()) {
-                    FitEntry fe = eit->second;
-                    if (fe.classification.empty())
-                        fe.classification = suggestedCls;
-                    fdb.ForceStore(decayPeakKeys_[peakSel - 1], fe);
-                    EnsureCacheDir();
-                    fdb.Save(CacheFileFor(peakCache));
-                    BackupCacheFile(CacheFileFor(peakCache));
-                }
-            }
+        static const char* kModelCls[] = {
+            "", "Parent", "Daughter(β⁻)", "GDaughter(β⁻)", "Background",
+            "Daughter(β⁻n)", "Daughter(β⁻2n)", "GDaughter(β⁻n)", "GDaughter(β⁻2n)"
+        };
+        if (modelId >= 1 && modelId <= 8)
             decayResultView_->AddLine(
-                Form("  → Auto-classified as: %s", suggestedCls.c_str()));
-        }
+                Form("  → Model: %s  bgType:%d  (Isotopes tab to set classification)",
+                     kModelCls[modelId], bgType));
     }
     decayResultView_->ShowBottom();
 
@@ -1004,6 +1368,9 @@ void GammaFitGUI::SaveDecayFitCache()
         out << " " << esc(r.histName)
             << " " << esc(r.label)
             << " " << esc(r.classification)
+            << " " << r.bgType
+            << " " << r.NsigLo
+            << " " << r.rebin
             << "\n";
     }
 }
@@ -1042,6 +1409,12 @@ void GammaFitGUI::LoadDecayFitCache()
         if (ss >> hn) r.histName       = unescape(hn);
         if (ss >> lb) r.label          = unescape(lb);
         if (ss >> cl) r.classification = unescape(cl);
+        int bgt = 1;
+        if (ss >> bgt) r.bgType = bgt;   // optional; defaults 1 (Flat)
+        double nsiglo = -1.0;
+        if (ss >> nsiglo) r.NsigLo = nsiglo;
+        int rebin = 1;
+        if (ss >> rebin) r.rebin = rebin;
         decayFitStore_[r.peakE] = r;
         ++count;
     }
@@ -1061,11 +1434,12 @@ void GammaFitGUI::OnPreviewDecay()
     if (peakSel < 1 || (size_t)peakSel > decayPeakEs_.size()) {
         AppendLog("[Decay] Select a peak first"); return;
     }
-    double E    = decayPeakEs_[peakSel - 1];
-    double sig  = decayPeakSigs_[peakSel - 1];
-    double Nsig = decaySigRangeEntry_->GetNumber();
-    double eMin = E - Nsig * sig;
-    double eMax = E + Nsig * sig;
+    double E      = decayPeakEs_[peakSel - 1];
+    double sig    = decayPeakSigs_[peakSel - 1];
+    double NsigHi = decaySigRangeEntry_ ? decaySigRangeEntry_->GetNumber() : 1.0;
+    double NsigLo = decaySigLoEntry_    ? decaySigLoEntry_->GetNumber()    : NsigHi;
+    double eMin   = E - NsigLo * sig;
+    double eMax   = E + NsigHi * sig;
 
     TH2* h2 = (TH2*)inputFile_->Get(decayTh2Name_.c_str());
     if (!h2) { AppendLog("[Decay] TH2 not found"); return; }
@@ -1108,7 +1482,7 @@ void GammaFitGUI::OnPreviewDecay()
     c->Modified(); c->Update();
     gSystem->ProcessEvents();
 
-    SetStatus(Form("Preview: %.2f keV  +/-%.1f sigma  [%.2f, %.2f]", E, Nsig, eMin, eMax));
+    SetStatus(Form("Preview: %.2f keV  [%.2f, %.2f]  cut: -%.2f/+%.2f sig", E, eMin, eMax, NsigLo, NsigHi));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1166,7 +1540,8 @@ void GammaFitGUI::OnMakePeakCountVsTime()
 
     double E      = decayPeakEs_[peakSel - 1];
     double sig    = decayPeakSigs_[peakSel - 1];
-    double Nsig   = decaySigRangeEntry_->GetNumber();
+    double NsigHi = decaySigRangeEntry_ ? decaySigRangeEntry_->GetNumber() : 1.0;
+    double NsigLo = decaySigLoEntry_    ? decaySigLoEntry_->GetNumber()    : NsigHi;
     double sliceW = decaySliceWidthEntry_->GetNumber();
     if (sliceW <= 0) { AppendLog("[Decay] Slice width must be > 0"); return; }
 
@@ -1181,9 +1556,9 @@ void GammaFitGUI::OnMakePeakCountVsTime()
     double tMax = timeAxis->GetXmax();
     if (tMax <= tMin) { AppendLog("[Decay] Time axis has no positive range"); return; }
 
-    // Gamma energy window
-    double eMin = E - Nsig * sig;
-    double eMax = E + Nsig * sig;
+    // Gamma energy window (asymmetric cut)
+    double eMin = E - NsigLo * sig;
+    double eMax = E + NsigHi * sig;
     const double kSqrt2Pi = 2.5066282746310002;
 
     // Open output ROOT file for slice histograms (recreate each run)
@@ -1259,7 +1634,7 @@ void GammaFitGUI::OnMakePeakCountVsTime()
     int N = (int)tCenter.size();
     TGraphErrors* gr = new TGraphErrors(N);
     gr->SetName(Form("peakCounts_%.2fkeV", E));
-    gr->SetTitle(Form("Peak counts vs time  (%.2f keV  #pm%.1f#sigma);Time (ms);Peak counts", E, Nsig));
+    gr->SetTitle(Form("Peak counts vs time  (%.2f keV  -%.1f/+%.1f#sigma);Time (ms);Peak counts", E, NsigLo, NsigHi));
     for (int i = 0; i < N; i++) {
         gr->SetPoint(i, tCenter[i], counts[i]);
         gr->SetPointError(i, 0.5*sliceW, countsErr[i]);
@@ -1344,6 +1719,411 @@ void GammaFitGUI::OnDecayScanCaches()
         AppendLog("[Decay] No fit caches found — run AutoFit on a histogram first");
     else
         AppendLog(Form("[Decay] Found %d cache(s)", (int)names.size()));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Total Decay sub-tab slots
+// ─────────────────────────────────────────────────────────────────────────────
+
+void GammaFitGUI::OnDecayTdModelChanged(Int_t id)
+{
+    if (!decayTdEquationLbl_) return;
+    static const char* kEq[] = {
+        "",
+        "f(t) = A*exp(-ln2*t/T_P) + BG",
+        "f(t) = A*lD/(lD-lP)*(e^-lP*t - e^-lD*t) + BG",
+        "f(t) = A*lP*lD*lG*Sum[e^-li*t/(prod)] + BG",
+        "f(t) = BG  (background only)",
+        "f(t) = Daughter Bateman [β⁻n chain] + BG",
+        "f(t) = Daughter Bateman [β⁻2n chain] + BG",
+        "f(t) = GDaughter Bateman [β⁻n chain] + BG",
+        "f(t) = GDaughter Bateman [β⁻2n chain] + BG",
+    };
+    if (id >= 1 && id <= 8) {
+        decayTdEquationLbl_->SetText(kEq[id]);
+        decayTdEquationLbl_->Layout();
+    }
+    if (decayTdPLbl_ && decayTdDLbl_ && decayTdGLbl_) {
+        switch (id) {
+            case 5:
+                decayTdPLbl_->SetText("T½ β⁻n product:");
+                decayTdDLbl_->SetText("T½ Daughter:");
+                break;
+            case 6:
+                decayTdPLbl_->SetText("T½ β⁻2n product:");
+                decayTdDLbl_->SetText("T½ Daughter:");
+                break;
+            case 7:
+                decayTdPLbl_->SetText("T½ Parent:");
+                decayTdDLbl_->SetText("T½ β⁻n product:");
+                decayTdGLbl_->SetText("T½ GDaughter:");
+                break;
+            case 8:
+                decayTdPLbl_->SetText("T½ Parent:");
+                decayTdDLbl_->SetText("T½ β⁻2n product:");
+                decayTdGLbl_->SetText("T½ GDaughter:");
+                break;
+            default:
+                decayTdPLbl_->SetText("T½ Parent:");
+                decayTdDLbl_->SetText("T½ Daughter:");
+                decayTdGLbl_->SetText("T½ GDaughter:");
+                break;
+        }
+    }
+}
+
+void GammaFitGUI::OnDecayTdBGTypeChanged(Int_t /*id*/)
+{
+    int bgType = decayTdBGCombo_ ? decayTdBGCombo_->GetSelected() : 1;
+    bool hasExp = (bgType >= 2);
+    if (decayTdThalfBGExp_) decayTdThalfBGExp_->SetState(hasExp ? kTRUE : kFALSE);
+    if (decayTdFixBGExp_)   decayTdFixBGExp_->SetEnabled(hasExp ? kTRUE : kFALSE);
+}
+
+void GammaFitGUI::OnFitTotalDecay()
+{
+    if (!inputFile_) { AppendLog("[TotalDecay] No ROOT file loaded"); return; }
+    if (decayTh2Name_.empty()) { AppendLog("[TotalDecay] Run 'Refresh' in Cuts tab first"); return; }
+    if (decayPeakEs_.empty())  { AppendLog("[TotalDecay] No peaks loaded — refresh in Cuts tab"); return; }
+
+    TH2* h2 = (TH2*)inputFile_->Get(decayTh2Name_.c_str());
+    if (!h2) { AppendLog("[TotalDecay] TH2 not found"); return; }
+
+    int axisId = decayGammaAxisCombo_ ? decayGammaAxisCombo_->GetSelected() : 1;
+    double NsigHi = decaySigRangeEntry_ ? decaySigRangeEntry_->GetNumber() : 1.0;
+    double NsigLo = decaySigLoEntry_    ? decaySigLoEntry_->GetNumber()    : NsigHi;
+
+    // Determine which peaks to sum
+    bool sumAll = !decayTdSumAll_ || decayTdSumAll_->IsOn();
+    std::vector<int> peakIndices;
+    if (sumAll) {
+        for (int i = 0; i < (int)decayPeakEs_.size(); ++i) peakIndices.push_back(i);
+    } else {
+        Int_t sel = decayPeakList_ ? decayPeakList_->GetSelected() : -1;
+        if (sel < 1 || (size_t)sel > decayPeakEs_.size()) {
+            AppendLog("[TotalDecay] Select a peak in the Cuts list (or enable 'Sum all')");
+            return;
+        }
+        peakIndices.push_back(sel - 1);
+    }
+
+    // Sum projections for each peak
+    TH1* hTotal = nullptr;
+    std::string summedPeaks;
+    for (int idx : peakIndices) {
+        double E      = decayPeakEs_[idx];
+        double sig    = decayPeakSigs_[idx];
+        // Use stored cut if available, otherwise current Lo/Hi entries
+        double eMin, eMax;
+        auto fitIt = decayFitStore_.find(E);
+        if (fitIt != decayFitStore_.end()) {
+            eMin = fitIt->second.eMin;
+            eMax = fitIt->second.eMax;
+        } else {
+            eMin = E - NsigLo * sig;
+            eMax = E + NsigHi * sig;
+        }
+
+        TH1* hPeak = nullptr;
+        if (axisId == 1) {
+            int b1 = h2->GetXaxis()->FindBin(eMin);
+            int b2 = h2->GetXaxis()->FindBin(eMax);
+            hPeak = h2->ProjectionY(Form("hTdPeak_%d", idx), b1, b2);
+        } else {
+            int b1 = h2->GetYaxis()->FindBin(eMin);
+            int b2 = h2->GetYaxis()->FindBin(eMax);
+            hPeak = h2->ProjectionX(Form("hTdPeak_%d", idx), b1, b2);
+        }
+        if (!hPeak || hPeak->GetEntries() == 0) { delete hPeak; continue; }
+        hPeak->SetDirectory(nullptr);
+
+        if (!hTotal) {
+            hTotal = (TH1*)hPeak->Clone("hTotalDecay");
+            hTotal->SetDirectory(nullptr);
+            delete hPeak;
+        } else {
+            hTotal->Add(hPeak);
+            delete hPeak;
+        }
+        summedPeaks += Form("%.2f ", E);
+    }
+
+    if (!hTotal || hTotal->GetEntries() == 0) {
+        delete hTotal;
+        AppendLog("[TotalDecay] No counts in summed projection");
+        return;
+    }
+
+    // Rebin (use same rebin as Cuts tab)
+    int rebin = decayRebinEntry_ ? (int)decayRebinEntry_->GetNumber() : 1;
+    if (rebin > 1) hTotal->Rebin(rebin);
+
+    double tAxisMin = std::max(0.0, hTotal->GetXaxis()->GetXmin());
+    hTotal->GetXaxis()->SetRangeUser(tAxisMin, hTotal->GetXaxis()->GetXmax());
+    hTotal->GetXaxis()->SetTitle("Time (ms)");
+    if (rebin > 1) {
+        double bw = hTotal->GetBinWidth(1);
+        hTotal->GetYaxis()->SetTitle(Form("Counts / (%.4g ms)", bw));
+    } else {
+        hTotal->GetYaxis()->SetTitle("Counts");
+    }
+    hTotal->SetTitle(Form("Total decay  (%d peaks summed)  %s;Time (ms);Counts",
+                         (int)peakIndices.size(), decayTh2Name_.c_str()));
+    hTotal->SetLineColor(kBlack);
+    hTotal->SetMarkerSize(0);
+
+    TCanvas* c = canvas_->GetCanvas();
+    c->Clear(); c->cd();
+    hTotal->Draw(showErrorBars_ ? "hist E" : "hist");
+    c->Modified(); c->Update();
+    gSystem->ProcessEvents();
+
+    // ── Build fit function ────────────────────────────────────────────────────
+    int modelId = decayTdModelCombo_ ? decayTdModelCombo_->GetSelected() : 1;
+    int bgType  = decayTdBGCombo_    ? decayTdBGCombo_->GetSelected()    : 1;
+    if (bgType < 1 || bgType > 3) bgType = 1;
+    int sigType = DecaySignalType(modelId);
+    int nSig    = DecaySigNpar(sigType);
+
+    bool fullRange = !decayTdFullRange_ || decayTdFullRange_->IsOn();
+    double xlo = fullRange ? tAxisMin : std::max(0.0, decayTdFitLo_->GetNumber());
+    double xhi = fullRange ? hTotal->GetXaxis()->GetXmax() : decayTdFitHi_->GetNumber();
+    if (xlo >= xhi) { xlo = tAxisMin; xhi = hTotal->GetXaxis()->GetXmax(); }
+
+    TF1* fDecay = BuildDecayTF1("fTotalDecay", modelId, bgType, xlo, xhi);
+
+    // Seed signal parameters
+    double initMax = std::max(1.0, hTotal->GetMaximum() - hTotal->GetMinimum());
+    double initMin = std::max(0.0, hTotal->GetMinimum());
+    double TP  = decayTdThalfP_    ? decayTdThalfP_->GetNumber()    : (xhi-xlo)/2.0;
+    double TD  = decayTdThalfD_    ? decayTdThalfD_->GetNumber()    : (xhi-xlo)/4.0;
+    double TG  = decayTdThalfG_    ? decayTdThalfG_->GetNumber()    : (xhi-xlo)/8.0;
+    double Tbg = decayTdThalfBGExp_? decayTdThalfBGExp_->GetNumber(): (xhi-xlo)*2.0;
+
+    if (sigType == 1) {
+        fDecay->SetParameter(0, initMax);
+        fDecay->SetParameter(1, TP > 0 ? TP : (xhi-xlo)/2.0);
+        fDecay->SetParLimits(1, 1e-6, 1e12);
+        if (decayTdFixP_ && decayTdFixP_->IsOn()) fDecay->FixParameter(1, TP);
+    } else if (sigType == 2) {
+        fDecay->SetParameter(0, initMax);
+        fDecay->SetParameter(1, TP > 0 ? TP : (xhi-xlo)/4.0);
+        fDecay->SetParameter(2, TD > 0 ? TD : (xhi-xlo)/2.0);
+        fDecay->SetParLimits(1, 1e-6, 1e12);
+        fDecay->SetParLimits(2, 1e-6, 1e12);
+        if (decayTdFixP_ && decayTdFixP_->IsOn()) fDecay->FixParameter(1, TP);
+        if (decayTdFixD_ && decayTdFixD_->IsOn()) fDecay->FixParameter(2, TD);
+    } else if (sigType == 3) {
+        fDecay->SetParameter(0, initMax);
+        fDecay->SetParameter(1, TP > 0 ? TP : (xhi-xlo)/8.0);
+        fDecay->SetParameter(2, TD > 0 ? TD : (xhi-xlo)/4.0);
+        fDecay->SetParameter(3, TG > 0 ? TG : (xhi-xlo)/2.0);
+        fDecay->SetParLimits(1, 1e-6, 1e12);
+        fDecay->SetParLimits(2, 1e-6, 1e12);
+        fDecay->SetParLimits(3, 1e-6, 1e12);
+        if (decayTdFixP_ && decayTdFixP_->IsOn()) fDecay->FixParameter(1, TP);
+        if (decayTdFixD_ && decayTdFixD_->IsOn()) fDecay->FixParameter(2, TD);
+        if (decayTdFixG_ && decayTdFixG_->IsOn()) fDecay->FixParameter(3, TG);
+    }
+    if (bgType == 1) {
+        fDecay->SetParameter(nSig, initMin);
+    } else if (bgType == 2) {
+        fDecay->SetParameter(nSig,   initMin * 0.5);
+        fDecay->SetParameter(nSig+1, initMin * 0.5);
+        fDecay->SetParameter(nSig+2, Tbg > 0 ? Tbg : (xhi-xlo)*2.0);
+        fDecay->SetParLimits(nSig+2, 1e-6, 1e12);
+        if (decayTdFixBGExp_ && decayTdFixBGExp_->IsOn()) fDecay->FixParameter(nSig+2, Tbg);
+    } else {
+        fDecay->SetParameter(nSig,   initMin);
+        fDecay->SetParameter(nSig+1, Tbg > 0 ? Tbg : (xhi-xlo)*2.0);
+        fDecay->SetParLimits(nSig+1, 1e-6, 1e12);
+        if (decayTdFixBGExp_ && decayTdFixBGExp_->IsOn()) fDecay->FixParameter(nSig+1, Tbg);
+    }
+
+    fDecay->SetLineColor(kRed);
+    fDecay->SetLineWidth(2);
+
+    TFitResultPtr fitRes = hTotal->Fit(fDecay, "SR");
+
+    hTotal->Draw(showErrorBars_ ? "hist E" : "hist");
+    fDecay->Draw("same");
+
+    // ── Draw components ───────────────────────────────────────────────────────
+    TLegend* leg = new TLegend(0.58, 0.68, 0.92, 0.92);
+    leg->SetBorderSize(1);
+    leg->AddEntry(hTotal, "Data (sum)", "l");
+    leg->AddEntry(fDecay, "Total fit",  "l");
+    if (sigType != 4) {
+        int npar = fDecay->GetNpar();
+        TF1* fSig = (TF1*)fDecay->Clone("fTdSig");
+        for (int i = nSig; i < npar; i++) fSig->FixParameter(i, 0.0);
+        fSig->SetLineColor(kBlue+1); fSig->SetLineWidth(1); fSig->SetLineStyle(2);
+        fSig->Draw("same");
+        leg->AddEntry(fSig, "Signal", "l");
+
+        TF1* fBGComp = (TF1*)fDecay->Clone("fTdBG");
+        fBGComp->FixParameter(0, 0.0);
+        fBGComp->SetLineColor(kGreen+2); fBGComp->SetLineWidth(2); fBGComp->SetLineStyle(2);
+        fBGComp->Draw("same");
+        leg->AddEntry(fBGComp, "Background", "l");
+    }
+    leg->Draw();
+    c->Modified(); c->Update();
+
+    // ── Report ────────────────────────────────────────────────────────────────
+    double chi2ndf = (fitRes.Get() && fitRes->Ndf() > 0)
+                     ? fitRes->Chi2() / fitRes->Ndf() : -1.0;
+    if (decayTdResultView_) decayTdResultView_->Clear();
+    if (decayTdResultView_) {
+        decayTdResultView_->AddLine(Form("Total decay: %d peaks summed  TH2: %s",
+                                        (int)peakIndices.size(), decayTh2Name_.c_str()));
+        decayTdResultView_->AddLine(Form("Peaks: %s", summedPeaks.c_str()));
+        decayTdResultView_->AddLine(Form("Rebin: %d   Chi2/NDF: %.4g   status: %d",
+                                        rebin, chi2ndf, fitRes.Get() ? fitRes->Status() : -1));
+        for (int i = 0; i < fDecay->GetNpar(); i++)
+            decayTdResultView_->AddLine(Form("  %-16s = %11.5g +/- %.4g",
+                fDecay->GetParName(i), fDecay->GetParameter(i), fDecay->GetParError(i)));
+
+        // Population estimate
+        const double ln2 = 0.6931471805599453;
+        if (sigType != 4) {
+            double A    = fDecay->GetParameter(0);
+            double TP2  = fDecay->GetParameter(1);
+            double binW = hTotal->GetBinWidth(1);
+            double tau  = (TP2 > 0) ? TP2 / ln2 : 0.0;
+            double Ntot = (tau > 0 && binW > 0) ? A * tau / binW : -1.0;
+            if (Ntot > 0) {
+                double totalErr = -1.0;
+                if (fitRes.Get() && fitRes->IsValid()) {
+                    const TMatrixDSym& cov = fitRes->GetCovarianceMatrix();
+                    int np = fDecay->GetNpar();
+                    if (cov.GetNrows() == np && A > 0 && TP2 > 0) {
+                        double dA  = tau / binW;
+                        double dTP = A / (ln2 * binW);
+                        double varN = dA*dA*cov(0,0) + dTP*dTP*cov(1,1)
+                                    + 2.0*dA*dTP*cov(0,1);
+                        if (varN > 0) totalErr = std::sqrt(varN);
+                    }
+                }
+                decayTdResultView_->AddLine("─────────────────────────────────");
+                if (totalErr > 0)
+                    decayTdResultView_->AddLine(
+                        Form("Total peak counts (0→∞):  %.0f +/- %.0f", Ntot, totalErr));
+                else
+                    decayTdResultView_->AddLine(
+                        Form("Total peak counts (0→∞):  %.0f", Ntot));
+                decayTdResultView_->AddLine(
+                    Form("  [A=%.4g  T½=%.4g ms  τ=%.4g ms  bw=%.4g ms]",
+                         A, TP2, tau, binW));
+                // Population = total parent decays N = A*τ/bw summed over peaks
+                // (this already IS N for the total projection)
+                decayTdResultView_->AddLine(
+                    Form("Population (N_parent decays): %.4g", Ntot));
+            }
+        }
+        decayTdResultView_->ShowBottom();
+    }
+
+    // ── Store and save ────────────────────────────────────────────────────────
+    {
+        decayTdFitResult_.model  = modelId;
+        decayTdFitResult_.bgType = bgType;
+        decayTdFitResult_.rebin  = rebin;
+        decayTdFitResult_.chi2ndf= chi2ndf;
+        decayTdFitResult_.status = fitRes.Get() ? fitRes->Status() : -1;
+        decayTdFitResult_.histName = decayTh2Name_;
+        decayTdFitResult_.eMin   = xlo;
+        decayTdFitResult_.eMax   = xhi;
+        decayTdFitResult_.Nsig   = (double)peakIndices.size();
+        int np = fDecay->GetNpar();
+        decayTdFitResult_.params.resize(np);
+        decayTdFitResult_.errors.resize(np);
+        for (int i = 0; i < np; i++) {
+            decayTdFitResult_.params[i] = fDecay->GetParameter(i);
+            decayTdFitResult_.errors[i] = fDecay->GetParError(i);
+        }
+        decayTdFitValid_ = true;
+        SaveTotalDecayFitCache();
+    }
+
+    AppendLog(Form("[TotalDecay] Fit done: %d peaks  chi2/ndf=%.3f", (int)peakIndices.size(), chi2ndf));
+    SetStatus(Form("Total decay fit: %d peaks  chi2/ndf=%.3f", (int)peakIndices.size(), chi2ndf));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Total Decay cache helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+std::string GammaFitGUI::TotalDecayCacheFileFor() const
+{
+    if (decayTh2Name_.empty()) return "";
+    return CacheDirFor() + "/decay_total_" + decayTh2Name_ + ".dat";
+}
+
+void GammaFitGUI::SaveTotalDecayFitCache()
+{
+    if (!decayTdFitValid_) return;
+    std::string path = TotalDecayCacheFileFor();
+    if (path.empty()) return;
+    EnsureCacheDir();
+    std::ofstream out(path);
+    if (!out.is_open()) return;
+    out << std::fixed << std::setprecision(8);
+    const DecayFitResult& r = decayTdFitResult_;
+    // Header: which peaks were summed (energies) and binning info
+    out << "# Total decay fit for TH2: " << r.histName << "\n";
+    out << "# nPeaksSummed " << (int)r.Nsig << "\n";
+    out << "# rebin " << r.rebin << "\n";
+    out << "# fitRange " << r.eMin << " " << r.eMax << "\n";
+    // Per-peak energies from the summed projection
+    if (!decayPeakEs_.empty()) {
+        out << "# summedEnergies";
+        for (double e : decayPeakEs_) out << " " << e;
+        out << "\n";
+    }
+    // Fit result line: model bgType npar [pi ei]... chi2ndf status
+    int np = (int)r.params.size();
+    out << r.model << " " << r.bgType << " " << np;
+    for (int i = 0; i < np; i++) out << " " << r.params[i] << " " << r.errors[i];
+    out << " " << r.chi2ndf << " " << r.status << "\n";
+    AppendLog("[TotalDecay] Cache saved → " + path);
+}
+
+void GammaFitGUI::LoadTotalDecayFitCache()
+{
+    decayTdFitValid_ = false;
+    std::string path = TotalDecayCacheFileFor();
+    if (path.empty()) return;
+    std::ifstream in(path);
+    if (!in.is_open()) return;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream ss(line);
+        int model = 0, bgType = 1, np = 0;
+        if (!(ss >> model >> bgType >> np)) continue;
+        decayTdFitResult_.model  = model;
+        decayTdFitResult_.bgType = bgType;
+        decayTdFitResult_.params.resize(np);
+        decayTdFitResult_.errors.resize(np);
+        bool ok = true;
+        for (int i = 0; i < np; i++)
+            if (!(ss >> decayTdFitResult_.params[i] >> decayTdFitResult_.errors[i]))
+                { ok = false; break; }
+        if (!ok) continue;
+        ss >> decayTdFitResult_.chi2ndf >> decayTdFitResult_.status;
+        decayTdFitResult_.histName = decayTh2Name_;
+        decayTdFitValid_ = true;
+        // Seed T½ entries in the Total Decay tab
+        int sig = DecaySignalType(model);
+        if (sig >= 1 && np >= 2 && decayTdThalfP_) decayTdThalfP_->SetNumber(decayTdFitResult_.params[1]);
+        if (sig >= 2 && np >= 3 && decayTdThalfD_) decayTdThalfD_->SetNumber(decayTdFitResult_.params[2]);
+        if (sig >= 3 && np >= 4 && decayTdThalfG_) decayTdThalfG_->SetNumber(decayTdFitResult_.params[3]);
+        if (decayTdModelCombo_) decayTdModelCombo_->Select(model, kTRUE);
+        if (decayTdBGCombo_)    decayTdBGCombo_->Select(bgType, kTRUE);
+        AppendLog("[TotalDecay] Loaded cached total decay fit from " + path);
+        break;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

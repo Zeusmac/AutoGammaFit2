@@ -203,6 +203,9 @@ public:
             e.params[i]      = f->GetParameter(i);
             e.paramErrors[i] = f->GetParError(i);
         }
+        // Auto-mark for refit when MIGRAD did not converge
+        if (!r.Get() || !r->IsValid() || r->Status() != 0)
+            e.needsRefit = true;
         return e;
     }
 

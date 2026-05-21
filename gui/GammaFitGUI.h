@@ -153,13 +153,21 @@ public:
     void OnDecayPeakSelected(Int_t id);
     void OnFitDecay();
     void OnRefreshDecayPeaks();
+    void OnDecayPreviewGammaPeak();
     void OnPreviewDecay();
+    void OnDecayAutoModel();
+    void OnDecaySeedHalfLives();
+    void OnDecayBGTypeChanged(Int_t id);
     void OnDecayRebinReset();
     void OnDecayApplyLabel();
     void OnMakePeakCountVsTime();
     void OnLoadDecayCache();
     void OnSaveDecayCache();
     void OnDecayScanCaches();
+    // ── Total Decay sub-tab ───────────────────────────────────────────────────
+    void OnDecayTdModelChanged(Int_t id);
+    void OnDecayTdBGTypeChanged(Int_t id);
+    void OnFitTotalDecay();
 
     // ── Histogram classification ──────────────────────────────────────────────
     void OnHistClassSet();
@@ -284,6 +292,8 @@ public:
     void OnPTEffSelected(Int_t id);
     void OnPTCalculateIntensity();
     void OnPTSaveIntensity();
+    void OnPTPopulate();
+    void OnPTPreviewPeak();
     // DB comparison
     void OnPTDbCompare();
 
@@ -587,16 +597,16 @@ private:
     // Intensity calculation widgets
     TGComboBox*    ptEffCombo_      = nullptr;  // select efficiency cache
     TGTextEntry*   ptEffNameEntry_  = nullptr;  // name when saving a new cache
-    TGNumberEntry* ptActivityEntry_ = nullptr;  // source activity (Bq)
-    TGNumberEntry* ptTimeEntry_     = nullptr;  // measurement time (s)
+    TGNumberEntry* ptPopulationEntry_ = nullptr; // total population (decays)
     TGNumberEntry* ptEnergyEntry_   = nullptr;  // peak energy (auto-filled)
     TGNumberEntry* ptEffValEntry_   = nullptr;  // efficiency at E (auto-filled or manual)
     TGNumberEntry* ptAreaEntry_     = nullptr;  // peak area (auto-filled)
     TGNumberEntry* ptAreaErrEntry_  = nullptr;  // peak area error (auto-filled)
     TGLabel*       ptIntensityLbl_  = nullptr;  // computed intensity result
+    TGLabel*       ptDecayInfoLbl_  = nullptr;  // shows A₀/T½ after Populate
     std::vector<EfficiencyCache> ptEffCaches_;  // loaded efficiency fits
     int            ptSelectedRow_   = -1;       // index into ptRows_ of current selection
-    TGCheckButton* ptShowRefitOnly_ = nullptr;  // show only peaks marked for refit
+    TGCheckButton* ptShowRefitOnly_ = nullptr;  // when on: hide refit-marked peaks (show fitted only)
 
     // DB comparison widgets
     TGTextEntry*   ptDbIsoEntry_    = nullptr;
@@ -669,7 +679,8 @@ private:
     bool                 showIsoLabels_    = false;
     TGCheckButton*       mBgQuadChk_      = nullptr;  // quadratic background term
     TGCheckButton*       mComptonStepChk_ = nullptr;  // Compton step (Erfc term per peak)
-    TGCheckButton*       mTieWidthsChk_   = nullptr;  // tie sigma to resolution model
+    TGCheckButton*       mTieWidthsChk_    = nullptr;  // tie sigma to resolution model
+    TGCheckButton*       mTieSameSigmaChk_ = nullptr;  // force same sigma for all Gaussians
     TGComboBox*          mResModelCombo_  = nullptr;  // "Auto" | "Custom"
     TGNumberEntry*       mResParA_        = nullptr;  // FWHM²=a+b·E+c·E² — a
     TGNumberEntry*       mResParB_        = nullptr;  // b
@@ -762,31 +773,43 @@ private:
     int            fwhmNdf_       = 0;
 
     // ── Decay tab widgets ─────────────────────────────────────────────────────
+    TGTab*         decaySubTabs_        = nullptr;  // "Cuts" / "Fitter" sub-tabs
     TGComboBox*    decayTh2Combo_       = nullptr;  // TH2 selection
     TGComboBox*    decayGammaAxisCombo_ = nullptr;  // 1=X is gamma, 2=Y is gamma
-    TGNumberEntry* decaySigRangeEntry_  = nullptr;  // ±N*σ window
+    TGNumberEntry* decaySigLoEntry_     = nullptr;  // Lo-side sigma window (below centroid)
+    TGNumberEntry* decaySigRangeEntry_  = nullptr;  // Hi-side sigma window (above centroid)
     TGListBox*     decayPeakList_       = nullptr;  // fitted peaks from gamma projection
-    TGComboBox*    decayModelCombo_     = nullptr;  // 1=Parent, 2=Daughter, 3=GDaughter, 4=BG
+    TGComboBox*    decayModelCombo_     = nullptr;
+    TGComboBox*    decayBGTypeCombo_    = nullptr;  // 1=Flat, 2=Flat+Exp, 3=Exp only
+    // Half-life rows — labels are updated dynamically per model
+    TGLabel*       decayThalfPLbl_      = nullptr;
     TGNumberEntry* decayThalfP_         = nullptr;
     TGCheckButton* decayFixP_           = nullptr;
+    TGLabel*       decayThalfDLbl_      = nullptr;
     TGNumberEntry* decayThalfD_         = nullptr;
     TGCheckButton* decayFixD_           = nullptr;
+    TGLabel*       decayThalfGLbl_      = nullptr;
     TGNumberEntry* decayThalfG_         = nullptr;
     TGCheckButton* decayFixG_           = nullptr;
+    TGLabel*       decayThalfBGLbl_     = nullptr;
+    TGNumberEntry* decayThalfBGExp_     = nullptr;  // T½ of exponential BG component (ms)
+    TGCheckButton* decayFixBGExp_       = nullptr;
     TGTextView*    decayResultView_     = nullptr;
-    TGTextEntry*   decayLabelEntry_     = nullptr;  // label for selected peak
-    TGComboBox*    decayLabelClassCombo_= nullptr;  // class for selected peak
-    TGNumberEntry* decaySliceWidthEntry_= nullptr;  // time-slice width for count vs time plot
-    TGNumberEntry* decayFitLo_          = nullptr;  // decay fit range low
-    TGNumberEntry* decayFitHi_          = nullptr;  // decay fit range high
-    TGCheckButton* decayFitFullRange_   = nullptr;  // use full axis range when checked
-    TGNumberEntry* decayRebinEntry_     = nullptr;  // rebin factor (1 = no rebin)
-    TGLabel*       decayEquationLabel_  = nullptr;  // shows formula for selected model
+    TGTextEntry*   decayLabelEntry_     = nullptr;
+    TGComboBox*    decayLabelClassCombo_= nullptr;
+    TGNumberEntry* decaySliceWidthEntry_= nullptr;
+    TGNumberEntry* decayFitLo_          = nullptr;
+    TGNumberEntry* decayFitHi_          = nullptr;
+    TGCheckButton* decayFitFullRange_   = nullptr;
+    TGNumberEntry* decayRebinEntry_     = nullptr;
+    TGLabel*       decayEquationLabel_  = nullptr;
 
     // Decay fit result — stored per peak energy for the active TH2
     struct DecayFitResult {
         double peakE  = 0.0;
         int    model  = 0;
+        int    bgType = 1;  // 1=Flat, 2=Flat+Exp, 3=Exp only
+        int    rebin  = 1;  // time-axis rebin factor used for the fit
         std::vector<double> params;
         std::vector<double> errors;
         double chi2ndf = -1.0;
@@ -795,7 +818,8 @@ private:
         std::string histName;        // which TH2 this came from
         double      eMin   = 0.0;   // exact gamma energy cut low edge
         double      eMax   = 0.0;   // exact gamma energy cut high edge
-        double      Nsig   = 1.0;   // sigma window used
+        double      Nsig   = 1.0;   // Hi-side sigma window
+        double      NsigLo = -1.0;  // Lo-side sigma window (-1 = same as Nsig)
         std::string label;
         std::string classification;
     };
@@ -811,6 +835,30 @@ private:
     // Decay cache picker (which gamma histogram's cache to use for tie widths)
     TGComboBox*              decayCacheCombo_      = nullptr;
     std::vector<std::string> decayPeakCacheNames_; // cache name for each peak in decayPeakList_
+
+    // ── Total Decay sub-tab widgets ───────────────────────────────────────────
+    TGComboBox*    decayTdModelCombo_   = nullptr;
+    TGComboBox*    decayTdBGCombo_      = nullptr;
+    TGLabel*       decayTdEquationLbl_  = nullptr;
+    TGLabel*       decayTdPLbl_         = nullptr;
+    TGNumberEntry* decayTdThalfP_       = nullptr;
+    TGCheckButton* decayTdFixP_         = nullptr;
+    TGLabel*       decayTdDLbl_         = nullptr;
+    TGNumberEntry* decayTdThalfD_       = nullptr;
+    TGCheckButton* decayTdFixD_         = nullptr;
+    TGLabel*       decayTdGLbl_         = nullptr;
+    TGNumberEntry* decayTdThalfG_       = nullptr;
+    TGCheckButton* decayTdFixG_         = nullptr;
+    TGLabel*       decayTdBGLbl_        = nullptr;
+    TGNumberEntry* decayTdThalfBGExp_   = nullptr;
+    TGCheckButton* decayTdFixBGExp_     = nullptr;
+    TGNumberEntry* decayTdFitLo_        = nullptr;
+    TGNumberEntry* decayTdFitHi_        = nullptr;
+    TGCheckButton* decayTdFullRange_    = nullptr;
+    TGCheckButton* decayTdSumAll_       = nullptr;  // sum all peaks (vs selected only)
+    TGTextView*    decayTdResultView_   = nullptr;
+    DecayFitResult decayTdFitResult_;
+    bool           decayTdFitValid_     = false;
 
     // ── Peak navigation ───────────────────────────────────────────────────────
     std::vector<std::string> peakNavKeys_;
@@ -866,6 +914,9 @@ private:
     std::string DecayCacheFileFor() const;
     void        SaveDecayFitCache();
     void        LoadDecayFitCache();
+    std::string TotalDecayCacheFileFor() const;
+    void        SaveTotalDecayFitCache();
+    void        LoadTotalDecayFitCache();
 
     // Fit Results helpers
     void ShowFitResult(const std::string& hname);

@@ -204,16 +204,7 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
         previewBtn->SetToolTipText(
             "Zoom the main canvas to the selected peak and overlay its cached fit.");
 
-        TGTextButton* toIntBtn = new TGTextButton(btnRow, " → Intensity Calc. ");
-        btnRow->AddFrame(toIntBtn, new TGLayoutHints(kLHintsLeft));
-        toIntBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoPopulateIntensity()");
-        toIntBtn->SetToolTipText(
-            "Populate the Peak Table intensity fields with this peak's energy/area.\n"
-            "Also fills A₀ and shows T½ if a decay fit is loaded in the Decay tab.");
-
-        isoIntensityInfoLbl_ = new TGLabel(listGrp, "  decay fit: (none)");
-        isoIntensityInfoLbl_->SetTextJustify(kTextLeft);
-        listGrp->AddFrame(isoIntensityInfoLbl_, new TGLayoutHints(kLHintsExpandX, 4, 2, 0, 4));
+        isoIntensityInfoLbl_ = nullptr; // moved to Peak Table tab
     }
 
     // ── Bulk action row ───────────────────────────────────────────────────────
@@ -1615,11 +1606,12 @@ void GammaFitGUI::OnIsoPopulateIntensity()
         double A0 = decRes->params[0];
         double T_half = decRes->params[1];  // ms (parent half-life)
 
-        if (ptActivityEntry_) ptActivityEntry_->SetNumber(A0);
+        double N = A0 * T_half / 0.6931471805599453;
+        if (ptPopulationEntry_) ptPopulationEntry_->SetNumber(N);
 
         char lblBuf[128];
         std::snprintf(lblBuf, sizeof(lblBuf),
-                      "  decay: A₀=%.4g  T½=%.4g ms", A0, T_half);
+                      "  decay: A\xe2\x82\x80=%.4g  T\xc2\xbd=%.4g ms  N=%.4g", A0, T_half, N);
         if (isoIntensityInfoLbl_) {
             isoIntensityInfoLbl_->SetText(lblBuf);
             isoIntensityInfoLbl_->Layout();

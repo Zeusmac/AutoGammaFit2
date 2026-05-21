@@ -23,6 +23,9 @@ fit_caches*/
 Gamma_fits/
 AllGammaFits.root
 
+# Claude Code agent worktrees
+.claude/worktrees/
+
 # Editor/IDE
 .vscode/
 .idea/

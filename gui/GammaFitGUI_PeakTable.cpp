@@ -239,9 +239,15 @@ void GammaFitGUI::BuildPeakTableTab(TGCompositeFrame* p) {
         sortRow->AddFrame(rebuildBtn, new TGLayoutHints(kLHintsCenterY, 0, 3, 0, 0));
         rebuildBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPTRebuildTable()");
 
-        ptShowRefitOnly_ = new TGCheckButton(sortRow, "Refit only");
+        TGTextButton* previewBtn = new TGTextButton(sortRow, " Preview ");
+        sortRow->AddFrame(previewBtn, new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        previewBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPTPreviewPeak()");
+        previewBtn->SetToolTipText("Preview the selected peak on the canvas");
+
+        ptShowRefitOnly_ = new TGCheckButton(sortRow, "Fitted only");
         sortRow->AddFrame(ptShowRefitOnly_, new TGLayoutHints(kLHintsCenterY, 4, 0, 0, 0));
         ptShowRefitOnly_->Connect("Toggled(Bool_t)", "GammaFitGUI", this, "OnPTRebuildTable()");
+        ptShowRefitOnly_->SetToolTipText("When checked, hide peaks marked for refit — show fitted peaks only");
 
         // Selectable list box — click a row to preview the peak
         ptTableList_ = new TGListBox(grp, 5210);
@@ -344,27 +350,21 @@ void GammaFitGUI::BuildPeakTableTab(TGCompositeFrame* p) {
         saveEffBtn->SetToolTipText(
             "Save the current AutoFit efficiency parameters (a,b,c,d) as a named cache");
 
-        // Activity + time row
+        // Total population row
         TGHorizontalFrame* actRow = new TGHorizontalFrame(grp);
         grp->AddFrame(actRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-        actRow->AddFrame(new TGLabel(actRow, "Activity:"),
+        actRow->AddFrame(new TGLabel(actRow, "Total Population:"),
                          new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        ptActivityEntry_ = new TGNumberEntry(actRow, 1.0, 10, -1,
-                                             TGNumberFormat::kNESRealFour,
-                                             TGNumberFormat::kNEAPositive);
-        ptActivityEntry_->SetWidth(85);
-        actRow->AddFrame(ptActivityEntry_, new TGLayoutHints(kLHintsLeft, 0, 2, 0, 0));
-        actRow->AddFrame(new TGLabel(actRow, "Bq"),
-                         new TGLayoutHints(kLHintsCenterY, 0, 8, 0, 0));
-        actRow->AddFrame(new TGLabel(actRow, "Time:"),
-                         new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        ptTimeEntry_ = new TGNumberEntry(actRow, 1.0, 10, -1,
-                                         TGNumberFormat::kNESRealFour,
-                                         TGNumberFormat::kNEAPositive);
-        ptTimeEntry_->SetWidth(75);
-        actRow->AddFrame(ptTimeEntry_, new TGLayoutHints(kLHintsLeft, 0, 2, 0, 0));
-        actRow->AddFrame(new TGLabel(actRow, "s"),
+        ptPopulationEntry_ = new TGNumberEntry(actRow, 1.0, 12, -1,
+                                               TGNumberFormat::kNESReal,
+                                               TGNumberFormat::kNEAPositive);
+        ptPopulationEntry_->SetWidth(110);
+        actRow->AddFrame(ptPopulationEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        actRow->AddFrame(new TGLabel(actRow, "decays"),
                          new TGLayoutHints(kLHintsCenterY));
+        ptPopulationEntry_->GetNumberEntry()->SetToolTipText(
+            "Total number of source decays during the measurement.\n"
+            "I = Area / (efficiency x population)");
 
         // Energy + efficiency row (auto-filled on peak select)
         TGHorizontalFrame* eRow = new TGHorizontalFrame(grp);
@@ -401,13 +401,19 @@ void GammaFitGUI::BuildPeakTableTab(TGCompositeFrame* p) {
                                             TGNumberFormat::kNEAAnyNumber);
         ptAreaErrEntry_->SetWidth(75);
         areaRow->AddFrame(ptAreaErrEntry_, new TGLayoutHints(kLHintsLeft, 0, 6, 0, 0));
+        TGTextButton* populateBtn = new TGTextButton(areaRow, " Populate ");
+        areaRow->AddFrame(populateBtn, new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        populateBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPTPopulate()");
+        populateBtn->SetToolTipText(
+            "Fill energy, area, and activity from the selected peak and decay fit cache");
+
         TGTextButton* calcBtn = new TGTextButton(areaRow, "Calculate");
         areaRow->AddFrame(calcBtn, new TGLayoutHints(kLHintsCenterY));
         calcBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPTCalculateIntensity()");
 
         // Result + save row
         TGHorizontalFrame* resRow = new TGHorizontalFrame(grp);
-        grp->AddFrame(resRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        grp->AddFrame(resRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
         ptIntensityLbl_ = new TGLabel(resRow, "  I = ---");
         ptIntensityLbl_->SetTextJustify(kTextLeft);
         resRow->AddFrame(ptIntensityLbl_,
@@ -417,6 +423,11 @@ void GammaFitGUI::BuildPeakTableTab(TGCompositeFrame* p) {
         saveIBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPTSaveIntensity()");
         saveIBtn->SetToolTipText(
             "Save the computed intensity (with error) to a sidecar file next to the fit cache");
+
+        // Decay fit info label (populated by Populate button)
+        ptDecayInfoLbl_ = new TGLabel(grp, "  decay fit: (none)");
+        ptDecayInfoLbl_->SetTextJustify(kTextLeft);
+        grp->AddFrame(ptDecayInfoLbl_, new TGLayoutHints(kLHintsExpandX, 4, 2, 0, 4));
     }
 
     // ── DB Comparison ─────────────────────────────────────────────────────────
@@ -606,6 +617,15 @@ void GammaFitGUI::OnPTClearCaches() {
         ptTableList_->MapSubwindows();
         ptTableList_->Layout();
     }
+
+    // Also clear background subtraction definitions and persist
+    if (!bgSubtractDefs_.empty()) {
+        bgSubtractDefs_.clear();
+        SaveMetadata();
+        PopulateHistWidgets();
+        AppendLog("PeakTable: background subtraction definitions cleared.");
+    }
+
     AppendLog("PeakTable: cleared all caches and their backups");
 }
 
@@ -620,13 +640,13 @@ void GammaFitGUI::OnPTRebuildTable() {
     int classFilter = ptClassFilter_ ? ptClassFilter_->GetSelected() : 1;
     int sortSel     = ptSortCombo_   ? ptSortCombo_->GetSelected()   : 1;
 
-    bool refitOnly = ptShowRefitOnly_ && ptShowRefitOnly_->IsOn();
+    bool fittedOnly = ptShowRefitOnly_ && ptShowRefitOnly_->IsOn();
 
     // Build filtered list
     std::vector<size_t> indices;
     for (size_t i = 0; i < ptRows_.size(); i++) {
         const PeakTableRow& r = ptRows_[i];
-        if (refitOnly && !r.needsRefit)                              continue;
+        if (fittedOnly && r.needsRefit)                              continue; // hide refit-marked
         if (!filterLabel.empty() && r.label.find(filterLabel) == std::string::npos)
             continue;
         if (classFilter == 2 && r.classification != "Parent")        continue;
@@ -662,30 +682,52 @@ void GammaFitGUI::OnPTRebuildTable() {
         return;
     }
 
-    // Each row: E=xxxx.xxx +/-x.xxx  FWHM=x.xxx  Area=xxxxxxx +/-xxxxx  chi2=x.xx  label [class]  {hist}
-    char buf[512];
+    // Check if any row has intensity data (determines whether to show Inten% column)
+    bool anyIntensity = false;
+    for (size_t idx : indices)
+        if (ptRows_[idx].intensity > 0.0) { anyIntensity = true; break; }
+
+    // Header row (ID=0 — clicking it is harmless; OnPTRowSelected guards id < 1)
+    {
+        char hdr[600];
+        if (anyIntensity)
+            std::snprintf(hdr, sizeof(hdr),
+                "| %-16s | %-9s | %-19s | %-5s | %-9s | %-18s | %-14s | %-18s |",
+                "Energy (keV)", "FWHM(keV)", "Area \xb1 Err",
+                "chi2", "Inten%", "Label", "Class", "Histogram");
+        else
+            std::snprintf(hdr, sizeof(hdr),
+                "| %-16s | %-9s | %-19s | %-5s | %-18s | %-14s | %-18s |",
+                "Energy (keV)", "FWHM(keV)", "Area \xb1 Err",
+                "chi2", "Label", "Class", "Histogram");
+        ptTableList_->AddEntry(hdr, 0);
+    }
+
+    char buf[600];
     for (int i = 0; i < (int)indices.size(); i++) {
         const PeakTableRow& r = ptRows_[indices[i]];
 
-        std::string lbl = r.label.empty() ? "(unlabeled)" : r.label;
+        std::string ekeV = NNDCFormat(r.energy, r.energyErr);
+        std::string lbl  = r.label.empty() ? "(unlabeled)" : r.label;
         if (r.needsRefit) lbl = "[R] " + lbl;
-        std::string cls = r.classification.empty() ? "" : "[" + r.classification + "]";
+        std::string cls  = r.classification.empty() ? "-" : r.classification;
 
-        // Truncate histogram name to keep line readable
         std::string hname = r.histName;
-        if (hname.size() > 20) hname = hname.substr(0, 17) + "...";
+        if (hname.size() > 18) hname = hname.substr(0, 15) + "...";
 
-        if (r.intensity > 0.0) {
+        if (anyIntensity) {
+            std::string istr = (r.intensity > 0.0)
+                ? Form("%.3f\xb1%.3f", r.intensity*100.0, r.intensityErr*100.0)
+                : "-";
             std::snprintf(buf, sizeof(buf),
-                "  E=%9.3f +/-%6.3f  FWHM=%6.3f  Area=%8.1f +/-%7.1f  chi2=%5.2f  I=%7.4f%%+/-%.4f%%  %-18s %-16s {%s}",
-                r.energy, r.energyErr, r.fwhm,
+                "| %-16s | %9.3f | %9.1f\xb1%-9.1f | %5.2f | %-9s | %-18s | %-14s | %-18s |",
+                ekeV.c_str(), r.fwhm,
                 r.area, r.areaErr, r.chi2ndf,
-                r.intensity * 100.0, r.intensityErr * 100.0,
-                lbl.c_str(), cls.c_str(), hname.c_str());
+                istr.c_str(), lbl.c_str(), cls.c_str(), hname.c_str());
         } else {
             std::snprintf(buf, sizeof(buf),
-                "  E=%9.3f +/-%6.3f  FWHM=%6.3f  Area=%8.1f +/-%7.1f  chi2=%5.2f  %-18s %-16s {%s}",
-                r.energy, r.energyErr, r.fwhm,
+                "| %-16s | %9.3f | %9.1f\xb1%-9.1f | %5.2f | %-18s | %-14s | %-18s |",
+                ekeV.c_str(), r.fwhm,
                 r.area, r.areaErr, r.chi2ndf,
                 lbl.c_str(), cls.c_str(), hname.c_str());
         }
@@ -998,29 +1040,26 @@ void GammaFitGUI::OnPTEffSelected(Int_t id) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnPTCalculateIntensity — I = Area / (ε × A₀ × t)
+// Slot: OnPTCalculateIntensity — I = Area / (ε × N)
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnPTCalculateIntensity() {
     if (!ptIntensityLbl_) return;
 
-    double area    = ptAreaEntry_     ? ptAreaEntry_->GetNumber()     : 0.0;
-    double areaErr = ptAreaErrEntry_  ? ptAreaErrEntry_->GetNumber()  : 0.0;
-    double eff     = ptEffValEntry_   ? ptEffValEntry_->GetNumber()   : 0.0;
-    double actBq   = ptActivityEntry_ ? ptActivityEntry_->GetNumber() : 0.0;
-    double time_s  = ptTimeEntry_     ? ptTimeEntry_->GetNumber()     : 0.0;
+    double area    = ptAreaEntry_       ? ptAreaEntry_->GetNumber()       : 0.0;
+    double areaErr = ptAreaErrEntry_    ? ptAreaErrEntry_->GetNumber()    : 0.0;
+    double eff     = ptEffValEntry_     ? ptEffValEntry_->GetNumber()     : 0.0;
+    double N       = ptPopulationEntry_ ? ptPopulationEntry_->GetNumber() : 0.0;
 
-    if (eff <= 0 || actBq <= 0 || time_s <= 0) {
-        ptIntensityLbl_->SetText("  I = --- (need eff, activity, and time > 0)");
+    if (eff <= 0 || N <= 0) {
+        ptIntensityLbl_->SetText("  I = --- (need efficiency and total population > 0)");
         ptIntensityLbl_->Layout();
         return;
     }
 
-    // Absolute intensity (gamma emission probability per decay)
-    double denom  = eff * actBq * time_s;
-    double I      = area    / denom;
-    double I_err  = areaErr / denom;
+    double denom = eff * N;
+    double I     = area    / denom;
+    double I_err = areaErr / denom;
 
-    // Also compute as percentage
     char buf[256];
     if (I_err > 0.0)
         std::snprintf(buf, sizeof(buf),
@@ -1033,9 +1072,9 @@ void GammaFitGUI::OnPTCalculateIntensity() {
     ptIntensityLbl_->SetText(buf);
     ptIntensityLbl_->Layout();
 
-    AppendLog(Form("PeakTable: intensity E=%.3f keV  I=%.4g  eff=%.4g  A=%.4g Bq  t=%.4g s",
+    AppendLog(Form("PeakTable: intensity E=%.3f keV  I=%.4g  eff=%.4g  N=%.4g",
                    ptEnergyEntry_ ? ptEnergyEntry_->GetNumber() : 0.0,
-                   I, eff, actBq, time_s));
+                   I, eff, N));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1046,18 +1085,17 @@ void GammaFitGUI::OnPTSaveIntensity() {
         AppendLog("PeakTable: select a peak row first"); return;
     }
 
-    double area    = ptAreaEntry_     ? ptAreaEntry_->GetNumber()     : 0.0;
-    double areaErr = ptAreaErrEntry_  ? ptAreaErrEntry_->GetNumber()  : 0.0;
-    double eff     = ptEffValEntry_   ? ptEffValEntry_->GetNumber()   : 0.0;
-    double actBq   = ptActivityEntry_ ? ptActivityEntry_->GetNumber() : 0.0;
-    double time_s  = ptTimeEntry_     ? ptTimeEntry_->GetNumber()     : 0.0;
+    double area    = ptAreaEntry_       ? ptAreaEntry_->GetNumber()       : 0.0;
+    double areaErr = ptAreaErrEntry_    ? ptAreaErrEntry_->GetNumber()    : 0.0;
+    double eff     = ptEffValEntry_     ? ptEffValEntry_->GetNumber()     : 0.0;
+    double N       = ptPopulationEntry_ ? ptPopulationEntry_->GetNumber() : 0.0;
 
-    if (eff <= 0 || actBq <= 0 || time_s <= 0) {
-        AppendLog("PeakTable: need eff, activity, and time > 0 to save intensity");
+    if (eff <= 0 || N <= 0) {
+        AppendLog("PeakTable: need efficiency and total population > 0 to save intensity");
         return;
     }
 
-    double denom = eff * actBq * time_s;
+    double denom = eff * N;
     double I     = area    / denom;
     double I_err = areaErr / denom;
 
@@ -1246,4 +1284,75 @@ void GammaFitGUI::OnPTRestoreMissing() {
     } else {
         AppendLog("[Restore] No missing caches found — everything is present.");
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slot: OnPTPopulate
+// Fill intensity-calculation fields from the selected peak row + decay fit.
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnPTPopulate()
+{
+    if (ptSelectedRow_ < 0 || ptSelectedRow_ >= (int)ptRows_.size()) {
+        AppendLog("[Populate] Select a peak in the table first."); return;
+    }
+    const PeakTableRow& r = ptRows_[ptSelectedRow_];
+
+    // Fill energy and area from the row
+    if (ptEnergyEntry_)  ptEnergyEntry_->SetNumber(r.energy);
+    if (ptAreaEntry_)    ptAreaEntry_->SetNumber(r.area);
+    if (ptAreaErrEntry_) ptAreaErrEntry_->SetNumber(r.areaErr);
+
+    AppendLog(Form("[Populate] E=%.3f keV  Area=%.1f +/-%.1f  %s",
+                   r.energy, r.area, r.areaErr, r.label.c_str()));
+
+    // Search decay fit cache within 2 keV
+    const DecayFitResult* decRes = nullptr;
+    double bestDiff = 2.0;
+    for (const auto& kv : decayFitStore_) {
+        double d = std::abs(kv.first - r.energy);
+        if (d < bestDiff) { bestDiff = d; decRes = &kv.second; }
+    }
+
+    if (decRes && decRes->params.size() >= 2) {
+        double A0     = decRes->params[0];
+        double T_half = decRes->params[1];
+        // Total population = integral of exponential from 0→∞ = A₀ × T½ / ln(2)
+        double N = A0 * T_half / 0.6931471805599453;
+        if (ptPopulationEntry_) ptPopulationEntry_->SetNumber(N);
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+            "  decay: A\xe2\x82\x80=%.4g  T\xc2\xbd=%.4g ms  \xe2\x86\x92 N=%.4g",
+            A0, T_half, N);
+        if (ptDecayInfoLbl_) { ptDecayInfoLbl_->SetText(buf); ptDecayInfoLbl_->Layout(); }
+        AppendLog(Form("[Populate] Decay fit: A0=%.4g  T1/2=%.4g ms  N=%.4g  (delta=%.2f keV)",
+                       A0, T_half, N, bestDiff));
+    } else {
+        if (ptDecayInfoLbl_) {
+            ptDecayInfoLbl_->SetText("  decay fit: (none loaded)");
+            ptDecayInfoLbl_->Layout();
+        }
+    }
+
+    if (ptIntensityLbl_) ptIntensityLbl_->SetText("  I = --- (click Calculate)");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slot: OnPTPreviewPeak
+// Preview the currently selected table row on the canvas.
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnPTPreviewPeak()
+{
+    if (ptSelectedRow_ < 0 || ptSelectedRow_ >= (int)ptRows_.size()) {
+        AppendLog("[Preview] Select a peak in the table first."); return;
+    }
+    // Re-use the row-click handler by finding the list item id for this row
+    for (size_t i = 0; i < ptFilteredRows_.size(); i++) {
+        if ((int)ptFilteredRows_[i] == ptSelectedRow_) {
+            OnPTRowSelected((Int_t)(i + 1));
+            return;
+        }
+    }
+    // Fallback: call directly with the stored row data
+    OnPTRowSelected(-1);  // will be a no-op; log it
+    AppendLog("[Preview] Selected row not in current filtered view — click Rebuild first.");
 }

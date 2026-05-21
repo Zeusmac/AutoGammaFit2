@@ -1594,6 +1594,12 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
         "Fix each Gaussian sigma to the FWHM-model prediction σ(E).\n"
         "Enforces physically consistent detector resolution for doublet fits.");
 
+    mTieSameSigmaChk_ = new TGCheckButton(statsGrp, "Tie widths — same sigma");
+    statsGrp->AddFrame(mTieSameSigmaChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 2));
+    mTieSameSigmaChk_->SetToolTipText(
+        "All Gaussians in the fit share a single free sigma parameter.\n"
+        "Useful for doublets/multiplets where peaks must have identical width.");
+
     // Resolution model source row
     {
         TGHorizontalFrame* resRow = new TGHorizontalFrame(statsGrp);
@@ -2947,18 +2953,44 @@ void GammaFitGUI::OnManualFit()
     }
     TH1* fitHist = viewHist_ ? viewHist_ : rawHist_;
 
-    bool useQuadBG    = mBgQuadChk_      && mBgQuadChk_->IsDown();
-    bool useCompStep  = mComptonStepChk_ && mComptonStepChk_->IsDown();
-    bool useTieWidths = mTieWidthsChk_   && mTieWidthsChk_->IsDown();
+    bool useQuadBG    = mBgQuadChk_       && mBgQuadChk_->IsDown();
+    bool useCompStep  = mComptonStepChk_  && mComptonStepChk_->IsDown();
+    bool useTieWidths = mTieWidthsChk_    && mTieWidthsChk_->IsDown();
+    bool useSameSigma = mTieSameSigmaChk_ && mTieSameSigmaChk_->IsDown() && n > 1;
 
     ResolutionModel tieRes = GetTieResModel();  // effective model for sigma tying
 
     delete manualTF1_;
     for (TF1* fc : fitComponents_) delete fc;
     fitComponents_.clear();
-    manualTF1_ = new TF1("manual_fit",
-                         BuildNGaussFormulaEx(n, useQuadBG, useCompStep).c_str(),
-                         xmin, xmax);
+    if (useSameSigma) {
+        // Lambda TF1: all Gaussians share p[2] as the single free sigma.
+        // Parameter layout is identical to BuildNGaussFormulaEx (3i, 3i+1, 3i+2)
+        // so accepted fits re-display correctly once sigma slots are back-filled.
+        int nPar = NTotalPars(n, useQuadBG, useCompStep);
+        manualTF1_ = new TF1("manual_fit",
+            [n, useQuadBG, useCompStep](double* x, double* p) -> double {
+                double sig = p[2];
+                double val = 0.0;
+                for (int i = 0; i < n; i++)
+                    val += p[3*i] * std::exp(-0.5 * std::pow((x[0]-p[3*i+1])/sig, 2.0));
+                int bg = 3*n;
+                val += p[bg] + p[bg+1]*x[0];
+                if (useQuadBG) val += p[bg+2]*x[0]*x[0];
+                if (useCompStep) {
+                    int nbg = useQuadBG ? 3 : 2;
+                    for (int i = 0; i < n; i++)
+                        val += p[3*n + nbg + i]
+                               * TMath::Erfc((x[0]-p[3*i+1])/(sig*1.41421356));
+                }
+                return val;
+            },
+            xmin, xmax, nPar);
+    } else {
+        manualTF1_ = new TF1("manual_fit",
+                             BuildNGaussFormulaEx(n, useQuadBG, useCompStep).c_str(),
+                             xmin, xmax);
+    }
 
     double ampLo  = mAmpLoFrac_  ? mAmpLoFrac_ ->GetNumber() : 0.01;
     double ampHi  = mAmpHiFrac_  ? mAmpHiFrac_ ->GetNumber() : 20.0;
@@ -2979,7 +3011,16 @@ void GammaFitGUI::OnManualFit()
         manualTF1_->SetParLimits(3*i,     std::max(A * ampLo, 1.0), A * ampHi);
         manualTF1_->SetParameter(3*i+1,   E);
         manualTF1_->SetParLimits(3*i+1,   E - eWin, E + eWin);
-        if (useTieWidths) {
+        if (useSameSigma) {
+            if (i == 0) {
+                // Peak 0 sigma is the single shared free parameter for all Gaussians
+                manualTF1_->SetParameter(2, sigModel);
+                manualTF1_->SetParLimits(2, sigModel * sigLo, sigModel * sigHi);
+            } else {
+                // These slots exist in the parameter array but are unused by the lambda
+                manualTF1_->FixParameter(3*i+2, 1.0);
+            }
+        } else if (useTieWidths) {
             manualTF1_->SetParameter(3*i+2, sigModel);
             manualTF1_->FixParameter(3*i+2, sigModel);
         } else {
@@ -3027,6 +3068,14 @@ void GammaFitGUI::OnManualFit()
     // We redraw explicitly afterward so the zoom and view mode are preserved.
     TFitResultPtr r = fitHist->Fit(manualTF1_, fitOpts.c_str());
     lastManualEdm_ = (r.Get() && r->IsValid()) ? r->Edm() : -1.0;
+
+    // For same-sigma fits: copy the shared sigma back to all sigma slots so that
+    // accepted fits re-display correctly with the regular per-peak formula.
+    if (useSameSigma) {
+        double sharedSig = manualTF1_->GetParameter(2);
+        for (int i = 1; i < n; i++)
+            manualTF1_->SetParameter(3*i+2, sharedSig);
+    }
 
     // Clamp background so it never goes negative over the fit window
     {
@@ -3435,6 +3484,11 @@ void GammaFitGUI::OnAcceptFit()
         e.resB = tieRes.b;
         e.resC = tieRes.c;
     }
+
+    // Auto-mark for refit when MIGRAD did not converge
+    // lastManualEdm_ is set to -1 in OnManualFit when !r->IsValid()
+    if (lastManualEdm_ < 0.0)
+        e.needsRefit = true;
 
     // Force-store: manual fits always win regardless of score comparison.
     fitdb.ForceStore(key, e);
@@ -5365,6 +5419,13 @@ void GammaFitGUI::OnClearHistCache()
         for (size_t i = 0; i < fittedHists_.size(); i++)
             fitResultsList_->AddEntry(fittedHists_[i].c_str(), (Int_t)i + 1);
         fitResultsList_->MapSubwindows(); fitResultsList_->Layout();
+    }
+
+    // Remove any background subtraction definition for this histogram
+    if (bgSubtractDefs_.erase(currentHist_) > 0) {
+        SaveMetadata();
+        PopulateHistWidgets();
+        AppendLog("[ClearCache] Background subtraction for " + currentHist_ + " removed.");
     }
 
     peakNavKeys_.clear();

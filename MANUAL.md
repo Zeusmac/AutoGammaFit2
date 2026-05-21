@@ -10,23 +10,33 @@
 7. [Source Tab](#7-source-tab)
 8. [Fit Results Tab](#8-fit-results-tab)
 9. [Isotopes Tab](#9-isotopes-tab)
-10. [Decay Tab](#10-decay-tab)
-11. [Fitting Models and Mathematics](#11-fitting-models-and-mathematics)
-    - [10.1 Standard N-Gaussian + Linear Background](#101-standard-n-gaussian--linear-background)
-    - [10.2 Quadratic Background](#102-quadratic-background)
-    - [10.3 Compton Step Model](#103-compton-step-model)
-    - [10.4 Tied-Width Constraint](#104-tied-width-constraint)
-    - [10.5 Peak Area Calculation](#105-peak-area-calculation)
-    - [10.6 Signal-to-Noise Ratio (post-fit)](#106-signal-to-noise-ratio-post-fit)
-    - [10.7 Detector Resolution Model](#107-detector-resolution-model)
-    - [10.8 Efficiency Model](#108-efficiency-model)
-    - [10.9 NNDC Uncertainty Notation](#109-nndc-uncertainty-notation)
-    - [10.10 Chi-squared and Goodness of Fit](#1010-chi-squared-and-goodness-of-fit)
-    - [10.11 Peak Significance](#1011-peak-significance)
-    - [**10.12 Complete Fit Statistics Reference**](#1012-complete-fit-statistics-reference)
-11. [Algorithms](#11-algorithms)
-12. [Cache System](#12-cache-system)
-13. [References](#13-references)
+10. [Peak Table Tab](#10-peak-table-tab)
+11. [Decay Tab](#11-decay-tab)
+    - [11.1 Cuts Sub-tab](#111-cuts-sub-tab)
+    - [11.2 Fitter Sub-tab](#112-fitter-sub-tab)
+    - [11.3 Decay Models](#113-decay-models)
+    - [11.4 Background Models](#114-background-models)
+    - [11.5 Auto Model and T½ Seeding](#115-auto-model-and-t-seeding)
+    - [11.6 Peak Counts vs Time](#116-peak-counts-vs-time)
+    - [11.7 Fit Results and Peak Population](#117-fit-results-and-peak-population)
+12. [Fitting Models and Mathematics](#12-fitting-models-and-mathematics)
+    - [12.1 Standard N-Gaussian + Linear Background](#121-standard-n-gaussian--linear-background)
+    - [12.2 Quadratic Background](#122-quadratic-background)
+    - [12.3 Compton Step Model](#123-compton-step-model)
+    - [12.4 Tied-Width Constraint](#124-tied-width-constraint)
+    - [12.5 Same-Sigma Constraint](#125-same-sigma-constraint)
+    - [12.6 Peak Area Calculation](#126-peak-area-calculation)
+    - [12.7 Signal-to-Noise Ratio (post-fit)](#127-signal-to-noise-ratio-post-fit)
+    - [12.8 Detector Resolution Model](#128-detector-resolution-model)
+    - [12.9 Efficiency Model](#129-efficiency-model)
+    - [12.10 NNDC Uncertainty Notation](#1210-nndc-uncertainty-notation)
+    - [12.11 Chi-squared and Goodness of Fit](#1211-chi-squared-and-goodness-of-fit)
+    - [12.12 Peak Significance](#1212-peak-significance)
+    - [12.13 Decay Chain Mathematics](#1213-decay-chain-mathematics)
+    - [**12.14 Complete Fit Statistics Reference**](#1214-complete-fit-statistics-reference)
+13. [Algorithms](#13-algorithms)
+14. [Cache System](#14-cache-system)
+15. [References](#15-references)
 
 ---
 
@@ -183,7 +193,7 @@ Signal significance criterion: see [Bevington & Robinson (2003)](#ref-7), Ch. 4.
 Stores a log-polynomial detector efficiency model. Once set, the Manual Fit peak
 statistics panel reports an efficiency-corrected peak area alongside the raw area.
 
-**Model** (see Section 10.7 for derivation):
+**Model** (see Section 12.8 for derivation):
 ```
 ln(ε(E)) = a − b·ln(E) + c·(ln(E))² − d/E²
 ```
@@ -413,7 +423,35 @@ are all zero, tied widths will produce zero-sigma peaks.
 *Reference: gnuScope tied-width fitting mode; [Debertin & Helmer (1988)](#ref-5), Sec. 4.2;
 [Radford (1995)](#ref-4) — tied-width multiplet fitting*
 
-### 4.5 Fit Options
+### 4.5 Tied Widths — Same Sigma
+
+An additional option under the width-tying controls forces **all Gaussians in the
+current fit to share a single free sigma parameter**:
+
+```
+f(x) = Σᵢ Aᵢ · exp(−½·((x − Eᵢ)/σ)²)  +  BG(x)
+```
+
+All peak amplitudes and centroids remain free; only one sigma is fitted.
+
+**When to use:**
+- Doublets or multiplets where the peaks must have physically identical widths
+  (e.g., an unresolved doublet from two transitions of the same nucleus at the
+  same energy resolution)
+- When the individual per-peak sigmas are not independently constrained (very
+  close peaks with low statistics)
+
+**When NOT to use:**
+- Peaks separated by more than ~3 FWHM — real detectors show measurable width
+  variation across energy, and a shared sigma will be wrong for at least one peak
+- When the peaks are from transitions with genuinely different widths (e.g.,
+  Doppler-broadened vs. narrow lines in the same window)
+
+**Implementation note:** after fitting, the shared sigma value is copied back to
+all peak entries in the cache so that the standard per-peak display and FWHM model
+comparison work correctly.
+
+### 4.6 Fit Options
 
 | Option | Description |
 |--------|-------------|
@@ -423,7 +461,7 @@ are all zero, tied widths will produce zero-sigma peaks.
 | Show fit components | Overlay the background (green dashed) and individual Gaussian components (blue dashed) on the spectrum, in addition to the total fit (red). |
 | Show isotope matches | Display the matched isotope name from the database above each peak energy label. Uncheck to show energies only. |
 
-### 4.6 Fit Parameter Bounds
+### 4.7 Fit Parameter Bounds
 
 Click **Fit Parameters…** to edit the search bounds for each parameter class:
 
@@ -443,7 +481,7 @@ message in the log indicates this.
 *Reference: [James & Roos (1975)](#ref-1), MINUIT documentation — behaviour of parameters
 at limits*
 
-### 4.7 Peak Statistics Panel
+### 4.8 Peak Statistics Panel
 
 After each fit, the upper-right panel shows a block of statistics for every
 Gaussian component. If a cached fit already exists for the same peak set, the
@@ -451,8 +489,8 @@ manual fit results appear first under `=== Manual Fit ===` and the cached fit
 appears below under `=== Cached Fit ===` for direct comparison.
 
 A complete reference with derivations and physical interpretation of every term
-is given in [Section 10.12](#1012-complete-fit-statistics-reference). The quick
-summary table is below; read §10.12 before making claims about weak peaks.
+is given in [Section 12.14](#1214-complete-fit-statistics-reference). The quick
+summary table is below; read §12.14 before making claims about weak peaks.
 
 | Quantity | Formula | Quick interpretation |
 |----------|---------|---------------------|
@@ -476,7 +514,7 @@ summary table is below; read §10.12 before making claims about weak peaks.
 | chi²/ndf | Σ(pull²) / (bins − params) | ≈ 1 = good fit; >> 1 = bad model |
 | p-value (chi²) | TMath::Prob(χ², ndf) | > 0.05 = fit consistent with data |
 
-### 4.8 Residuals
+### 4.9 Residuals
 
 Check **Show residuals** to split the canvas vertically: spectrum + fit on top,
 normalised pull residuals (data − fit) / σ_data on the bottom.
@@ -488,7 +526,7 @@ normalised pull residuals (data − fit) / σ_data on the bottom.
 - Narrow positive spike between two peaks → missed peak (add another Gaussian)
 - All residuals shifted by a constant → bg0 is wrong
 
-### 4.9 Peak Navigation
+### 4.10 Peak Navigation
 
 Use **Prev / Next** or the **Select fit** dropdown to cycle through all cached fits
 for the loaded histogram. The canvas zooms to each fit region automatically.
@@ -585,7 +623,7 @@ and Δt is the time from `caldate` to `measdate`.
 
 Plot the result on a log-log scale — the efficiency curve should be smooth and
 monotonically decreasing (for Ge, above ~100 keV). Fit a log-polynomial to the
-data (see Section 10.7) and enter the coefficients in the Efficiency Correction
+data (see Section 12.8) and enter the coefficients in the Efficiency Correction
 group of the AutoFit tab.
 
 *Reference: [Knoll (2000)](#ref-6), Sec. 12-VI; [Debertin & Helmer (1988)](#ref-5), Ch. 6*
@@ -686,32 +724,246 @@ Classifications are stored per peak label and used in the Decay tab and CSV expo
 
 ---
 
-## 10. Decay Tab
+## 10. Peak Table Tab
 
-Extracts time-dependent gamma peak intensities from a TH2 histogram (e.g. gamma
-energy on one axis, time-since-beam-stop on the other).
+Aggregates peak data from multiple fit caches into a unified sortable/filterable
+table. Use it to compare energies, areas, and intensities across all loaded
+histograms.
 
-**Supported decay models:**
+### 10.1 Loading Caches
 
-| Model | Equation |
-|-------|----------|
-| Parent | N(t) = N₀·e^(−λt) |
-| Daughter | Bateman: N(t) = [λ_P·N₀_P / (λ_D−λ_P)]·(e^(−λ_P·t) − e^(−λ_D·t)) + N₀_D·e^(−λ_D·t) |
-| Granddaughter | Full Bateman A→B→C chain |
-| Background | const + A·e^(−λt) |
+- **Scan All**: automatically discovers all `.dat` cache files in the current
+  cache directory and adds them to the cache list.
+- **Add Cache** / **Remove Cache**: manually select which cache files contribute
+  to the table.
+- **Rebuild Table**: recollects all entries from the selected caches and
+  populates the table. Columns include: label, energy (NNDC notation),
+  area ± error, chi²/ndf, sigma, classification, and optionally absolute
+  intensity.
 
-Half-lives are fitted with uncertainties and stored per peak in a separate
-decay cache file. The peak intensity at each time slice is extracted by integrating
-the fitted Gaussian within ±N·σ of the centroid.
+### 10.2 Intensity Calculation
+
+Absolute emission probabilities (intensities) are computed as:
+```
+I = Area / (ε(E) × N)
+```
+where ε(E) is the detector efficiency at the peak energy (from the loaded
+efficiency cache) and N is the **Total Population** — the total number of
+decays of the parent nucleus during the measurement.
+
+**Total Population field:** enter the number of decays directly, or click
+**Populate from Decay Fit** to auto-fill from a decay fit result:
+```
+N = A₀ × T½ / ln(2)
+```
+where A₀ is the fitted initial activity (counts/ms at t=0) and T½ is the
+parent half-life from the decay fit. This represents the total number of
+parent decays from t=0 to t=∞.
+
+### 10.3 Efficiency
+
+Select a named efficiency cache from the dropdown (populated via **Scan Eff.
+Caches**) or type the efficiency manually. The efficiency is evaluated at the
+peak energy using the log-polynomial model (see §12.9).
+
+### 10.4 Export
+
+**Export CSV** writes all visible rows to a comma-separated file with all
+columns, suitable for further analysis in ROOT macros or Python.
+
+---
+
+## 11. Decay Tab
+
+Fits time-dependent gamma peak intensities extracted from a TH2 histogram
+(gamma energy on one axis, time-since-beam-stop on the other). The tab is
+divided into two sub-tabs: **Cuts** and **Fitter**.
+
+### 11.1 Cuts Sub-tab
+
+Controls which peak slice from the TH2 is used for the decay fit.
+
+**2D Histogram group:**
+- Select the TH2 from the dropdown and specify which axis carries gamma energy
+  (X or Y). Changing this clears the peak list.
+
+**Fitted Peaks group:**
+- **Peaks cache**: select which gamma fit cache provides the peak list (or let
+  it default to the projection of the TH2). Click **Scan** to populate the
+  dropdown.
+- **sigma window**: the ±N·σ integration window around the peak centroid used
+  when projecting the TH2 onto the time axis. Determines which time-projection
+  counts are attributed to this gamma line.
+- **Refresh**: reloads the peak list from the selected cache, sorted by energy.
+  Peaks are displayed as `label  E keV  (sig=σ)  [class]`.
+- **Preview** (decay projection): projects the TH2 for the selected peak and
+  sigma window and displays the raw time spectrum without fitting.
+- **Rebin**: merge N adjacent time bins before fitting or preview. Click Apply or
+  Reset.
+- **Preview Gamma Peak**: shows the *gamma* spectrum zoomed to ±6σ around the
+  selected peak, with red dashed lines marking the ±N·σ integration window.
+  Use this to verify the cut before fitting.
+- **Label / Apply Label**: set or update the isotope label stored in the gamma
+  cache for the selected peak.
+- **Load Cache / Save Cache**: load or save the decay fit results (half-lives,
+  chi², parameters) to a per-TH2 `.dat` file in the cache directory.
+
+**Peak Counts vs Time group** (see §11.6):
+- Slice the TH2 into time bins and fit the gamma peak in each slice independently,
+  producing a graph of peak counts vs time.
+
+### 11.2 Fitter Sub-tab
+
+Controls the decay model and runs the fit. After selecting a peak in the Cuts
+sub-tab, switch to the Fitter sub-tab to configure and run the decay fit.
+
+When a peak with a stored decay fit is selected, the Fitter sub-tab automatically
+populates with the stored parameters and replays the fit on the canvas.
+
+**Decay Model group:**
+- **Model**: select the decay chain model (see §11.3).
+- **BG type**: select the background functional form (see §11.4).
+- **Equation**: shows the selected model formula for reference (auto-updates
+  when the model or BG type changes).
+- **T½ rows**: seed values and Fix checkboxes for the parent, daughter, and
+  granddaughter half-lives. The row labels update automatically for β⁻n/β⁻2n
+  models to show which chain level each T½ corresponds to.
+- **T½ Exp BG**: seed for the exponential background T½ (only enabled when
+  BG type is "Flat+Exp" or "Exp only").
+- **Auto Model**: auto-selects the model ID from the selected peak's
+  classification and calls Seed T½ (see §11.5).
+- **Seed T½**: looks up the peak label in the nuclear database and fills T½
+  from the chain (see §11.5).
+- **Fit from / to / Full**: fit range on the time axis. Check Full to use the
+  full histogram range.
+- **Fit Decay**: runs the MIGRAD fit and displays results in the Fit Results
+  panel below.
+
+**Fit Results panel**: shows the fit equation, chi²/ndf, fitted parameters with
+uncertainties, integrated peak counts in the fit window, extrapolated total peak
+counts (0→∞), and an informational model classification.
+
+### 11.3 Decay Models
+
+| ID | Name | Signal formula | Notes |
+|----|------|---------------|-------|
+| 1 | Parent | A·exp(−ln2·t/T_P) | Single exponential decay |
+| 2 | Daughter (β⁻) | Bateman 2-step | In-growth from parent β⁻ decay |
+| 3 | Granddaughter (β⁻) | Bateman 3-step | A→B→C Bateman chain |
+| 4 | Background only | (no signal) | Pure BG model |
+| 5 | Daughter (β⁻n) | Bateman 2-step | Parent is a β⁻n product of higher nucleus |
+| 6 | Daughter (β⁻2n) | Bateman 2-step | Parent is a β⁻2n product |
+| 7 | Granddaughter (β⁻n) | Bateman 3-step | Second level is a β⁻n product |
+| 8 | Granddaughter (β⁻2n) | Bateman 3-step | Second level is a β⁻2n product |
+
+Models 5–8 use the same Bateman equations as 2–3 but with different T½ row labels
+to clarify which decay branch each half-life belongs to. The mathematics and
+parameter layout are identical.
+
+For the Bateman equations and parameter layouts, see §12.13.
+
+**Classification → model auto-mapping** (used by Auto Model):
+
+| Classification | Model |
+|---------------|-------|
+| Parent | 1 |
+| Daughter | 2 |
+| Granddaughter | 3 |
+| Background | 4 |
+| bn Daughter | 5 |
+| b2n Daughter | 6 |
+| bn Granddaughter | 7 |
+| b2n Granddaughter | 8 |
+
+### 11.4 Background Models
+
+The background model is selected independently of the signal model via the
+**BG type** combo:
+
+| BG type | Formula | When to use |
+|---------|---------|-------------|
+| Flat | BG | Constant beam-off background; pile-up pedestal |
+| Flat + Exp | BG_flat + A_bg·exp(−ln2·t/T_bg) | Beam-related background that decays with its own T½ alongside a constant pedestal |
+| Exp only | A_bg·exp(−ln2·t/T_bg) | Background with no constant component; all background follows an exponential decay |
+
+The exponential background T½ (T_bg) is a free parameter seeded from the
+**T½ Exp BG** entry. It can be fixed with the adjacent Fix checkbox.
+
+**Note:** for the "Exp only" BG type applied to a "Background only" signal model
+(model 4), the fit reduces to a single decaying exponential — useful for fitting a
+beam-correlated background component without any in-growth signal.
+
+### 11.5 Auto Model and T½ Seeding
+
+**Auto Model button:**
+1. Reads the classification of the selected peak from its gamma cache entry (or
+   from the label→class map set in the Isotopes tab)
+2. Maps the classification string to a model ID (table in §11.3)
+3. Selects that model in the combo and updates the equation label
+4. Calls Seed T½ automatically
+
+**Seed T½ button:**
+1. Reads the isotope label from the Label field
+2. Looks up `nuclearDB_` (populated from NNDC via the Nuclear tab) using the key
+   format `ASymbol` (e.g. `94Rb`)
+3. Converts the half-life from seconds to milliseconds
+4. Assigns T½ to the appropriate entry:
+   - *Parent model*: fills T½ Parent
+   - *Daughter models*: fills T½ Daughter; traverses `nucChainIsotopes_` to find
+     the parent one level up and fills T½ Parent
+   - *Granddaughter models*: fills T½ GDaughter; traverses two levels up for T½
+     Daughter and T½ Parent
+
+**Requires:** the nuclear chain must have been loaded and traced in the Nuclear tab.
+Without chain data, only the direct T½ lookup for the labeled isotope is performed.
+
+### 11.6 Peak Counts vs Time
+
+An alternative approach that avoids the global Bateman fit. The TH2 is sliced into
+time bins of width **Slice width (ms)**. In each slice, the gamma axis is projected
+and the selected peak is fitted with a Gaussian + linear BG. The fitted peak counts
+are plotted as a graph of counts vs time bin centre.
+
+This is useful for:
+- Visual inspection of the decay profile before fitting
+- Cases where the background is not well-described by the Bateman assumption
+- Identifying outlier time bins due to beam artifacts or pile-up
+
+The fitted Gaussian amplitudes, sigmas, and centroids from each slice are stored
+in a ROOT file in the cache directory:
+```
+fit_caches/<rootfile>/decay_slices_<TH2name>_<E>keV.root
+```
+
+### 11.7 Fit Results and Peak Population
+
+After a successful decay fit, the **Fit Results** panel shows:
+
+- Peak energy, sigma window, and integration cut [eMin, eMax]
+- Chi²/NDF and fit status
+- All fitted parameters with uncertainties (par names reflect the model)
+- **Counts in fit window**: `(∫f(t)dt − BG·(thi−tlo)) / binWidth` — the
+  signal integral over the fitted time range, corrected for background
+- **Total peak counts (0→∞)**: `A × τ_P / binWidth` — extrapolated total
+  signal counts assuming the decay started at t=0 and ran to infinity.
+  For daughter and granddaughter models, the integral from 0→∞ still gives
+  `A × τ_P` regardless of daughter half-lives (the Bateman equations conserve
+  total production)
+- Informational model classification (does not write to gamma cache)
+
+The **Total Population** field in the Peak Table tab can be populated from
+a decay fit by clicking **Populate from Decay Fit** in the Isotopes tab or
+Peak Table tab. This uses `N = A₀ × T½_P / ln(2)` to give the total number of
+parent decays.
 
 *Reference: Bateman equations — [Bateman (1910)](#ref-12); ingrowth formalism —
 [Debertin & Helmer (1988)](#ref-5), Appendix 1*
 
 ---
 
-## 11. Fitting Models and Mathematics
+## 12. Fitting Models and Mathematics
 
-### 10.1 Standard N-Gaussian + Linear Background
+### 12.1 Standard N-Gaussian + Linear Background
 
 The core fit model for N peaks in a window [x_lo, x_hi]:
 ```
@@ -723,7 +975,7 @@ Total: **3N + 2** free parameters.
 The Gaussian models the detector response to a mono-energetic gamma line, which
 is broadened by charge-carrier statistics (Fano factor) and electronic noise.
 
-### 10.2 Quadratic Background
+### 12.2 Quadratic Background
 
 Adds a curvature term to the background:
 ```
@@ -733,7 +985,7 @@ Total: **3N + 3** parameters. B₂ is seeded at zero.
 
 Use when the Compton continuum has visible curvature across the fit window.
 
-### 10.3 Compton Step Model
+### 12.3 Compton Step Model
 
 The Compton step arises because some photons deposit only a fraction of their
 energy via single or multiple Compton scatters, creating a shelf of counts at
@@ -751,7 +1003,7 @@ Total parameters: **4N + NBG** where NBG = 2 (linear) or 3 (quadratic).
 
 *Reference: [Helmer & McCullagh (1979)](#ref-3); also [Debertin & Helmer (1988)](#ref-5), Sec. 4.4*
 
-### 10.4 Tied-Width Constraint
+### 12.4 Tied-Width Constraint
 
 When enabled, each sigma is fixed to the resolution model prediction before fitting:
 ```
@@ -762,7 +1014,31 @@ for close doublets and ensuring physical consistency.
 
 *Reference: [Radford (1995)](#ref-4); gnuScope implementation*
 
-### 10.5 Peak Area Calculation
+### 12.5 Same-Sigma Constraint
+
+When the same-sigma option is enabled, all N Gaussians in the fit share a single
+free sigma parameter:
+```
+f(x) = Σᵢ Aᵢ · exp(−½·((x − Eᵢ)/σ)²)  +  BG(x)
+```
+
+The shared σ is estimated simultaneously with all amplitudes and centroids. This
+reduces the total free-parameter count from 3N + N_BG to 2N + 1 + N_BG, saving
+N − 1 degrees of freedom relative to an independent-sigma fit.
+
+σ is constrained to [0.2 × σ_model, 4 × σ_model], where
+`σ_model = FWHM(Ē) / 2.3548` is evaluated at the mean energy of the peak group.
+After fitting, the shared sigma value is copied to all N peak entries in the cache
+so that the resolution-model display and FWHM comparisons remain consistent.
+
+**Use case:** doublets or multiplets where the peaks must have physically identical
+widths (e.g., two transitions of the same nucleus falling at nearly the same energy,
+or a case where the per-peak sigmas are individually underconstrained).
+
+*Reference: shared-width constraint follows the same logical basis as the per-peak
+tied-width mode — see [Radford (1995)](#ref-4) and [Debertin & Helmer (1988)](#ref-5), Sec. 4.2.*
+
+### 12.6 Peak Area Calculation
 
 ROOT stores histograms as counts-per-bin. The fitted amplitude A has units of
 counts/bin, so the true peak area (total counts) is:
@@ -779,7 +1055,7 @@ The area uncertainty is propagated in quadrature:
 σ(N_peak) = N_peak · √((σ_A/A)² + (σ_σ/σ)²)
 ```
 
-### 10.6 Signal-to-Noise Ratio (post-fit)
+### 12.7 Signal-to-Noise Ratio (post-fit)
 
 The post-fit SNR reported in peak statistics:
 ```
@@ -790,7 +1066,7 @@ where N_BG = |BG(Eᵢ)| · 5σᵢ / Δx is the estimated background count under
 
 *Reference: [Bevington & Robinson (2003)](#ref-7), Ch. 4; [Debertin & Helmer (1988)](#ref-5), Sec. 4.5*
 
-### 10.7 Detector Resolution Model
+### 12.8 Detector Resolution Model
 
 ```
 FWHM(E) = √(a + b·E + c·E²)   [keV]
@@ -808,7 +1084,7 @@ For a pristine HPGe detector: a ≈ 0.5, b ≈ 1×10⁻³, c ≈ 0.
 
 *Reference: [Knoll (2000)](#ref-6), Sec. 11-III; [Debertin & Helmer (1988)](#ref-5), Sec. 2.4*
 
-### 10.8 Efficiency Model
+### 12.9 Efficiency Model
 
 The absolute full-energy peak efficiency ε(E) is the probability that a gamma
 photon emitted by the source produces a count in the full-energy peak. It depends
@@ -835,7 +1111,7 @@ detector, after correcting for detection probability.
 *Reference: [Knoll (2000)](#ref-6), Eq. 12.8; [Debertin & Helmer (1988)](#ref-5), Sec. 6.2;
 log-polynomial form also used in gnuScope [[Pavan & Tabor, FSU](#ref-14)]*
 
-### 10.9 NNDC Uncertainty Notation
+### 12.10 NNDC Uncertainty Notation
 
 Fitted centroids are displayed in the standard nuclear data notation:
 ```
@@ -851,7 +1127,7 @@ Examples:
 *Reference: [Browne & Tuli — NNDC notation convention](#ref-10);
 [NuDat 3.0](https://www.nndc.bnl.gov/nudat3/)*
 
-### 10.10 Chi-squared and Goodness of Fit
+### 12.11 Chi-squared and Goodness of Fit
 
 AutoGammaFit computes chi²/ndf directly from the pull residuals rather than
 from ROOT's `r->Chi2()` (which returns −2 ln L for log-likelihood fits):
@@ -871,7 +1147,7 @@ reported; p < 0.01 typically indicates a poor fit.
 
 *Reference: [Bevington & Robinson (2003)](#ref-7), Ch. 6; [James & Roos (1975)](#ref-1)*
 
-### 10.11 Peak Significance
+### 12.12 Peak Significance
 
 Two independent significance metrics are reported for each fitted peak.
 
@@ -948,7 +1224,136 @@ error propagation — [Bevington & Robinson (2003)](#ref-7), Ch. 3–4;
 [Knoll (2000)](#ref-6), Sec. 3-V. One-sided p-value via the complementary
 error function: [Bevington & Robinson (2003)](#ref-7), App. A.*
 
-### 10.12 Complete Fit Statistics Reference
+### 12.13 Decay Chain Mathematics
+
+The decay fitter implements analytical solutions to the Bateman equations
+[[Bateman (1910)](#ref-12)] for linear radioactive decay chains. All eight models
+are built from three signal types (Parent, Daughter, Granddaughter) combined with
+three background types (Flat, Flat+Exp, Exp-only).
+
+#### Parent decay (Model 1)
+
+```
+S_P(t) = A · exp(−λ_P · t)
+```
+
+λ_P = ln2 / T½_P. Free parameters: A (initial count rate in counts/ms), T½_P (ms).
+
+#### Daughter in-growth (Models 2, 5, 6)
+
+The Bateman solution for a two-step linear chain A → B → [stable]:
+```
+         λ_D
+S_D(t) = A · ————————————— · [exp(−λ_P·t) − exp(−λ_D·t)]
+              λ_D − λ_P
+```
+
+where λ_P = ln2 / T½_P and λ_D = ln2 / T½_D. Free parameters: A, T½_P, T½_D.
+
+At t = 0 the daughter count rate is zero; it grows as the parent populates it,
+reaches a maximum at `t_max = ln(λ_D / λ_P) / (λ_D − λ_P)`, then decays as
+the parent is exhausted.
+
+**Degenerate case** (λ_P = λ_D): the formula reduces to:
+```
+S_D(t) = A · λ_P · t · exp(−λ_P · t)
+```
+
+Models 5 (β⁻n Daughter) and 6 (β⁻2n Daughter) use the same Bateman formula;
+the half-life row labels are updated to clarify which chain level each T½
+belongs to in the presence of delayed-neutron branching
+[[Pfeiffer et al. (2002)](#ref-18)].
+
+#### Granddaughter in-growth (Models 3, 7, 8)
+
+The Bateman solution for a three-step linear chain A → B → C → [stable]:
+```
+S_G(t) = A · λ_D · λ_G · [           exp(−λ_P·t)
+                             ——————————————————————————————
+                             (λ_D − λ_P)(λ_G − λ_P)
+
+                                         exp(−λ_D·t)
+                           +  ——————————————————————————————
+                              (λ_P − λ_D)(λ_G − λ_D)
+
+                                         exp(−λ_G·t)
+                           +  ——————————————————————————————  ]
+                              (λ_P − λ_G)(λ_D − λ_G)
+```
+
+Free parameters: A, T½_P, T½_D, T½_G.
+
+This expression assumes all three decay constants are distinct. When two decay
+constants are equal (degenerate case), the limit must be taken by L'Hôpital's
+rule; the implementation uses a small numerical separation ε = 10⁻⁶ ms⁻¹ to
+avoid division-by-zero without specialising the code path.
+
+Models 7 (β⁻n Granddaughter) and 8 (β⁻2n Granddaughter) use the same formula,
+with T½ row labels updated for the β-delayed neutron chain topology
+[[Pfeiffer et al. (2002)](#ref-18)].
+
+#### Background models
+
+The background accounts for beam-correlated backgrounds, scattered neutron
+activation, or any time-varying background component that does not follow the
+signal chain:
+
+| BG type | Formula | Free parameters |
+|---------|---------|----------------|
+| Flat | BG | BG |
+| Flat+Exp | BG_flat + A_bg · exp(−ln2 · t / T_bg) | BG_flat, A_bg, T_bg |
+| Exp only | A_bg · exp(−ln2 · t / T_bg) | A_bg, T_bg |
+
+The exponential component models a beam-correlated contamination that decays
+with its own characteristic time T_bg independent of the signal chain.
+
+#### Parameter layout
+
+Parameters are ordered: [signal block] followed by [background block].
+
+| Signal type | Signal parameters | N_sig |
+|-------------|-----------------|-------|
+| Parent | A, T½_P | 2 |
+| Daughter | A, T½_P, T½_D | 3 |
+| Granddaughter | A, T½_P, T½_D, T½_G | 4 |
+| BG only | (none) | 0 |
+
+| BG type | BG parameters | N_bg |
+|---------|--------------|------|
+| Flat | BG | 1 |
+| Flat+Exp | BG_flat, A_bg, T_bg | 3 |
+| Exp only | A_bg, T_bg | 2 |
+
+Total parameter count = N_sig + N_bg. Signal parameters occupy indices [0, N_sig − 1];
+background parameters occupy indices [N_sig, N_sig + N_bg − 1].
+
+#### Conservation of total integral
+
+For all signal types (Parent, Daughter, Granddaughter), the integral of the
+signal function from 0 to ∞ satisfies:
+```
+∫₀^∞ S(t) dt = A / λ_P = A · T½_P / ln2
+```
+
+This holds because each step in the Bateman chain conserves total production:
+every parent decay eventually produces exactly one daughter, which in turn
+produces exactly one granddaughter. The total number of events in the peak
+(0 → ∞) is therefore always set by the initial parent activity A and its mean
+lifetime τ_P = 1/λ_P = T½_P / ln2, regardless of how many intermediate
+steps exist. The reported **Total peak counts (0→∞)** uses this identity:
+```
+N_total = A · T½_P / (ln2 · Δt_bin)
+```
+where Δt_bin is the time bin width in ms.
+
+*Reference: Bateman chain solutions — [Bateman (1910)](#ref-12).
+Ingrowth formalism for detector efficiency measurements —
+[Debertin & Helmer (1988)](#ref-5), Appendix 1.
+β-delayed neutron emission topology —
+[Pfeiffer et al. (2002)](#ref-18); half-life and decay-mode data —
+[NUBASE2020 — Kondev et al. (2021)](#ref-19).*
+
+### 12.14 Complete Fit Statistics Reference
 
 This section defines and contextualises every quantity shown in the Peak
 Statistics panel. The goal is that you can look at any line in that panel
@@ -1023,7 +1428,7 @@ surface in the energy direction (correlated with σ_A). For a well-resolved
 peak with ~1000 counts, σ_E ≈ FWHM/(2.35·√N) ≈ a fraction of a keV.
 
 The energy is displayed in NNDC parenthesis notation: `1332.492(4)` means
-`1332.492 ± 0.004 keV`. See [Section 10.9](#109-nndc-uncertainty-notation).
+`1332.492 ± 0.004 keV`. See [Section 12.10](#1210-nndc-uncertainty-notation).
 
 *Reference: uncertainty on centroid — [Bevington & Robinson (2003)](#ref-7), Sec. 6.3;
 NNDC notation — [Browne & Tuli](#ref-10)*
@@ -1440,9 +1845,9 @@ Sec. 4.5–4.7; [Leo (1994)](#ref-17), Ch. 7*
 
 ---
 
-## 12. Algorithms
+## 13. Algorithms
 
-### 11.1 AutoFit Pipeline
+### 13.1 AutoFit Pipeline
 
 1. **Background subtraction**: TSpectrum::Background uses the SNIP (Statistics-
    sensitive Non-linear Iterative Peak-clipping) algorithm. The background estimate
@@ -1478,7 +1883,7 @@ Sec. 4.5–4.7; [Leo (1994)](#ref-17), Ch. 7*
    residuals suggesting a missed peak, an additional Gaussian is seeded at the
    residual maximum and the group is re-fitted.
 
-### 11.2 MIGRAD Minimisation
+### 13.2 MIGRAD Minimisation
 
 Both AutoFit and Manual Fit use MINUIT2 MIGRAD, a variable-metric gradient-descent
 method that builds an approximation to the inverse Hessian of the log-likelihood or
@@ -1495,7 +1900,7 @@ but significantly slower.
 
 *Reference: [James & Roos (1975)](#ref-1); MINUIT2 manual, CERN Program Library D506*
 
-### 11.3 Chi² vs Log-likelihood
+### 13.3 Chi² vs Log-likelihood
 
 **Chi²:** minimises Σ (y_i − f(x_i))² / σᵢ² where σᵢ = √y_i (Poisson).
 Valid when y_i >> 1 (typically y_i > 5–10 per bin). Biased for low counts because
@@ -1507,7 +1912,7 @@ spectra. The chi²/ndf interpretation of the fit quality is less direct.
 
 *Reference: [Barlow & Beeston (1993)](#ref-9); [Bevington & Robinson (2003)](#ref-7), Ch. 8*
 
-### 11.4 Background Anchor Algorithm
+### 13.4 Background Anchor Algorithm
 
 Given two anchor regions [lo₁, hi₁] and [lo₂, hi₂]:
 1. Compute the mean bin content in each region: (x̄₁, ȳ₁) and (x̄₂, ȳ₂)
@@ -1523,7 +1928,7 @@ than a single off-peak region estimate when the continuum has a significant slop
 
 *Reference: [Debertin & Helmer (1988)](#ref-5), Sec. 4.3; [Knoll (2000)](#ref-6), Sec. 12-IV*
 
-### 11.5 AIC Model Selection
+### 13.5 AIC Model Selection
 
 When comparing models with different numbers of parameters, the Akaike Information
 Criterion penalises added complexity:
@@ -1545,7 +1950,7 @@ at least 0.05 to be favoured.
 
 ---
 
-## 13. Cache System
+## 14. Cache System
 
 Fit results are stored as plain-text cache files in `fit_caches/<rootfile>/`:
 ```
@@ -1567,12 +1972,62 @@ Special entries:
 Archived caches are stored in `fit_caches/<rootfile>/archive/` with a timestamp
 suffix and can be restored via the **Restore Archived Cache** button.
 
+### 14.1 Gamma Fit Cache Format
+
+Each non-special line in a gamma cache file has the form:
+```
+<key>  <npar>  <chi2ndf>  <p0> <e0> ... <pN-1> <eN-1>  <residRMS>  <maxPull>
+       <fitMethod>  <xlo>  <xhi>
+```
+
+- `key`: isotope label string (or `__RESOLUTION__`, etc.)
+- `npar`: number of fit parameters
+- `chi2ndf`: chi²/ndf
+- `p0 e0 … pN-1 eN-1`: alternating parameter values and MIGRAD uncertainties
+- `residRMS`, `maxPull`: residual diagnostics
+- `fitMethod`: `0` = chi², `1` = log-likelihood
+- `xlo xhi`: fit range in keV
+
+META header lines (before any fit entries):
+```
+# META bg_subtracted 0|1
+# META bg_iterations N
+# META root_file <path>
+```
+
+### 14.2 Decay Fit Cache Format
+
+Decay fit results are stored in:
+```
+fit_caches/<rootfile>/decay_cache_<TH2name>.dat
+```
+
+Each entry records one decay fit result for one peak:
+```
+<peakE>  <model>  <bgType>  <chi2ndf>  <status>  <eMin>  <eMax>  <Nsig>
+<label>  <classification>
+<npar>  <p0> <e0>  <p1> <e1>  …  <pN-1> <eN-1>
+```
+
+- `peakE`: peak centroid in keV
+- `model`: decay model ID 1–8 (see §11.3)
+- `bgType`: background type 1 = Flat, 2 = Flat+Exp, 3 = Exp only (see §11.4).
+  Old cache files that predate the adaptable BG fitter omit this field and
+  default to `bgType = 1` when loaded.
+- `chi2ndf`, `status`: MIGRAD fit quality
+- `eMin`, `eMax`, `Nsig`: TH2 cut range and sigma window used to generate the
+  time projection
+- `label`, `classification`: isotope label and classification string from the
+  gamma cache
+- `npar`, `p0 e0 …`: parameter values and uncertainties. Parameter ordering
+  follows the layout table in §12.13 (signal block first, background block last).
+
 Cache files are plain text — they can be inspected, edited, or merged with a text
 editor if needed.
 
 ---
 
-## 14. References
+## 15. References
 
 <a id="ref-1"></a>
 1. **MIGRAD minimisation and MINOS errors:**
@@ -1668,3 +2123,21 @@ editor if needed.
     Springer-Verlag, 1994. Chapters 6–7 cover detector resolution, FWHM, peak
     fitting methodology, and signal significance in counting experiments. The
     peak-to-total ratio and detector figures of merit are discussed in Ch. 7.
+
+<a id="ref-18"></a>
+18. **β-delayed neutron emission — structure and systematics:**
+    B. Pfeiffer, K.-L. Kratz & P. Möller, "Status of delayed-neutron precursor
+    data: half-lives and neutron emission probabilities," *Progress in Nuclear
+    Energy* **41** (2002) 39–69.
+    Provides half-lives and P_n values for β⁻n and β⁻2n emitters relevant to
+    fission-fragment decay spectroscopy. The daughter/granddaughter distinction
+    for β-delayed neutron emitters follows the chain topology described therein.
+
+<a id="ref-19"></a>
+19. **NUBASE2020 nuclear properties evaluation:**
+    F.G. Kondev, M. Wang, W.J. Huang, S. Naimi & G. Audi, "The NUBASE2020
+    evaluation of nuclear physics properties," *Chinese Physics C* **45** (2021)
+    030001.
+    Tabulates half-lives, decay modes, excitation energies, and spin-parities
+    for all known nuclides. Used by the nuclear database loader for T½ seeding
+    in the Decay tab.
