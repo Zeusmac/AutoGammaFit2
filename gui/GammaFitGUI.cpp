@@ -152,6 +152,18 @@ GammaFitGUI::GammaFitGUI(const TGWindow* p, UInt_t w, UInt_t h)
 
 GammaFitGUI::~GammaFitGUI()
 {
+    // Clear the canvas primitives list BEFORE deleting any owned histograms/TF1s.
+    // Our destructor body runs before the base-class TGCompositeFrame destructor,
+    // which fires kDeepCleanup and destroys the embedded TCanvas. The TCanvas
+    // destructor iterates its primitives — if we deleted rawHist_/fitComponents_
+    // first, that traversal hits freed memory → segfault. Clearing the list here
+    // (with "nodelete" so ROOT doesn't touch the objects) removes those references
+    // before we free the objects ourselves.
+    if (canvas_) {
+        TCanvas* c = canvas_->GetCanvas();
+        if (c) c->GetListOfPrimitives()->Clear("nodelete");
+    }
+
     if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; }
     if (inputFile_)   { inputFile_->Close();   delete inputFile_; }
     if (srcRootFile_) { srcRootFile_->Close(); delete srcRootFile_; }
@@ -735,6 +747,11 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
     rg->AddFrame(restoreArchAutoFit, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
     restoreArchAutoFit->Connect("Clicked()", "GammaFitGUI", this, "OnRestoreArchivedCache()");
     restoreArchAutoFit->SetToolTipText("Restore a previously archived cache for the selected histogram");
+
+    TGTextButton* restoreMissingBtn = new TGTextButton(rg, "Restore Missing Caches");
+    rg->AddFrame(restoreMissingBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+    restoreMissingBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPTRestoreMissing()");
+    restoreMissingBtn->SetToolTipText("Copy any caches missing from fit_caches/ back from the backup directory");
 
     TGTextButton* transferBtn = new TGTextButton(rg, "Transfer Cache From...");
     rg->AddFrame(transferBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
@@ -2080,6 +2097,23 @@ std::string GammaFitGUI::CacheFileFor(const std::string& hname) const
     return CacheDirFor() + "/fit_cache_" + hname + ".dat";
 }
 
+void GammaFitGUI::BackupCacheFile(const std::string& srcPath) {
+    size_t sl = srcPath.rfind('/');
+    if (sl == std::string::npos) return;
+    std::string cacheDir  = srcPath.substr(0, sl);
+    std::string fname     = srcPath.substr(sl + 1);
+    std::string backupDir = cacheDir + "_backup";
+    ::mkdir(backupDir.c_str(), 0755);
+    auto copyFile = [](const std::string& src, const std::string& dst) {
+        std::ifstream in(src, std::ios::binary);
+        if (!in.is_open()) return;
+        std::ofstream out(dst, std::ios::binary);
+        out << in.rdbuf();
+    };
+    copyFile(srcPath, backupDir + "/" + fname);
+    copyFile(srcPath + "_intensity.dat", backupDir + "/" + fname + "_intensity.dat");
+}
+
 TH1* GammaFitGUI::LoadProjection(TFile* f,
                                   const std::string& projName,
                                   const std::map<std::string, std::string>& projParent,
@@ -2176,9 +2210,17 @@ TH1* GammaFitGUI::LoadHistFromFile(const std::string& hname, bool& owned) const
                 result->SetDirectory(nullptr);
                 owned = true;
             }
-            // Sumw2 before Rebin ensures Poisson errors add in quadrature
-            if (!result->GetSumw2N()) result->Sumw2();
-            result->Rebin(n);
+            // Clamp n to the largest exact divisor of nbins to avoid ROOT
+            // heap corruption when n doesn't divide nbins evenly.
+            int nbins = result->GetNbinsX();
+            while (n > 1 && nbins % n != 0) n--;
+            if (n != rbit->second)
+                fprintf(stderr, "[Rebin] %s: factor %d→%d (must divide %d bins)\n",
+                        hname.c_str(), rbit->second, n, nbins);
+            if (n > 1) {
+                if (!result->GetSumw2N()) result->Sumw2();
+                result->Rebin(n);
+            }
         }
     }
 
@@ -2343,6 +2385,7 @@ void GammaFitGUI::RunFitOnHistogram(const std::string& hname,
     fitdb.bgIterations = bgOpts.iterations;
     fitdb.rootFile     = srcPath;
     fitdb.Save(CacheFileFor(hname));
+    BackupCacheFile(CacheFileFor(hname));
     fout->Close();
     delete fout;
 
@@ -2553,6 +2596,7 @@ void GammaFitGUI::OnCanvasEvent(Int_t event, Int_t px, Int_t py, TObject* /*obj*
                 edb.ForceStore(kFwhmInclKey, eIncl);
                 EnsureCacheDir();
                 edb.Save(CacheFileFor(hname));
+                BackupCacheFile(CacheFileFor(hname));
             }
         }
         return;
@@ -3397,6 +3441,7 @@ void GammaFitGUI::OnAcceptFit()
     fitdb.rootFile = inputPath_;
     EnsureCacheDir();
     fitdb.Save(cacheFile);
+    BackupCacheFile(cacheFile);
 
     // Append to the Gamma_fits text report
     {
@@ -3760,6 +3805,7 @@ void GammaFitGUI::OnLoadResFromHist()
         eSrc.chi2ndf = 0.0; eSrc.residualRMS = 0.0; eSrc.maxPull = 0.0;
         curDb.ForceStore(kResSourceKey, eSrc);
         curDb.Save(cacheFile);
+        BackupCacheFile(cacheFile);
         AppendLog("[ResModel] Provenance written to " + cacheFile);
     }
 }
@@ -4665,6 +4711,7 @@ void GammaFitGUI::OnTransferCache()
 
     EnsureCacheDir();
     dstDb.Save(CacheFileFor(destHist));
+    BackupCacheFile(CacheFileFor(destHist));
     AppendLog(Form("[Transfer] '%s' -> '%s': copied %d, skipped %d (merge=%s)",
                    srcLabel.c_str(), destHist.c_str(), nCopied, nSkipped,
                    merge ? "on" : "off"));
@@ -4834,6 +4881,7 @@ void GammaFitGUI::PopulateNavAndResidual()
         if (needsSave) {
             fitdb.rootFile = inputPath_;
             fitdb.Save(CacheFileFor(currentHist_));
+            BackupCacheFile(CacheFileFor(currentHist_));
         }
         // Sort by first peak energy
         std::sort(peakNavKeys_.begin(), peakNavKeys_.end(),
@@ -5154,6 +5202,7 @@ void GammaFitGUI::OnApplyPickedLabel()
     fitdb.ForceStore(labelPickKey_, e);
     EnsureCacheDir();
     fitdb.Save(cacheFile);
+    BackupCacheFile(cacheFile);
 
     // Refresh label info and redraw
     std::string info = Form("%.1f keV", e.params[3*(labelPickGaussIdx_>=0?labelPickGaussIdx_:0)+1]);
@@ -5205,6 +5254,7 @@ void GammaFitGUI::OnDeleteCacheEntry()
     }
     fitdb.rootFile = inputPath_;
     fitdb.Save(cacheFile);
+    BackupCacheFile(cacheFile);
 
     AppendLog("Removed cache entry: " + key);
     SetStatus("Removed: " + key);
@@ -5239,6 +5289,7 @@ void GammaFitGUI::OnToggleMarkRefit()
 
     fitdb.rootFile = inputPath_;
     fitdb.Save(cacheFile);
+    BackupCacheFile(cacheFile);
 
     if (markRefitBtn_)
         markRefitBtn_->SetText(marked ? "Unmark (Marked for Refit)" : "Mark for Refit");
@@ -5279,6 +5330,7 @@ void GammaFitGUI::OnAddPeakNoFit()
 
     fitdb.rootFile = inputPath_;
     fitdb.Save(cacheFile);
+    BackupCacheFile(cacheFile);
 
     AppendLog("Added " + std::to_string(added) + " no-fit peak(s) to cache [REFIT tagged].");
     PopulateNavAndResidual();
@@ -7500,26 +7552,37 @@ void GammaFitGUI::OnSubtractHistogram()
         AppendLog("[BgSub] Failed to load background: " + bgName); return;
     }
 
-    // Verify compatibility before subtracting
-    if (src->GetNbinsX() != bg->GetNbinsX() ||
-        std::abs(src->GetXaxis()->GetXmin() - bg->GetXaxis()->GetXmin()) > 1e-6 ||
-        std::abs(src->GetXaxis()->GetXmax() - bg->GetXaxis()->GetXmax()) > 1e-6) {
-        AppendLog(Form("[BgSub] ERROR: Incompatible histograms — cannot subtract."));
-        AppendLog(Form("  Source:     %d bins  [%.3g, %.3g]",
-                       src->GetNbinsX(),
-                       src->GetXaxis()->GetXmin(), src->GetXaxis()->GetXmax()));
-        AppendLog(Form("  Background: %d bins  [%.3g, %.3g]",
-                       bg->GetNbinsX(),
-                       bg->GetXaxis()->GetXmin(), bg->GetXaxis()->GetXmax()));
-        if (srcOwned) delete src;
-        if (bgOwned)  delete bg;
-        return;
+    // Verify compatibility before subtracting.
+    // Use relative tolerance of 0.1 bin-width to handle float representation differences
+    // at large keV values (e.g. 1e-6 absolute fails for ranges like [0, 8192]).
+    {
+        double bw = src->GetBinWidth(1);
+        double tol = bw * 0.1;
+        if (src->GetNbinsX() != bg->GetNbinsX() ||
+            std::abs(src->GetXaxis()->GetXmin() - bg->GetXaxis()->GetXmin()) > tol ||
+            std::abs(src->GetXaxis()->GetXmax() - bg->GetXaxis()->GetXmax()) > tol) {
+            AppendLog(Form("[BgSub] ERROR: Incompatible histograms — cannot subtract."));
+            AppendLog(Form("  Source:     %d bins  [%.3g, %.3g]",
+                           src->GetNbinsX(),
+                           src->GetXaxis()->GetXmin(), src->GetXaxis()->GetXmax()));
+            AppendLog(Form("  Background: %d bins  [%.3g, %.3g]",
+                           bg->GetNbinsX(),
+                           bg->GetXaxis()->GetXmin(), bg->GetXaxis()->GetXmax()));
+            if (srcOwned) delete src;
+            if (bgOwned)  delete bg;
+            return;
+        }
     }
-
     double srcIntegral = src->Integral();
     double bgIntegral  = bg->Integral();
 
     TH1* result = (TH1*)src->Clone(outName.c_str());
+    if (!result) {
+        if (srcOwned) delete src;
+        if (bgOwned)  delete bg;
+        AppendLog("[BgSub] ERROR: Clone() returned null — cannot create subtracted histogram.");
+        return;
+    }
     result->SetDirectory(nullptr);
     if (!result->GetSumw2N()) result->Sumw2();
     result->Add(bg, -scale);
@@ -7589,6 +7652,21 @@ void GammaFitGUI::OnRebinPreview()
     int n = rebinEntry_ ? (int)rebinEntry_->GetNumber() : 1;
     if (n <= 1) { DrawOnCanvas(rawHist_); return; }
 
+    int nbins = rawHist_->GetNbinsX();
+    if (nbins % n != 0) {
+        // Find nearest valid divisors below and above n for a helpful suggestion
+        int below = n - 1; while (below > 1 && nbins % below != 0) --below;
+        int above = n + 1; while (above < nbins && nbins % above != 0) ++above;
+        std::string hint;
+        if (below > 1) hint += std::to_string(below);
+        if (above <= nbins) { if (!hint.empty()) hint += " or "; hint += std::to_string(above); }
+        if (hint.empty()) hint = "1 (no rebin)";
+        AppendLog(Form("[Rebin] ERROR: %d does not divide %d bins evenly — try %s.",
+                       n, nbins, hint.c_str()));
+        SetStatus(Form("Bad rebin: %d not a divisor of %d", n, nbins));
+        return;
+    }
+
     TH1* preview = (TH1*)rawHist_->Clone("_rebin_preview_");
     preview->SetDirectory(nullptr);
     preview->SetBit(kCanDelete);
@@ -7612,6 +7690,22 @@ void GammaFitGUI::OnRebinApply()
     }
     int n = rebinEntry_ ? (int)rebinEntry_->GetNumber() : 1;
     if (n < 1) n = 1;
+
+    if (n > 1) {
+        int nbins = rawHist_->GetNbinsX();
+        if (nbins % n != 0) {
+            int below = n - 1; while (below > 1 && nbins % below != 0) --below;
+            int above = n + 1; while (above < nbins && nbins % above != 0) ++above;
+            std::string hint;
+            if (below > 1) hint += std::to_string(below);
+            if (above <= nbins) { if (!hint.empty()) hint += " or "; hint += std::to_string(above); }
+            if (hint.empty()) hint = "1 (no rebin)";
+            AppendLog(Form("[Rebin] ERROR: %d does not divide %d bins evenly — try %s.",
+                           n, nbins, hint.c_str()));
+            SetStatus(Form("Bad rebin: %d not a divisor of %d", n, nbins));
+            return;
+        }
+    }
 
     if (n == 1) {
         rebinFactors_.erase(currentHist_);

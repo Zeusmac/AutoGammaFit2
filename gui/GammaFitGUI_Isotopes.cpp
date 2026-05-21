@@ -195,11 +195,25 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
                       "OnIsoListSelected(Int_t)");
 
     {
-        TGTextButton* previewBtn = new TGTextButton(listGrp, "Preview Selected Peak");
-        listGrp->AddFrame(previewBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+        TGHorizontalFrame* btnRow = new TGHorizontalFrame(listGrp);
+        listGrp->AddFrame(btnRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 0));
+
+        TGTextButton* previewBtn = new TGTextButton(btnRow, " Preview ");
+        btnRow->AddFrame(previewBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
         previewBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoPeakPreview()");
         previewBtn->SetToolTipText(
             "Zoom the main canvas to the selected peak and overlay its cached fit.");
+
+        TGTextButton* toIntBtn = new TGTextButton(btnRow, " → Intensity Calc. ");
+        btnRow->AddFrame(toIntBtn, new TGLayoutHints(kLHintsLeft));
+        toIntBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoPopulateIntensity()");
+        toIntBtn->SetToolTipText(
+            "Populate the Peak Table intensity fields with this peak's energy/area.\n"
+            "Also fills A₀ and shows T½ if a decay fit is loaded in the Decay tab.");
+
+        isoIntensityInfoLbl_ = new TGLabel(listGrp, "  decay fit: (none)");
+        isoIntensityInfoLbl_->SetTextJustify(kTextLeft);
+        listGrp->AddFrame(isoIntensityInfoLbl_, new TGLayoutHints(kLHintsExpandX, 4, 2, 0, 4));
     }
 
     // ── Bulk action row ───────────────────────────────────────────────────────
@@ -783,6 +797,7 @@ void GammaFitGUI::OnIsoApply()
 
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
+    BackupCacheFile(CacheFileFor(isoHistName_));
     std::string lbl = (gaussIdx >= 0) ? e.peakLabels[gaussIdx] : e.label;
     std::string cls = (gaussIdx >= 0) ? e.peakClassifications[gaussIdx] : e.classification;
     AppendLog("Updated: " + key + (gaussIdx >= 0 ? Form("[G%d]", gaussIdx) : "") +
@@ -836,6 +851,7 @@ void GammaFitGUI::OnIsoApplyClassToAll()
     SaveLabelClassMap(fitdb);
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
+    BackupCacheFile(CacheFileFor(isoHistName_));
     AppendLog("Set class '" + newCls + "' for all " + std::to_string(nUpdated) +
               " peaks labeled '" + targetLabel + "'");
     RefreshIsoDisplay();
@@ -870,6 +886,7 @@ void GammaFitGUI::OnIsoApplyLabelAll()
     SaveLabelClassMap(fitdb);
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
+    BackupCacheFile(CacheFileFor(isoHistName_));
     AppendLog("Applied label/class to " + std::to_string(isoListKeys_.size()) + " peaks.");
     RefreshIsoDisplay();
 }
@@ -902,6 +919,7 @@ void GammaFitGUI::OnIsoClear()
     fitdb.ForceStore(key, e);
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
+    BackupCacheFile(CacheFileFor(isoHistName_));
     if (isoLabelCombo_)       isoLabelCombo_->Select(1, kFALSE);
     if (isoCustomLabelEntry_) isoCustomLabelEntry_->SetText("");
     if (isoClassCombo_)       isoClassCombo_->Select(1, kFALSE);
@@ -932,6 +950,7 @@ void GammaFitGUI::OnIsoClearAll()
     SaveLabelClassMap(fitdb);
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
+    BackupCacheFile(CacheFileFor(isoHistName_));
     AppendLog("Cleared labels/classes for " + std::to_string(n) + " peaks.");
     RefreshIsoDisplay();
 }
@@ -1093,6 +1112,7 @@ void GammaFitGUI::OnIsoAutoMatchAll()
     SaveLabelClassMap(fitdb);
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
+    BackupCacheFile(CacheFileFor(isoHistName_));
     AppendLog("Auto-matched " + std::to_string(nMatched) + " peaks (≤4 keV clusters = one unit).");
     RefreshIsoDisplay();
 }
@@ -1179,6 +1199,7 @@ void GammaFitGUI::OnIsoSetParent()
     SaveLabelClassMap(fitdb);
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
+    BackupCacheFile(CacheFileFor(isoHistName_));
 
     const char* sym = ElementSymbol(isoParentZval_);
     int A = isoParentZval_ + isoParentNval_;
@@ -1350,6 +1371,7 @@ void GammaFitGUI::OnIsoLabelDecayApply()
     SaveLabelClassMap(fitdb);
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
+    BackupCacheFile(CacheFileFor(isoHistName_));
     AppendLog("Assigned decay type '" + decayType + "' to isotope '" + isotope +
               "' — updated " + std::to_string(nUpdated) + " peaks.");
     RefreshIsoDisplay();
@@ -1523,6 +1545,96 @@ void GammaFitGUI::OnIsoPeakPreview()
     canvas_->GetCanvas()->Modified();
     canvas_->GetCanvas()->Update();
     AppendLog(Form("Preview: %.2f keV  [%s]", peakE, key.c_str()));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slot: OnIsoPopulateIntensity
+// Populate the Peak Table intensity-calculation fields from the selected peak.
+// Also fills A₀ from the decay fit cache (if loaded) and shows T½ in the label.
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnIsoPopulateIntensity()
+{
+    if (!isoList_) return;
+    Int_t sel = isoList_->GetSelected();
+    if (sel < 1 || (size_t)sel > isoListKeys_.size()) {
+        AppendLog("[→ Intensity] Select a peak first."); return;
+    }
+    if (isoHistName_.empty()) return;
+
+    const std::string& key     = isoListKeys_[sel - 1];
+    int                gaussIdx = ((size_t)(sel-1) < isoListGaussIdx_.size())
+                                  ? isoListGaussIdx_[sel-1] : -1;
+
+    FitDatabase fitdb;
+    fitdb.Load(CacheFileFor(isoHistName_));
+    auto it = fitdb.GetEntries().find(key);
+    if (it == fitdb.GetEntries().end()) {
+        AppendLog("[→ Intensity] Peak not found in cache."); return;
+    }
+    const FitEntry& fe = it->second;
+    FitLayout lay = DetectLayout((int)fe.params.size());
+    if (!lay.valid()) { AppendLog("[→ Intensity] Cannot parse fit layout."); return; }
+
+    // Which Gaussian to use
+    int gi = (gaussIdx >= 0 && gaussIdx < lay.n) ? gaussIdx : 0;
+
+    double A   = fe.params[3*gi];
+    double E   = fe.params[3*gi + 1];
+    double sig = fe.params[3*gi + 2];
+    double bw  = (fe.binWidth > 0.0) ? fe.binWidth : 1.0;
+
+    double area    = (A > 0 && sig > 0) ? A * sig * std::sqrt(2.0 * M_PI) / bw : 0.0;
+    double areaErr = 0.0;
+    double eErr    = 0.0;
+    if ((int)fe.paramErrors.size() > 3*gi + 2) {
+        double dA   = fe.paramErrors[3*gi];
+        double dSig = fe.paramErrors[3*gi + 2];
+        eErr = (3*gi+1 < (int)fe.paramErrors.size()) ? fe.paramErrors[3*gi+1] : 0.0;
+        double relA   = (A   > 0) ? dA/A     : 0.0;
+        double relSig = (sig > 0) ? dSig/sig : 0.0;
+        areaErr = area * std::sqrt(relA*relA + relSig*relSig);
+    }
+
+    // Populate intensity panel fields
+    if (ptEnergyEntry_)  ptEnergyEntry_->SetNumber(E);
+    if (ptAreaEntry_)    ptAreaEntry_->SetNumber(area);
+    if (ptAreaErrEntry_) ptAreaErrEntry_->SetNumber(areaErr);
+
+    AppendLog(Form("[→ Intensity] E=%.3f +/-%.3f keV  Area=%.1f +/-%.1f  [%s]",
+                   E, eErr, area, areaErr, key.c_str()));
+
+    // ── Check decay fit cache for this energy ────────────────────────────────
+    const DecayFitResult* decRes = nullptr;
+    double bestDiff = 2.0;  // tolerance in keV
+    for (const auto& kv : decayFitStore_) {
+        double d = std::abs(kv.first - E);
+        if (d < bestDiff) { bestDiff = d; decRes = &kv.second; }
+    }
+
+    if (decRes && decRes->params.size() >= 2) {
+        double A0 = decRes->params[0];
+        double T_half = decRes->params[1];  // ms (parent half-life)
+
+        if (ptActivityEntry_) ptActivityEntry_->SetNumber(A0);
+
+        char lblBuf[128];
+        std::snprintf(lblBuf, sizeof(lblBuf),
+                      "  decay: A₀=%.4g  T½=%.4g ms", A0, T_half);
+        if (isoIntensityInfoLbl_) {
+            isoIntensityInfoLbl_->SetText(lblBuf);
+            isoIntensityInfoLbl_->Layout();
+        }
+        AppendLog(Form("[→ Intensity] Decay fit: A₀=%.4g  T½=%.4g ms  (Δ=%.2f keV)",
+                       A0, T_half, bestDiff));
+    } else {
+        if (isoIntensityInfoLbl_) {
+            isoIntensityInfoLbl_->SetText("  decay fit: (none loaded)");
+            isoIntensityInfoLbl_->Layout();
+        }
+    }
+
+    // Reset intensity result so stale value isn't shown
+    if (ptIntensityLbl_) ptIntensityLbl_->SetText("  I = --- (click Calculate)");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2136,6 +2248,7 @@ void GammaFitGUI::OnIsoDbApply()
     SaveLabelClassMap(fitdb);
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
+    BackupCacheFile(CacheFileFor(isoHistName_));
 
     double fittedE = (e.params.size() >= 2) ? e.params[1] : 0.0;
     AppendLog("Matched: " + key + "  ->  " + gl.isotope +

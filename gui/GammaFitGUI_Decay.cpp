@@ -955,6 +955,7 @@ void GammaFitGUI::OnFitDecay()
                     fdb.ForceStore(decayPeakKeys_[peakSel - 1], fe);
                     EnsureCacheDir();
                     fdb.Save(CacheFileFor(peakCache));
+                    BackupCacheFile(CacheFileFor(peakCache));
                 }
             }
             decayResultView_->AddLine(
@@ -1143,6 +1144,7 @@ void GammaFitGUI::OnDecayApplyLabel()
     fdb.ForceStore(key, e);
     EnsureCacheDir();
     fdb.Save(CacheFileFor(cacheName));
+    BackupCacheFile(CacheFileFor(cacheName));
     AppendLog("[Decay] Saved label=" + e.label + "  class=" + e.classification +
               "  → " + key);
     OnRefreshDecayPeaks();

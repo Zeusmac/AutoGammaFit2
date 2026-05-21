@@ -83,6 +83,7 @@ struct PeakTableRow {
     std::string label;
     std::string classification;
     std::string cacheFile;
+    bool        needsRefit     = false;
 };
 
 // Named efficiency fit: ln(ε) = a - b·ln(E) + c·ln(E)² - d/E²
@@ -220,6 +221,7 @@ public:
     void OnIsoLabelDecayDlgClosed();
     std::string AutoClassFromParent(const std::string& label);  // beta-minus chain classification
     void OnIsoPeakPreview();
+    void OnIsoPopulateIntensity();
     void OnIsoDbSearch();
     void OnIsoDbClear();
     void OnIsoDbLineSelected(Int_t id);
@@ -241,6 +243,7 @@ public:
 
     // ── Peak Table tab ────────────────────────────────────────────────────────
     void OnPTScanAll();
+    void OnPTRestoreMissing();
     void OnPTAddCache();
     void OnPTRemoveCache();
     void OnPTClearCaches();
@@ -255,6 +258,9 @@ public:
     void OnPTSaveEffCache();
     void OnPTEffSelected(Int_t id);
     void OnPTCalculateIntensity();
+    void OnPTSaveIntensity();
+    // DB comparison
+    void OnPTDbCompare();
 
     // ── FWHM tab ──────────────────────────────────────────────────────────────
     void OnLoadFWHM();
@@ -320,6 +326,9 @@ public:
     void OnShortcutResetDefaults();
     void OnShortcutSave();
     void OnShortcutDialogClose();
+
+    // ── Cache backup ──────────────────────────────────────────────────────────
+    void BackupCacheFile(const std::string& srcPath);  // copy to <cacheDir>_backup/
 
     // ── Utilities ─────────────────────────────────────────────────────────────
     void AppendLog(const std::string& msg);
@@ -495,6 +504,7 @@ private:
     TGTextEntry*   isoDbSearch_    = nullptr;
     TGComboBox*    isoDbClassCombo_ = nullptr;
     std::vector<int> isoDbIndices_;  // index into db_.db for each visible row
+    TGLabel*       isoIntensityInfoLbl_ = nullptr;  // shows matched decay fit A0/T½
 
     // ── Nuclear tab widgets ───────────────────────────────────────────────────
     TGListBox*    nucChainList_     = nullptr;  // isotopes in the decay chain
@@ -537,6 +547,13 @@ private:
     TGNumberEntry* ptAreaErrEntry_  = nullptr;  // peak area error (auto-filled)
     TGLabel*       ptIntensityLbl_  = nullptr;  // computed intensity result
     std::vector<EfficiencyCache> ptEffCaches_;  // loaded efficiency fits
+    int            ptSelectedRow_   = -1;       // index into ptRows_ of current selection
+    TGCheckButton* ptShowRefitOnly_ = nullptr;  // show only peaks marked for refit
+
+    // DB comparison widgets
+    TGTextEntry*   ptDbIsoEntry_    = nullptr;
+    TGNumberEntry* ptDbTolEntry_    = nullptr;
+    TGListBox*     ptDbResultList_  = nullptr;
 
     // ── Fit Results tab widgets ───────────────────────────────────────────────
     TGListBox*           fitResultsList_ = nullptr;

@@ -14,8 +14,10 @@ bin/
 *.pdf
 *.png
 
-# Runtime fit cache files
+# Runtime fit cache files (main dir, backup dir, and any variants)
 fit_caches/
+fit_caches_backup/
+fit_caches*/
 
 # Program output
 Gamma_fits/

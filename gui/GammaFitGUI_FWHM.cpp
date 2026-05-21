@@ -782,6 +782,7 @@ void GammaFitGUI::OnAcceptFWHM()
         fitdb.rootFile = inputPath_;
         EnsureCacheDir();
         fitdb.Save(cacheFile);
+        BackupCacheFile(cacheFile);
 
         // Register in Fit Results list
         std::string entryName = std::string(kFwhmPrefix) + hname;

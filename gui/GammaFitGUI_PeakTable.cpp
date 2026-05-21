@@ -23,12 +23,47 @@
 #include <fstream>
 #include <set>
 #include <dirent.h>
+#include <sys/stat.h>
 
 // ln(ε) = a - b·ln(E) + c·ln(E)² - d/E²
 static double EvalEfficiency(double E_keV, double a, double b, double c, double d) {
     if (E_keV <= 0.0) return 0.0;
     double lnE = std::log(E_keV);
     return std::exp(a - b*lnE + c*lnE*lnE - d/(E_keV*E_keV));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadIntensitySidecar — read <cachePath>_intensity.dat and populate intensity
+// fields on matching rows.  Sidecar format:  energy  intensity  intensityErr
+// ─────────────────────────────────────────────────────────────────────────────
+static void LoadIntensitySidecar(const std::string& cachePath,
+                                 std::vector<PeakTableRow>& rows,
+                                 int histIdx)
+{
+    std::ifstream in(cachePath + "_intensity.dat");
+    if (!in.is_open()) return;
+
+    struct IE { double energy, intensity, intensityErr; };
+    std::vector<IE> entries;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream ss(line);
+        IE e;
+        if (ss >> e.energy >> e.intensity >> e.intensityErr)
+            entries.push_back(e);
+    }
+
+    for (auto& r : rows) {
+        if (r.histIdx != histIdx) continue;
+        for (const auto& e : entries) {
+            if (std::abs(e.energy - r.energy) < 0.1) {
+                r.intensity    = e.intensity;
+                r.intensityErr = e.intensityErr;
+                break;
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,7 +82,7 @@ void GammaFitGUI::LoadPeakCacheIntoTable(const std::string& cachePath,
     if (!alreadyLoaded) {
         ptLoadedCaches_.push_back(cachePath);
         if (ptCacheList_) {
-            int id = (int)ptCacheList_->GetNumberOfEntries() + 1;
+            int id = (int)ptLoadedCaches_.size();  // push_back already done above
             std::string fname = cachePath;
             size_t sl = fname.rfind('/');
             if (sl != std::string::npos) fname = fname.substr(sl+1);
@@ -104,10 +139,13 @@ void GammaFitGUI::LoadPeakCacheIntoTable(const std::string& cachePath,
             row.label          = fe.PeakLabel(gi);
             row.classification = fe.PeakClass(gi);
             row.cacheFile      = cachePath;
+            row.needsRefit     = fe.needsRefit;
 
             ptRows_.push_back(row);
         }
     }
+
+    LoadIntensitySidecar(cachePath, ptRows_, histIdx);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -200,6 +238,10 @@ void GammaFitGUI::BuildPeakTableTab(TGCompositeFrame* p) {
         TGTextButton* rebuildBtn = new TGTextButton(sortRow, " Rebuild ");
         sortRow->AddFrame(rebuildBtn, new TGLayoutHints(kLHintsCenterY, 0, 3, 0, 0));
         rebuildBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPTRebuildTable()");
+
+        ptShowRefitOnly_ = new TGCheckButton(sortRow, "Refit only");
+        sortRow->AddFrame(ptShowRefitOnly_, new TGLayoutHints(kLHintsCenterY, 4, 0, 0, 0));
+        ptShowRefitOnly_->Connect("Toggled(Bool_t)", "GammaFitGUI", this, "OnPTRebuildTable()");
 
         // Selectable list box — click a row to preview the peak
         ptTableList_ = new TGListBox(grp, 5210);
@@ -363,11 +405,53 @@ void GammaFitGUI::BuildPeakTableTab(TGCompositeFrame* p) {
         areaRow->AddFrame(calcBtn, new TGLayoutHints(kLHintsCenterY));
         calcBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPTCalculateIntensity()");
 
-        // Result
-        ptIntensityLbl_ = new TGLabel(grp, "  I = ---");
+        // Result + save row
+        TGHorizontalFrame* resRow = new TGHorizontalFrame(grp);
+        grp->AddFrame(resRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        ptIntensityLbl_ = new TGLabel(resRow, "  I = ---");
         ptIntensityLbl_->SetTextJustify(kTextLeft);
-        grp->AddFrame(ptIntensityLbl_,
-                      new TGLayoutHints(kLHintsExpandX, 4, 2, 2, 4));
+        resRow->AddFrame(ptIntensityLbl_,
+                         new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 0, 4, 0, 0));
+        TGTextButton* saveIBtn = new TGTextButton(resRow, " Save to Cache ");
+        resRow->AddFrame(saveIBtn, new TGLayoutHints(kLHintsCenterY));
+        saveIBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPTSaveIntensity()");
+        saveIBtn->SetToolTipText(
+            "Save the computed intensity (with error) to a sidecar file next to the fit cache");
+    }
+
+    // ── DB Comparison ─────────────────────────────────────────────────────────
+    {
+        TGGroupFrame* grp = new TGGroupFrame(p, "Isotope DB Comparison");
+        p->AddFrame(grp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
+
+        // Search row
+        TGHorizontalFrame* searchRow = new TGHorizontalFrame(grp);
+        grp->AddFrame(searchRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+        searchRow->AddFrame(new TGLabel(searchRow, "Isotope:"),
+                            new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        ptDbIsoEntry_ = new TGTextEntry(searchRow, "");
+        ptDbIsoEntry_->Resize(90, 22);
+        ptDbIsoEntry_->SetToolTipText("e.g. Co-60, Cs-137, Ba-133");
+        searchRow->AddFrame(ptDbIsoEntry_,
+                            new TGLayoutHints(kLHintsExpandX | kLHintsCenterY, 0, 6, 0, 0));
+        searchRow->AddFrame(new TGLabel(searchRow, "Tol (keV):"),
+                            new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        ptDbTolEntry_ = new TGNumberEntry(searchRow, 2.0, 5, -1,
+                                          TGNumberFormat::kNESRealFour,
+                                          TGNumberFormat::kNEAPositive);
+        ptDbTolEntry_->SetWidth(60);
+        searchRow->AddFrame(ptDbTolEntry_, new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        TGTextButton* cmpBtn = new TGTextButton(searchRow, " Compare ");
+        searchRow->AddFrame(cmpBtn, new TGLayoutHints(kLHintsCenterY));
+        cmpBtn->Connect("Clicked()", "GammaFitGUI", this, "OnPTDbCompare()");
+        cmpBtn->SetToolTipText(
+            "List all DB gamma lines for this isotope and show which fitted peaks match");
+
+        // Results list: DB energy  |  intensity  |  matched peak diff
+        ptDbResultList_ = new TGListBox(grp, 5230);
+        ptDbResultList_->Resize(280, 130);
+        grp->AddFrame(ptDbResultList_, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+        ptDbResultList_->AddEntry("  (enter isotope name and click Compare)", 1);
     }
 }
 
@@ -427,7 +511,7 @@ void GammaFitGUI::OnPTAddCache() {
     TGFileInfo fi;
     fi.fFileTypes = types;
     std::string initDir = CacheDirFor();
-    fi.fIniDir = const_cast<char*>(initDir.c_str());
+    fi.fIniDir = StrDup(initDir.c_str());
     OpenFileDialog(this, kFDOpen, &fi);
     if (!fi.fFilename) return;
 
@@ -459,6 +543,17 @@ void GammaFitGUI::OnPTRemoveCache() {
     if (selID < 0 || selID >= (int)ptLoadedCaches_.size()) return;
 
     std::string removedPath = ptLoadedCaches_[selID];
+    // Delete backup for this cache
+    {
+        size_t sl = removedPath.rfind('/');
+        if (sl != std::string::npos) {
+            std::string cacheDir  = removedPath.substr(0, sl);
+            std::string fname     = removedPath.substr(sl + 1);
+            std::string backupDir = cacheDir + "_backup";
+            ::remove((backupDir + "/" + fname).c_str());
+            ::remove((backupDir + "/" + fname + "_intensity.dat").c_str());
+        }
+    }
     ptLoadedCaches_.erase(ptLoadedCaches_.begin() + selID);
 
     ptRows_.erase(
@@ -489,9 +584,21 @@ void GammaFitGUI::OnPTRemoveCache() {
 // Slot: OnPTClearCaches
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnPTClearCaches() {
+    // Delete backup copies for all currently loaded caches
+    for (const std::string& cachePath : ptLoadedCaches_) {
+        size_t sl = cachePath.rfind('/');
+        if (sl != std::string::npos) {
+            std::string cacheDir  = cachePath.substr(0, sl);
+            std::string fname     = cachePath.substr(sl + 1);
+            std::string backupDir = cacheDir + "_backup";
+            ::remove((backupDir + "/" + fname).c_str());
+            ::remove((backupDir + "/" + fname + "_intensity.dat").c_str());
+        }
+    }
     ptLoadedCaches_.clear();
     ptRows_.clear();
     ptFilteredRows_.clear();
+    ptSelectedRow_ = -1;
     if (ptCacheList_) { ptCacheList_->RemoveAll(); ptCacheList_->MapSubwindows(); ptCacheList_->Layout(); }
     if (ptTableList_) {
         ptTableList_->RemoveAll();
@@ -499,7 +606,7 @@ void GammaFitGUI::OnPTClearCaches() {
         ptTableList_->MapSubwindows();
         ptTableList_->Layout();
     }
-    AppendLog("PeakTable: cleared all caches");
+    AppendLog("PeakTable: cleared all caches and their backups");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -513,10 +620,13 @@ void GammaFitGUI::OnPTRebuildTable() {
     int classFilter = ptClassFilter_ ? ptClassFilter_->GetSelected() : 1;
     int sortSel     = ptSortCombo_   ? ptSortCombo_->GetSelected()   : 1;
 
+    bool refitOnly = ptShowRefitOnly_ && ptShowRefitOnly_->IsOn();
+
     // Build filtered list
     std::vector<size_t> indices;
     for (size_t i = 0; i < ptRows_.size(); i++) {
         const PeakTableRow& r = ptRows_[i];
+        if (refitOnly && !r.needsRefit)                              continue;
         if (!filterLabel.empty() && r.label.find(filterLabel) == std::string::npos)
             continue;
         if (classFilter == 2 && r.classification != "Parent")        continue;
@@ -558,17 +668,27 @@ void GammaFitGUI::OnPTRebuildTable() {
         const PeakTableRow& r = ptRows_[indices[i]];
 
         std::string lbl = r.label.empty() ? "(unlabeled)" : r.label;
+        if (r.needsRefit) lbl = "[R] " + lbl;
         std::string cls = r.classification.empty() ? "" : "[" + r.classification + "]";
 
         // Truncate histogram name to keep line readable
         std::string hname = r.histName;
         if (hname.size() > 20) hname = hname.substr(0, 17) + "...";
 
-        std::snprintf(buf, sizeof(buf),
-            "  E=%9.3f +/-%6.3f  FWHM=%6.3f  Area=%8.1f +/-%7.1f  chi2=%5.2f  %-18s %-16s {%s}",
-            r.energy, r.energyErr, r.fwhm,
-            r.area, r.areaErr, r.chi2ndf,
-            lbl.c_str(), cls.c_str(), hname.c_str());
+        if (r.intensity > 0.0) {
+            std::snprintf(buf, sizeof(buf),
+                "  E=%9.3f +/-%6.3f  FWHM=%6.3f  Area=%8.1f +/-%7.1f  chi2=%5.2f  I=%7.4f%%+/-%.4f%%  %-18s %-16s {%s}",
+                r.energy, r.energyErr, r.fwhm,
+                r.area, r.areaErr, r.chi2ndf,
+                r.intensity * 100.0, r.intensityErr * 100.0,
+                lbl.c_str(), cls.c_str(), hname.c_str());
+        } else {
+            std::snprintf(buf, sizeof(buf),
+                "  E=%9.3f +/-%6.3f  FWHM=%6.3f  Area=%8.1f +/-%7.1f  chi2=%5.2f  %-18s %-16s {%s}",
+                r.energy, r.energyErr, r.fwhm,
+                r.area, r.areaErr, r.chi2ndf,
+                lbl.c_str(), cls.c_str(), hname.c_str());
+        }
 
         ptTableList_->AddEntry(buf, i + 1);
     }
@@ -583,7 +703,8 @@ void GammaFitGUI::OnPTRebuildTable() {
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnPTRowSelected(Int_t id) {
     if (id < 1 || (size_t)id > ptFilteredRows_.size()) return;
-    const PeakTableRow& r = ptRows_[ptFilteredRows_[id - 1]];
+    ptSelectedRow_ = (int)ptFilteredRows_[id - 1];
+    const PeakTableRow& r = ptRows_[ptSelectedRow_];
 
     // Try to find the histogram in the open file
     TH1* h = nullptr;
@@ -770,7 +891,8 @@ void GammaFitGUI::OnPTExportCSV() {
         return;
     }
 
-    out << "Histogram,Energy_keV,EnergyErr_keV,Sigma_keV,FWHM_keV,Area,AreaErr,Chi2NDF,Label,Classification,CacheFile\n";
+    out << "Histogram,Energy_keV,EnergyErr_keV,Sigma_keV,FWHM_keV,Area,AreaErr,Chi2NDF,"
+           "Intensity,IntensityErr,Label,Classification,CacheFile\n";
 
     for (const auto& r : ptRows_) {
         out << r.histName << ","
@@ -780,6 +902,8 @@ void GammaFitGUI::OnPTExportCSV() {
             << std::setprecision(2)
             << r.area     << "," << r.areaErr   << ","
             << r.chi2ndf  << ","
+            << std::setprecision(6)
+            << r.intensity << "," << r.intensityErr << ","
             << "\"" << r.label << "\","
             << "\"" << r.classification << "\","
             << "\"" << r.cacheFile << "\"\n";
@@ -912,4 +1036,214 @@ void GammaFitGUI::OnPTCalculateIntensity() {
     AppendLog(Form("PeakTable: intensity E=%.3f keV  I=%.4g  eff=%.4g  A=%.4g Bq  t=%.4g s",
                    ptEnergyEntry_ ? ptEnergyEntry_->GetNumber() : 0.0,
                    I, eff, actBq, time_s));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slot: OnPTSaveIntensity — save computed I ± err to sidecar file and update row
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnPTSaveIntensity() {
+    if (ptSelectedRow_ < 0 || ptSelectedRow_ >= (int)ptRows_.size()) {
+        AppendLog("PeakTable: select a peak row first"); return;
+    }
+
+    double area    = ptAreaEntry_     ? ptAreaEntry_->GetNumber()     : 0.0;
+    double areaErr = ptAreaErrEntry_  ? ptAreaErrEntry_->GetNumber()  : 0.0;
+    double eff     = ptEffValEntry_   ? ptEffValEntry_->GetNumber()   : 0.0;
+    double actBq   = ptActivityEntry_ ? ptActivityEntry_->GetNumber() : 0.0;
+    double time_s  = ptTimeEntry_     ? ptTimeEntry_->GetNumber()     : 0.0;
+
+    if (eff <= 0 || actBq <= 0 || time_s <= 0) {
+        AppendLog("PeakTable: need eff, activity, and time > 0 to save intensity");
+        return;
+    }
+
+    double denom = eff * actBq * time_s;
+    double I     = area    / denom;
+    double I_err = areaErr / denom;
+
+    PeakTableRow& r = ptRows_[ptSelectedRow_];
+    r.intensity    = I;
+    r.intensityErr = I_err;
+
+    // Merge with existing sidecar (preserve other peaks' entries)
+    std::string sidecarPath = r.cacheFile + "_intensity.dat";
+
+    struct IE { double energy, intensity, intensityErr; };
+    std::vector<IE> existing;
+    {
+        std::ifstream in(sidecarPath);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::istringstream ss(line);
+            IE e;
+            if (ss >> e.energy >> e.intensity >> e.intensityErr)
+                existing.push_back(e);
+        }
+    }
+
+    bool found = false;
+    for (auto& e : existing) {
+        if (std::abs(e.energy - r.energy) < 0.1) {
+            e.intensity = I; e.intensityErr = I_err; found = true; break;
+        }
+    }
+    if (!found) existing.push_back({r.energy, I, I_err});
+
+    std::ofstream out(sidecarPath);
+    out << "# energy  intensity  intensityErr\n";
+    out << std::fixed << std::setprecision(6);
+    for (const auto& e : existing)
+        out << e.energy << " " << e.intensity << " " << e.intensityErr << "\n";
+    out.close();
+
+    AppendLog(Form("PeakTable: saved I=%.4g+/-%.4g for E=%.3f keV",
+                   I, I_err, r.energy));
+    OnPTRebuildTable();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slot: OnPTDbCompare — match all DB lines for an isotope against fitted peaks
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnPTDbCompare() {
+    if (!ptDbResultList_) return;
+    ptDbResultList_->RemoveAll();
+
+    std::string isoName = ptDbIsoEntry_ ? std::string(ptDbIsoEntry_->GetText()) : "";
+    if (isoName.empty()) {
+        ptDbResultList_->AddEntry("  (enter isotope name above)", 1);
+        ptDbResultList_->MapSubwindows(); ptDbResultList_->Layout();
+        return;
+    }
+
+    if (!dbLoaded_) {
+        ptDbResultList_->AddEntry("  (no isotope DB loaded — use Open DB button)", 1);
+        ptDbResultList_->MapSubwindows(); ptDbResultList_->Layout();
+        return;
+    }
+
+    double tol = ptDbTolEntry_ ? ptDbTolEntry_->GetNumber() : 2.0;
+
+    // Case-insensitive substring search
+    std::string searchLow = isoName;
+    for (auto& c : searchLow) c = (char)std::tolower((unsigned char)c);
+
+    std::vector<const GammaLine*> lines;
+    for (const auto& gl : db_.db) {
+        std::string isoLow = gl.isotope;
+        for (auto& c : isoLow) c = (char)std::tolower((unsigned char)c);
+        if (isoLow.find(searchLow) != std::string::npos)
+            lines.push_back(&gl);
+    }
+
+    if (lines.empty()) {
+        ptDbResultList_->AddEntry(
+            Form("  (no lines found for '%s')", isoName.c_str()), 1);
+        ptDbResultList_->MapSubwindows(); ptDbResultList_->Layout();
+        return;
+    }
+
+    // Sort by energy
+    std::sort(lines.begin(), lines.end(),
+              [](const GammaLine* a, const GammaLine* b){ return a->energy < b->energy; });
+
+    int nMatched = 0;
+    char buf[400];
+    for (int i = 0; i < (int)lines.size(); i++) {
+        const GammaLine* gl = lines[i];
+
+        // Find closest fitted peak within tolerance
+        double bestDiff   = 1e9;
+        const PeakTableRow* bestRow = nullptr;
+        for (const auto& r : ptRows_) {
+            double d = r.energy - gl->energy;
+            if (std::abs(d) < tol && std::abs(d) < std::abs(bestDiff)) {
+                bestDiff = d; bestRow = &r;
+            }
+        }
+
+        char intBuf[32];
+        if (gl->hasIntensity)
+            std::snprintf(intBuf, sizeof(intBuf), "I=%7.3f%%", gl->intensity);
+        else
+            std::snprintf(intBuf, sizeof(intBuf), "I=   n/a ");
+
+        if (bestRow) {
+            ++nMatched;
+            std::snprintf(buf, sizeof(buf),
+                " [MATCH] DB:%8.3f  %s | fit:%8.3f  diff=%+.3f keV  %s",
+                gl->energy, intBuf, bestRow->energy, bestDiff,
+                bestRow->label.empty() ? "(unlabeled)" : bestRow->label.c_str());
+        } else {
+            std::snprintf(buf, sizeof(buf),
+                "         DB:%8.3f  %s | no match within %.1f keV",
+                gl->energy, intBuf, tol);
+        }
+        ptDbResultList_->AddEntry(buf, i + 1);
+    }
+
+    ptDbResultList_->MapSubwindows();
+    ptDbResultList_->Layout();
+    AppendLog(Form("PeakTable DB: '%s' — %d lines, %d matched within %.1f keV",
+                   isoName.c_str(), (int)lines.size(), nMatched, tol));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slot: OnPTRestoreMissing
+// Scans fit_caches_backup/ for any .dat files that are absent from fit_caches/.
+// Copies them back, then re-runs Scan & Load All.
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnPTRestoreMissing() {
+    const std::string mainDir   = kCacheDir;          // "fit_caches"
+    const std::string backupDir = std::string(kCacheDir) + "_backup";
+
+    DIR* bd = opendir(backupDir.c_str());
+    if (!bd) {
+        AppendLog("[Restore] No backup directory found: " + backupDir);
+        return;
+    }
+
+    auto copyFile = [](const std::string& src, const std::string& dst) -> bool {
+        std::ifstream in(src, std::ios::binary);
+        if (!in.is_open()) return false;
+        std::ofstream out(dst, std::ios::binary);
+        if (!out.is_open()) return false;
+        out << in.rdbuf();
+        return true;
+    };
+
+    ::mkdir(mainDir.c_str(), 0755);
+
+    int nRestored = 0;
+    struct dirent* ent;
+    while ((ent = readdir(bd)) != nullptr) {
+        std::string name(ent->d_name);
+        // Only process .dat cache files (not _intensity.dat sidecars — those come with the main file)
+        if (name.size() < 5 || name.substr(name.size() - 4) != ".dat") continue;
+        if (name.size() > 14 && name.substr(name.size() - 14) == "_intensity.dat") continue;
+
+        std::string mainPath   = mainDir   + "/" + name;
+        std::string backPath   = backupDir + "/" + name;
+        std::string sideMain   = mainPath  + "_intensity.dat";
+        std::string sideBack   = backPath  + "_intensity.dat";
+
+        struct stat st;
+        if (::stat(mainPath.c_str(), &st) == 0) continue;  // already exists — skip
+
+        if (copyFile(backPath, mainPath)) {
+            ++nRestored;
+            AppendLog("[Restore] Restored: " + name);
+            // Also restore sidecar if it exists in backup
+            if (::stat(sideBack.c_str(), &st) == 0)
+                copyFile(sideBack, sideMain);
+        }
+    }
+    closedir(bd);
+
+    if (nRestored > 0) {
+        AppendLog(Form("[Restore] %d cache(s) restored. Rescanning…", nRestored));
+        OnPTScanAll();
+    } else {
+        AppendLog("[Restore] No missing caches found — everything is present.");
+    }
 }
