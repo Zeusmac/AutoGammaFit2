@@ -28,6 +28,7 @@
 #include "Debug.h"
 #include "NuclearData.h"
 #include "OptionalDeps.h"
+#include "LevelScheme.h"
 
 class TH1;
 class TH2;
@@ -240,6 +241,30 @@ public:
     void OnNucAddBackground();
     void OnNucLoadNNDCTxt();
     void OnNucConfirmChainToIsoDB();
+
+    // ── Level Scheme tab (Nuclear sub-tab 3 & 4) ──────────────────────────────
+    void OnLSSeedFromNNDC();      // populate lsData_ from nuclearDB_ for selected isotope
+    void OnLSSave();              // save lsData_ to level_schemes/<isoID>.lsdat
+    void OnLSLoad();              // load .lsdat file via file browser
+    void OnLSAddLevel();          // add level from entry fields
+    void OnLSRemoveLevel();       // remove selected level
+    void OnLSLevelSelected(Int_t id);  // fill detail fields when level clicked
+    void OnLSAddTransition();     // add transition from combo+entry fields
+    void OnLSRemoveTransition();  // remove selected transition
+    void OnLSTransSelected(Int_t id);  // fill detail fields when transition clicked
+    void OnLSLinkPeak();          // link selected ptRows_ peak to selected transition
+    void OnLSDrawEnhanced();      // draw enhanced level scheme using lsData_ + NNDC
+    void OnLSCalcBR();            // compute branching ratios for selected level
+    void OnLSCalcLogFt();         // compute log ft + B(GT)/B(F) for all fed levels
+    void OnLSCalcBalance();       // compute cascade balance for all levels
+    void OnLSBrLevelSelected(Int_t id); // update BR display when level combo changes
+    // Internal helpers (not slots)
+    void BuildLSLevelSchemeTab(TGCompositeFrame* p);
+    void BuildLSLogFtTab(TGCompositeFrame* p);
+    void RefreshLSLevelList();
+    void RefreshLSTransList();
+    void RefreshLSLevelCombos();
+    void DrawEnhancedLevelScheme(const std::string& isoID);
 
     // ── Peak Table tab ────────────────────────────────────────────────────────
     void OnPTScanAll();
@@ -522,6 +547,29 @@ private:
     std::string   nucCacheDir_;                 // path to nuclear data cache
     std::vector<std::string> nucChainIsotopes_; // isotope IDs in chain (e.g. "44S")
     std::map<std::string, NucIsotope> nuclearDB_; // fetched nuclear data by ID
+
+    // ── Level Scheme data + widgets ───────────────────────────────────────────
+    LevelSchemeData lsData_;              // current user-edited level scheme
+    // Sub-tab 3: Level Scheme editor
+    TGListBox*     lsLevelList_       = nullptr;  // shows all levels
+    TGListBox*     lsTransList_       = nullptr;  // shows all transitions
+    TGNumberEntry* lsLevelEnergyEntry_= nullptr;  // E for new level (keV)
+    TGTextEntry*   lsLevelJpiEntry_   = nullptr;  // Jπ for new level
+    TGNumberEntry* lsBetaFeedEntry_   = nullptr;  // β-feeding % for selected level
+    TGTextEntry*   lsBetaTypeEntry_   = nullptr;  // "GT", "Fermi", "Mixed", "1F"
+    TGComboBox*    lsTransFromCombo_  = nullptr;  // from-level combo for new transition
+    TGComboBox*    lsTransToCombo_    = nullptr;  // to-level combo for new transition
+    TGNumberEntry* lsTransEnergyEntry_= nullptr;  // E for new transition (keV)
+    TGTextEntry*   lsTransMultEntry_  = nullptr;  // multipolarity ("E2", "M1+E2")
+    TGNumberEntry* lsTransIntEntry_   = nullptr;  // intensity for new transition
+    // Sub-tab 4: Log ft & BR
+    TGComboBox*    lsBrFromCombo_     = nullptr;  // level whose BRs to display
+    TGListBox*     lsBrList_          = nullptr;  // branching ratio results
+    TGTextView*    lsLogFtView_       = nullptr;  // log ft / B(GT) table
+    TGListBox*     lsBalanceList_     = nullptr;  // cascade balance results
+    TGNumberEntry* lsParentHlEntry_   = nullptr;  // parent T½ (s) override
+    TGNumberEntry* lsParentQbEntry_   = nullptr;  // parent Q_β (keV) override
+    TGNumberEntry* lsParentZEntry_    = nullptr;  // parent Z override
 
     // ── Peak Table tab widgets ────────────────────────────────────────────────
     TGListBox*   ptCacheList_   = nullptr;

@@ -14,6 +14,7 @@
 #include "TROOT.h"
 
 #include <algorithm>
+#include <deque>
 #include <fstream>
 #include <sstream>
 #include <set>
@@ -148,7 +149,14 @@ void GammaFitGUI::DrawLevelScheme(const std::string& isoID)
     tx.DrawLatex(0.50, 0.96, (isoID + " Level Scheme").c_str());
 
     c->Modified(); c->Update();
-    AppendLog("Level scheme drawn for " + isoID);
+
+    // If user level scheme is loaded for this isotope, delegate to enhanced drawing
+    if (!lsData_.empty() && lsData_.isoID == isoID) {
+        DrawEnhancedLevelScheme(isoID);
+        return;
+    }
+
+    AppendLog("Level scheme drawn for " + isoID + " (NNDC data)");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -545,17 +553,23 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
             clsRow->AddFrame(new TGLabel(clsRow, "Class:"),
                              new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
             isoClassCombo_ = new TGComboBox(clsRow, 970);
-            isoClassCombo_->AddEntry("(none)",               1);
-            isoClassCombo_->AddEntry("Parent",               2);
-            isoClassCombo_->AddEntry("Daughter",             3);
-            isoClassCombo_->AddEntry("Granddaughter",        4);
-            isoClassCombo_->AddEntry("Beta-n Daughter",      5);
-            isoClassCombo_->AddEntry("Beta-2n Daughter",     6);
-            isoClassCombo_->AddEntry("Beta-n Granddaughter", 7);
-            isoClassCombo_->AddEntry("Beta-2n Granddaughter",8);
-            isoClassCombo_->AddEntry("Background",           9);
-            isoClassCombo_->AddEntry("Custom",               10);
-            isoClassCombo_->AddEntry("X-ray",                11);
+            isoClassCombo_->AddEntry("(none)",                         1);
+            isoClassCombo_->AddEntry("Parent",                         2);
+            isoClassCombo_->AddEntry("Daughter",                       3);
+            isoClassCombo_->AddEntry("Granddaughter",                  4);
+            isoClassCombo_->AddEntry("Great-Granddaughter",            5);
+            isoClassCombo_->AddEntry("Great-Great-Granddaughter",      6);
+            isoClassCombo_->AddEntry("Beta-n Daughter",                7);
+            isoClassCombo_->AddEntry("Beta-2n Daughter",               8);
+            isoClassCombo_->AddEntry("Beta-n Granddaughter",           9);
+            isoClassCombo_->AddEntry("Beta-2n Granddaughter",          10);
+            isoClassCombo_->AddEntry("Beta-n Great-Granddaughter",     11);
+            isoClassCombo_->AddEntry("Beta-2n Great-Granddaughter",    12);
+            isoClassCombo_->AddEntry("Beta-n Great-Great-Granddaughter",  13);
+            isoClassCombo_->AddEntry("Beta-2n Great-Great-Granddaughter", 14);
+            isoClassCombo_->AddEntry("Background",                     15);
+            isoClassCombo_->AddEntry("Custom",                         16);
+            isoClassCombo_->AddEntry("X-ray",                          17);
             isoClassCombo_->Select(1, kFALSE);
             isoClassCombo_->Resize(150, 22);
             clsRow->AddFrame(isoClassCombo_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
@@ -655,7 +669,7 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Sub-tab 3: Level Scheme
+    // Sub-tab 3: Level Scheme (editor + enhanced drawing)
     // ═══════════════════════════════════════════════════════════════════════
     {
         TGCompositeFrame* tab = nucTab->AddTab("Level Scheme");
@@ -663,42 +677,11 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
         tab->AddFrame(sc, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY));
         TGCompositeFrame* cf = new TGCompositeFrame(sc->GetViewPort(), 293, 10, kVerticalFrame);
         sc->SetContainer(cf);
-        TGCompositeFrame* p3 = cf;
-
-        p3->AddFrame(new TGLabel(p3, "Select isotope:"),
-                     new TGLayoutHints(kLHintsLeft, 4, 4, 4, 2));
-        nucIsoCombo_ = new TGComboBox(p3, 1200);
-        nucIsoCombo_->AddEntry("(none)", 1);
-        nucIsoCombo_->Select(1, kFALSE);
-        nucIsoCombo_->Resize(285, 22);
-        p3->AddFrame(nucIsoCombo_, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 4));
-
-        TGTextButton* drawBtn = new TGTextButton(p3, "Draw Level Scheme (ROOT canvas)");
-        p3->AddFrame(drawBtn, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
-        drawBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNucDrawLevelScheme()");
-        drawBtn->SetToolTipText("Draw level scheme for selected isotope on the main canvas");
-
-        TGTextButton* interactBtn = new TGTextButton(p3, "Open Interactive (browser)");
-        p3->AddFrame(interactBtn, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
-        interactBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNucOpenInteractive()");
-        interactBtn->SetToolTipText(
-            "Open an interactive Plotly level scheme in your browser.\n"
-            "Requires internet access to load Plotly.js from CDN.\n"
-            "Click levels/gammas to see details.");
-
-        TGTextButton* schemBtn2 = new TGTextButton(p3, "Draw Decay Schematic");
-        p3->AddFrame(schemBtn2, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 6));
-        schemBtn2->Connect("Clicked()", "GammaFitGUI", this, "OnIsoDrawSchematic()");
-        schemBtn2->SetToolTipText("Draw the full decay chain schematic for the current histogram");
-
-        p3->AddFrame(new TGLabel(p3, "ROOT canvas: level scheme drawn on main view."),
-                     new TGLayoutHints(kLHintsLeft, 4, 4, 4, 0));
-        p3->AddFrame(new TGLabel(p3, "Browser: interactive, click to inspect levels."),
-                     new TGLayoutHints(kLHintsLeft, 4, 4, 0, 4));
+        BuildLSLevelSchemeTab(cf);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Sub-tab 4: Log ft & BR
+    // Sub-tab 4: Log ft & Branching Ratios
     // ═══════════════════════════════════════════════════════════════════════
     {
         TGCompositeFrame* tab = nucTab->AddTab("Log ft & BR");
@@ -706,20 +689,7 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
         tab->AddFrame(sc, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY));
         TGCompositeFrame* cf = new TGCompositeFrame(sc->GetViewPort(), 293, 10, kVerticalFrame);
         sc->SetContainer(cf);
-        TGCompositeFrame* p4 = cf;
-
-        p4->AddFrame(new TGLabel(p4, "Isotope:"),
-                     new TGLayoutHints(kLHintsLeft, 4, 4, 4, 2));
-        nucIsoLogftCombo_ = new TGComboBox(p4, 1210);
-        nucIsoLogftCombo_->AddEntry("(none)", 1);
-        nucIsoLogftCombo_->Select(1, kFALSE);
-        nucIsoLogftCombo_->Resize(285, 22);
-        p4->AddFrame(nucIsoLogftCombo_, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 4));
-
-        p4->AddFrame(new TGLabel(p4, "Log ft values from beta branch data."),
-                     new TGLayoutHints(kLHintsLeft, 4, 4, 4, 2));
-        p4->AddFrame(new TGLabel(p4, "(TODO: log ft calculator)"),
-                     new TGLayoutHints(kLHintsLeft, 4, 4, 2, 2));
+        BuildLSLogFtTab(cf);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -797,6 +767,11 @@ void GammaFitGUI::OnNucSetParentFromChain()
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OnNucAutoTraceChain
+// BFS over all decay branches (β⁻, β⁻n, β⁻2n).  Each branch is traced until
+// stable, long-lived, Q < 0, or not a β⁻ emitter.
+// Generation naming: absStep encodes total steps from the Parent regardless of
+// path.  prefix "" = main β⁻ chain; "Beta-n" / "Beta-2n" = neutron-emission
+// sub-chains.
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucAutoTraceChain()
 {
@@ -809,48 +784,58 @@ void GammaFitGUI::OnNucAutoTraceChain()
     if (nucStatusLbl_) nucStatusLbl_->SetText("Tracing chain...");
 
     const double kLongLivedThreshold = 3600.0;
-    const int kMaxSteps = 10;
+    const int    kMaxAbsStep         = 12;
+    const int    kMaxChainSize       = 50;
+    const double kNeutronME          = 8071.3; // neutron mass excess (keV)
 
-    int Z = isoParentZval_, N = isoParentNval_;
-    int A = Z + N;
-
-    // Main-chain class by step: step 0=Parent, 1=Daughter, 2+=Granddaughter
-    auto chainClass = [](int step) -> const char* {
+    // Generation name: 0=Parent, 1=Daughter, 2=Granddaughter, 3+=Great(s)-Granddaughter
+    auto generationName = [](int step) -> std::string {
         if (step == 0) return "Parent";
         if (step == 1) return "Daughter";
-        return "Granddaughter";
+        if (step == 2) return "Granddaughter";
+        std::string s;
+        for (int i = 3; i <= step; i++) s += "Great-";
+        return s + "Granddaughter";
     };
 
-    int step = 0;
-    while (step < kMaxSteps) {
+    // Full class: prefix + " " + generation(absStep), or just generation for main chain.
+    // Beta-n/2n products at absStep S encode "one step below" the emitter, matching
+    // the same absolute distance from Parent as the main-chain nucleus at that step.
+    auto makeClass = [&generationName](const std::string& prefix, int absStep) -> std::string {
+        std::string gen = generationName(absStep);
+        return prefix.empty() ? gen : (prefix + " " + gen);
+    };
+
+    // BFS queue entry
+    struct QEntry { int Z, A, absStep; std::string prefix; };
+    std::deque<QEntry>          queue;
+    std::set<std::pair<int,int>> visited;
+
+    queue.push_back({isoParentZval_, isoParentZval_ + isoParentNval_, 0, ""});
+
+    while (!queue.empty() && (int)nucChainIsotopes_.size() < kMaxChainSize) {
+        auto [Z, A, absStep, prefix] = queue.front();
+        queue.pop_front();
+
+        if (absStep > kMaxAbsStep) continue;
+        if (visited.count(std::make_pair(Z, A))) continue;
+        visited.insert(std::make_pair(Z, A));
+
         std::string sym = NucZToSymbol(Z);
+        if (sym == "?" || sym.empty()) continue;
         std::string isoID = std::to_string(A) + sym;
-        if (sym == "?" || sym.empty()) break;
 
-        // Q-value check: beta-minus Q = ME(Z,A) - ME(Z+1,A).  Skip step if Q < 0.
-        if (ameLoaded_) {
-            auto itP = ameTable_.find({Z, A});
-            auto itD = ameTable_.find({Z+1, A});
-            if (itP != ameTable_.end() && itD != ameTable_.end()) {
-                double Q = itP->second - itD->second;  // keV
-                if (Q < 0.0) {
-                    AppendLog("  " + isoID + "  Q_β⁻ = " + Fmt(Q, 1) +
-                              " keV < 0 — energetically forbidden, stopping.");
-                    break;
-                }
-            }
-        }
-
-        std::string cls = chainClass(step);
+        std::string cls = makeClass(prefix, absStep);
         labelClassMap_[isoID] = cls;
 
         bool found = false;
         for (const auto& id : nucChainIsotopes_) if (id == isoID) { found = true; break; }
         if (!found) nucChainIsotopes_.push_back(isoID);
 
-        AppendLog("  Chain[" + std::to_string(step) + "]: " + isoID + "  [" + cls + "]");
+        AppendLog("  Chain[" + std::to_string(absStep) +
+                  (prefix.empty() ? "" : "/" + prefix) + "]: " + isoID + "  [" + cls + "]");
 
-        // Fetch if not already fetched
+        // Fetch NNDC data if not cached
         auto dbIt = nuclearDB_.find(isoID);
         if (dbIt == nuclearDB_.end() || !dbIt->second.valid()) {
             NucIsotope iso;
@@ -864,67 +849,132 @@ void GammaFitGUI::OnNucAutoTraceChain()
             dbIt = nuclearDB_.find(isoID);
         }
 
-        bool isBetaMinus = false;
         bool hasData = (dbIt != nuclearDB_.end() && dbIt->second.valid());
+
+        // Stop if stable or long-lived
         if (hasData) {
             const NucIsotope& iso = dbIt->second;
             if (iso.halflife_s == 0.0 &&
                 (iso.hl_str == "stable" || iso.hl_str == "STABLE")) {
-                AppendLog("  " + isoID + " is stable — chain ends.");
-                break;
+                AppendLog("  " + isoID + " is stable — branch ends.");
+                continue;
             }
-            if (step > 0 && iso.halflife_s > kLongLivedThreshold && iso.halflife_s > 0.0) {
-                AppendLog("  " + isoID + "  T½=" + iso.hl_str + " — long-lived, stopping.");
-                break;
+            if (absStep > 0 && iso.halflife_s > kLongLivedThreshold && iso.halflife_s > 0.0) {
+                AppendLog("  " + isoID + "  T½=" + iso.hl_str + " — long-lived, stopping branch.");
+                continue;
             }
+        }
+
+        // Determine if β⁻ emitter (also covers B-N/B-2N which are β⁻ + neutron emission)
+        bool isBetaMinus = false;
+        if (hasData) {
+            const NucIsotope& iso = dbIt->second;
+            auto isoBetaMode = [](const std::string& m) {
+                return m == "B-" || m == "B-N" || m == "B-2N";
+            };
             isBetaMinus = !iso.betaBranches.empty()
-                          || iso.decayMode1 == "B-"
-                          || iso.decayMode1 == "B-N"
-                          || iso.decayMode1 == "B-2N";
+                          || isoBetaMode(iso.decayMode1)
+                          || isoBetaMode(iso.decayMode2)
+                          || isoBetaMode(iso.decayMode3);
         } else {
-            isBetaMinus = (N > Z);
+            isBetaMinus = ((A - Z) > Z); // neutron-rich heuristic
         }
 
         if (!isBetaMinus) {
-            AppendLog("  " + isoID + " — not beta-minus emitter, stopping.");
-            break;
+            AppendLog("  " + isoID + " — not β⁻ emitter, stopping branch.");
+            continue;
         }
 
-        // Beta-n and Beta-2n products from NUBASE.
-        // β⁻n  daughter: same Z as β⁻ daughter (Z+1), A-1, N-2 from this nucleus.
-        // β⁻2n daughter: same Z as β⁻ daughter (Z+1), A-2, N-3 from this nucleus.
-        // Label as "Daughter" when emitted from Parent (step 0), "Granddaughter" otherwise.
-        if (nubaseLoaded_) {
-            auto nbit = nubaseTable_.find({Z, A});
-            if (nbit != nubaseTable_.end()) {
-                const NubaseEntry& nb = nbit->second;
-                const char* bnCls  = (step == 0) ? "Beta-n Daughter"  : "Beta-n Granddaughter";
-                const char* b2nCls = (step == 0) ? "Beta-2n Daughter" : "Beta-2n Granddaughter";
-                if (nb.brBetaN > 1.0) {
-                    // Z+1 = same proton number as the β⁻ daughter; A-1 = one neutron emitted
-                    std::string bnID = std::to_string(A - 1) + NucZToSymbol(Z + 1);
-                    labelClassMap_[bnID] = bnCls;
-                    bool bf = false;
-                    for (const auto& id : nucChainIsotopes_) if (id == bnID) { bf = true; break; }
-                    if (!bf) nucChainIsotopes_.push_back(bnID);
-                    AppendLog("  Chain[B-n]: " + bnID + "  [" + bnCls + "]");
-                }
-                if (nb.brBeta2N > 1.0) {
-                    // Z+1 = same proton number as the β⁻ daughter; A-2 = two neutrons emitted
-                    std::string b2nID = std::to_string(A - 2) + NucZToSymbol(Z + 1);
-                    labelClassMap_[b2nID] = b2nCls;
-                    bool bf = false;
-                    for (const auto& id : nucChainIsotopes_) if (id == b2nID) { bf = true; break; }
-                    if (!bf) nucChainIsotopes_.push_back(b2nID);
-                    AppendLog("  Chain[B-2n]: " + b2nID + "  [" + b2nCls + "]");
+        // ── β⁻ daughter: Q = ME(Z,A) - ME(Z+1,A) ────────────────────────────
+        bool qBetaOk = true;
+        if (ameLoaded_) {
+            auto itP = ameTable_.find(std::make_pair(Z,   A));
+            auto itD = ameTable_.find(std::make_pair(Z+1, A));
+            if (itP != ameTable_.end() && itD != ameTable_.end()) {
+                double Q = itP->second - itD->second;
+                if (Q < 0.0) {
+                    AppendLog("  " + isoID + "  Q_β⁻ = " + Fmt(Q, 1) + " keV < 0 — forbidden.");
+                    qBetaOk = false;
                 }
             }
         }
+        if (qBetaOk && !visited.count(std::make_pair(Z+1, A)))
+            queue.push_back({Z+1, A, absStep+1, prefix});
 
-        // Next beta-minus daughter: Z+1, same A
-        Z = Z + 1;
-        N = A - Z;
-        step++;
+        // ── β⁻n / β⁻2n branching ratios ─────────────────────────────────────
+        // Priority: NUBASE table (most accurate) → all three NNDC decay mode slots
+        double brBetaN  = 0.0;
+        double brBeta2N = 0.0;
+
+        if (nubaseLoaded_) {
+            auto nbit = nubaseTable_.find(std::make_pair(Z, A));
+            if (nbit != nubaseTable_.end()) {
+                if (nbit->second.brBetaN  > 0.0) brBetaN  = nbit->second.brBetaN;
+                if (nbit->second.brBeta2N > 0.0) brBeta2N = nbit->second.brBeta2N;
+            }
+        }
+        // NNDC fallback: scan all three decay mode slots
+        if (hasData) {
+            const NucIsotope& iso = dbIt->second;
+            struct { const std::string& mode; double frac; } modes[] = {
+                {iso.decayMode1, iso.decay1frac},
+                {iso.decayMode2, iso.decay2frac},
+                {iso.decayMode3, iso.decay3frac},
+            };
+            for (auto& m : modes) {
+                if (brBetaN  < 1.0 && m.mode == "B-N"  && m.frac > 0.0)
+                    brBetaN  = m.frac;
+                if (brBeta2N < 1.0 && m.mode == "B-2N" && m.frac > 0.0)
+                    brBeta2N = m.frac;
+            }
+            // If mode is present but fraction is zero/unknown, treat as significant
+            if (brBetaN < 1.0) {
+                for (auto& m : modes)
+                    if (m.mode == "B-N")  { brBetaN  = 100.0; break; }
+            }
+            if (brBeta2N < 1.0) {
+                for (auto& m : modes)
+                    if (m.mode == "B-2N") { brBeta2N = 100.0; break; }
+            }
+        }
+
+        // ── β⁻n daughter: (Z+1, A-1) ─────────────────────────────────────────
+        // Q_βn = ME(Z,A) - ME(Z+1,A-1) - Δ_n
+        if (brBetaN > 1.0) {
+            bool qOk = true;
+            if (ameLoaded_) {
+                auto itP = ameTable_.find(std::make_pair(Z,   A  ));
+                auto itD = ameTable_.find(std::make_pair(Z+1, A-1));
+                if (itP != ameTable_.end() && itD != ameTable_.end()) {
+                    double Q = itP->second - itD->second - kNeutronME;
+                    if (Q < 0.0) {
+                        AppendLog("  " + isoID + "  Q_β⁻n = " + Fmt(Q, 1) + " keV < 0 — forbidden.");
+                        qOk = false;
+                    }
+                }
+            }
+            if (qOk && !visited.count(std::make_pair(Z+1, A-1)))
+                queue.push_back({Z+1, A-1, absStep+1, "Beta-n"});
+        }
+
+        // ── β⁻2n daughter: (Z+1, A-2) ────────────────────────────────────────
+        // Q_β2n = ME(Z,A) - ME(Z+1,A-2) - 2·Δ_n
+        if (brBeta2N > 1.0) {
+            bool qOk = true;
+            if (ameLoaded_) {
+                auto itP = ameTable_.find(std::make_pair(Z,   A  ));
+                auto itD = ameTable_.find(std::make_pair(Z+1, A-2));
+                if (itP != ameTable_.end() && itD != ameTable_.end()) {
+                    double Q = itP->second - itD->second - 2.0 * kNeutronME;
+                    if (Q < 0.0) {
+                        AppendLog("  " + isoID + "  Q_β⁻2n = " + Fmt(Q, 1) + " keV < 0 — forbidden.");
+                        qOk = false;
+                    }
+                }
+            }
+            if (qOk && !visited.count(std::make_pair(Z+1, A-2)))
+                queue.push_back({Z+1, A-2, absStep+1, "Beta-2n"});
+        }
     }
 
     // Rebuild chain list UI

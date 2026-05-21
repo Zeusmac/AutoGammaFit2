@@ -41,6 +41,10 @@ struct NucIsotope {
     double qBetaMinus = 0.0;  // keV
     std::string decayMode1;   // primary decay mode: "B-", "B+", "EC", "A", "B-N", etc.
     double decay1frac = 0.0;  // fraction (0-100%) of primary decay mode
+    std::string decayMode2;   // secondary decay mode (e.g. "B-N" when primary is "B-")
+    double decay2frac = 0.0;
+    std::string decayMode3;   // tertiary decay mode
+    double decay3frac = 0.0;
 
     std::vector<NucLevel>      levels;
     std::vector<NucGamma>      gammas;

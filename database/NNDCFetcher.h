@@ -150,6 +150,10 @@ public:
             else if (tag == "QB-")   { ss >> iso.qBetaMinus; }
             else if (tag == "DM1")   { std::getline(ss, iso.decayMode1); TrimInPlace(iso.decayMode1); }
             else if (tag == "DM1F")  { ss >> iso.decay1frac; }
+            else if (tag == "DM2")   { std::getline(ss, iso.decayMode2); TrimInPlace(iso.decayMode2); }
+            else if (tag == "DM2F")  { ss >> iso.decay2frac; }
+            else if (tag == "DM3")   { std::getline(ss, iso.decayMode3); TrimInPlace(iso.decayMode3); }
+            else if (tag == "DM3F")  { ss >> iso.decay3frac; }
             else if (tag == "DATE")  { ss >> iso.fetchDate; }
             else if (tag == "VALID") { int v = 0; ss >> v; valid = (v != 0); }
             else if (tag == "LEVEL") {
@@ -188,6 +192,10 @@ public:
         f << "QB- "    << iso.qBetaMinus << "\n";
         f << "DM1 "    << iso.decayMode1 << "\n";
         f << "DM1F "   << iso.decay1frac << "\n";
+        f << "DM2 "    << iso.decayMode2 << "\n";
+        f << "DM2F "   << iso.decay2frac << "\n";
+        f << "DM3 "    << iso.decayMode3 << "\n";
+        f << "DM3F "   << iso.decay3frac << "\n";
         f << "DATE "   << iso.fetchDate  << "\n";
         f << "VALID "  << (iso._valid ? 1 : 0) << "\n";
         for (const auto& lv : iso.levels)
@@ -216,17 +224,21 @@ public:
         iso.jpi        = get("jp");
         iso.hl_str     = get("half_life");
         iso.decayMode1 = get("decay_1");
+        iso.decayMode2 = get("decay_2");
+        iso.decayMode3 = get("decay_3");
 
-        // Parse decay_1_%
-        std::string d1pct = get("decay_1_%");
-        if (!d1pct.empty()) {
-            std::string d1clean = d1pct;
-            d1clean.erase(
-                std::remove_if(d1clean.begin(), d1clean.end(),
-                    [](char c){ return c=='<'||c=='>'||c=='~'||c==' '; }),
-                d1clean.end());
-            try { iso.decay1frac = std::stod(d1clean); } catch (...) {}
-        }
+        // Helper to clean and parse a branching fraction string
+        auto parseFrac = [](const std::string& s) -> double {
+            if (s.empty()) return 0.0;
+            std::string c = s;
+            c.erase(std::remove_if(c.begin(), c.end(),
+                [](char ch){ return ch=='<'||ch=='>'||ch=='~'||ch==' '; }), c.end());
+            try { return std::stod(c); } catch (...) { return 0.0; }
+        };
+
+        iso.decay1frac = parseFrac(get("decay_1_%"));
+        iso.decay2frac = parseFrac(get("decay_2_%"));
+        iso.decay3frac = parseFrac(get("decay_3_%"));
 
         // Parse halflife in seconds
         std::string hl_s_str = get("half_life_sec");
