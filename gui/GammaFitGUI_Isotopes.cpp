@@ -21,8 +21,10 @@
 #include <sys/stat.h>
 
 // Keys for persisting data inside the cache file
-static constexpr const char* kLabelClassesKey = "__LABEL_CLASSES__";
-static constexpr const char* kParentInfoKey   = "__PARENT_INFO__";
+static constexpr const char* kLabelClassesKey  = "__LABEL_CLASSES__";
+static constexpr const char* kParentInfoKey    = "__PARENT_INFO__";
+static constexpr const char* kChainIsotopesKey = "__CHAIN_ISOTOPES__";
+static constexpr const char* kHistParentsKey   = "__HIST_PARENTS__";
 
 // Element symbols Z=1..118
 static const char* const kElementSymbols[] = {
@@ -128,17 +130,74 @@ void GammaFitGUI::LoadLabelClassMap(FitDatabase& fitdb)
         if (isoParentZEntry_)    isoParentZEntry_->SetNumber(isoParentZval_);
         if (isoParentNEntry_)    isoParentNEntry_->SetNumber(isoParentNval_);
     }
+
+    // Restore chain isotope list if not already populated from a .chaindat file
+    if (nucChainIsotopes_.empty()) {
+        auto cit = fitdb.GetEntries().find(kChainIsotopesKey);
+        if (cit != fitdb.GetEntries().end() && !cit->second.label.empty()) {
+            std::istringstream cs(cit->second.label);
+            std::string iso;
+            while (std::getline(cs, iso, ','))
+                if (!iso.empty()) nucChainIsotopes_.push_back(iso);
+        }
+    }
+
+    // Restore histogram → parent map if not already populated
+    if (histParent_.empty()) {
+        auto hpit = fitdb.GetEntries().find(kHistParentsKey);
+        if (hpit != fitdb.GetEntries().end() && !hpit->second.label.empty()) {
+            std::istringstream hs(hpit->second.label);
+            std::string rec;
+            while (std::getline(hs, rec, ';')) {
+                auto pipe = rec.find('|');
+                if (pipe == std::string::npos || pipe == 0) continue;
+                histParent_[rec.substr(0, pipe)] = rec.substr(pipe + 1);
+            }
+        }
+    }
 }
 
 void GammaFitGUI::SaveLabelClassMap(FitDatabase& fitdb)
 {
-    FitEntry e;
-    e.key         = kLabelClassesKey;
-    e.label       = SerializeLCMap(labelClassMap_);
-    e.chi2ndf     = 0;
-    e.residualRMS = 0;
-    e.maxPull     = 0;
-    fitdb.ForceStore(kLabelClassesKey, e);
+    {
+        FitEntry e;
+        e.key         = kLabelClassesKey;
+        e.label       = SerializeLCMap(labelClassMap_);
+        e.chi2ndf     = 0;
+        e.residualRMS = 0;
+        e.maxPull     = 0;
+        fitdb.ForceStore(kLabelClassesKey, e);
+    }
+
+    // Persist chain isotope list
+    if (!nucChainIsotopes_.empty()) {
+        std::string chain;
+        for (size_t i = 0; i < nucChainIsotopes_.size(); i++) {
+            if (i > 0) chain += ',';
+            chain += nucChainIsotopes_[i];
+        }
+        FitEntry e;
+        e.key         = kChainIsotopesKey;
+        e.label       = chain;
+        e.chi2ndf     = 0;
+        e.residualRMS = 0;
+        e.maxPull     = 0;
+        fitdb.ForceStore(kChainIsotopesKey, e);
+    }
+
+    // Persist histogram → parent nucleus map
+    if (!histParent_.empty()) {
+        std::string s;
+        for (const auto& kv : histParent_)
+            s += kv.first + '|' + kv.second + ';';
+        FitEntry e;
+        e.key         = kHistParentsKey;
+        e.label       = s;
+        e.chi2ndf     = 0;
+        e.residualRMS = 0;
+        e.maxPull     = 0;
+        fitdb.ForceStore(kHistParentsKey, e);
+    }
 }
 
 // BuildIsotopesTab removed — UI merged into Nuclear tab (Peak Matching sub-tab)

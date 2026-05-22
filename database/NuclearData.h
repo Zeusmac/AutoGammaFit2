@@ -18,10 +18,13 @@ struct NucLevel {
 };
 
 struct NucGamma {
-    double start_level = 0.0; // level energy (keV)
-    double energy      = 0.0; // gamma energy (keV)
-    double intensity   = 0.0; // relative intensity
+    double start_level   = 0.0;  // start level energy (keV)
+    double end_level     = 0.0;  // end level energy (keV)
+    double energy        = 0.0;  // gamma energy (keV)
+    double intensity     = 0.0;  // relative intensity
     std::string multipolarity;
+    std::string ensdf_authors;   // ENSDF evaluators (e.g. "Jun Chen and Balraj Singh")
+    std::string ensdf_cutoff;    // evaluation publication cut-off date
 };
 
 struct NucBetaBranch {

@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <dirent.h>
 #include <fstream>
 #include <sstream>
 #include <set>
@@ -708,6 +709,106 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
         TGCompositeFrame* tab = nucTab->AddTab("Shell Model");
         tab->AddFrame(new TGLabel(tab, "Shell model comparisons coming soon."),
                       new TGLayoutHints(kLHintsLeft, 4, 4, 8, 2));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Sub-tab 7: References
+    // ═══════════════════════════════════════════════════════════════════════
+    {
+        TGCompositeFrame* tab = nucTab->AddTab("References");
+        TGCanvas* sc = new TGCanvas(tab, 306, 860, kSunkenFrame);
+        tab->AddFrame(sc, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY));
+        TGCompositeFrame* cf = new TGCompositeFrame(sc->GetViewPort(), 293, 10, kVerticalFrame);
+        sc->SetContainer(cf);
+
+        // ── Filter row ────────────────────────────────────────────────────
+        {
+            TGGroupFrame* filterGrp = new TGGroupFrame(cf, "Filter");
+            cf->AddFrame(filterGrp, new TGLayoutHints(kLHintsExpandX, 4, 4, 4, 2));
+            TGHorizontalFrame* row = new TGHorizontalFrame(filterGrp);
+            filterGrp->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+
+            row->AddFrame(new TGLabel(row, "Decay class:"),
+                          new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+            nucRefDecayFilter_ = new TGComboBox(row, 3700);
+            nucRefDecayFilter_->AddEntry("All",                1);
+            nucRefDecayFilter_->AddEntry("Parent",             2);
+            nucRefDecayFilter_->AddEntry("Daughter",           3);
+            nucRefDecayFilter_->AddEntry("Granddaughter",      4);
+            nucRefDecayFilter_->AddEntry("Beta-n Daughter",    5);
+            nucRefDecayFilter_->AddEntry("Beta-2n Daughter",   6);
+            nucRefDecayFilter_->AddEntry("Other",              7);
+            nucRefDecayFilter_->Resize(140, 22);
+            nucRefDecayFilter_->Select(1, kFALSE);
+            row->AddFrame(nucRefDecayFilter_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+            nucRefDecayFilter_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                                        "OnNucRefFilterChanged(Int_t)");
+        }
+
+        // ── Gamma reference list ──────────────────────────────────────────
+        {
+            TGGroupFrame* listGrp = new TGGroupFrame(cf, "Gamma Rays & References  (select → Open NNDC)");
+            cf->AddFrame(listGrp, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 4, 4, 2, 2));
+
+            nucRefList_ = new TGListBox(listGrp, 3710);
+            nucRefList_->Resize(280, 420);
+            nucRefList_->SetMultipleSelections(kFALSE);
+            listGrp->AddFrame(nucRefList_,
+                new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 2, 2, 2, 2));
+            nucRefList_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                                 "OnNucRefFilterChanged(Int_t)");
+
+            // Detail label for selected row
+            nucRefDetailLbl_ = new TGLabel(listGrp, "Select a gamma line above");
+            nucRefDetailLbl_->SetTextJustify(kTextLeft);
+            listGrp->AddFrame(nucRefDetailLbl_,
+                new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+
+            // Button row
+            TGHorizontalFrame* btnRow = new TGHorizontalFrame(listGrp);
+            listGrp->AddFrame(btnRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+
+            TGTextButton* openBtn = new TGTextButton(btnRow, "Open NNDC ↗");
+            btnRow->AddFrame(openBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+            openBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNucRefOpen()");
+            openBtn->SetToolTipText("Open NuDat page for the selected isotope in your browser");
+
+            TGTextButton* refreshBtn = new TGTextButton(btnRow, "Refresh");
+            btnRow->AddFrame(refreshBtn, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
+            refreshBtn->Connect("Clicked()", "GammaFitGUI", this, "PopulateNucRefTab()");
+        }
+
+        // ── Histogram → Parent nucleus ────────────────────────────────────
+        {
+            TGGroupFrame* histGrp = new TGGroupFrame(cf, "Assign Histogram to Parent Nucleus");
+            cf->AddFrame(histGrp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
+
+            TGHorizontalFrame* row = new TGHorizontalFrame(histGrp);
+            histGrp->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+
+            row->AddFrame(new TGLabel(row, "Histogram:"),
+                          new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+            // Reuse nucCombo selector — we'll populate from the hist list at fill time
+            // Use a plain text entry so any name can be typed
+            TGTextEntry* histEntry = new TGTextEntry(row, "");
+            histEntry->SetName("nucHistParentHistEntry");
+            histEntry->Resize(110, 22);
+            row->AddFrame(histEntry, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+
+            row->AddFrame(new TGLabel(row, "Parent:"),
+                          new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+            TGTextEntry* parentEntry = new TGTextEntry(row, "");
+            parentEntry->SetName("nucHistParentEntry");
+            parentEntry->Resize(60, 22);
+            row->AddFrame(parentEntry, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+
+            TGTextButton* setBtn = new TGTextButton(row, "Set");
+            row->AddFrame(setBtn, new TGLayoutHints(kLHintsLeft));
+            setBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNucSetHistParent()");
+            setBtn->SetToolTipText(
+                "Associate the named histogram with a parent nucleus.\n"
+                "Histograms sharing the same parent share the chain cache.");
+        }
     }
 }
 
@@ -1591,4 +1692,311 @@ void GammaFitGUI::OnNucConfirmChainToIsoDB()
               " lines from " + std::to_string(nucChainIsotopes_.size()) +
               " isotopes to Isotope DB.  Total: " + std::to_string(db_.db.size()) + " lines.");
     SetStatus("Isotope DB updated from chain.");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PopulateNucRefTab — fill nucRefList_ with gammas classified by decay type,
+// each row carrying ENSDF author/cutoff reference info.
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::PopulateNucRefTab()
+{
+    if (!nucRefList_) return;
+    nucRefList_->RemoveAll();
+
+    // Which decay class filter is active?
+    std::string filterClass;
+    if (nucRefDecayFilter_) {
+        TGLBEntry* fe = nucRefDecayFilter_->GetSelectedEntry();
+        if (fe) {
+            filterClass = fe->GetTitle();
+            if (filterClass == "All") filterClass.clear();
+        }
+    }
+
+    int rowId = 1;
+    for (const auto& isoID : nucChainIsotopes_) {
+        auto it = nuclearDB_.find(isoID);
+        if (it == nuclearDB_.end() || !it->second.valid()) continue;
+        const NucIsotope& iso = it->second;
+
+        std::string cls = labelClassMap_.count(isoID) ? labelClassMap_.at(isoID) : "Other";
+        if (!filterClass.empty() && cls != filterClass) continue;
+
+        std::string decayMode = iso.decayMode1.empty() ? "?" : iso.decayMode1;
+
+        // Section header row (not selectable — we mark it with negative id)
+        std::string hdr = "── " + isoID + "  [" + cls + "]  decay=" + decayMode
+                        + "  T½=" + iso.hl_str + " ──";
+        nucRefList_->AddEntry(hdr.c_str(), -rowId);
+        ++rowId;
+
+        // Gamma rows sorted by energy
+        std::vector<NucGamma> sorted = iso.gammas;
+        std::sort(sorted.begin(), sorted.end(),
+            [](const NucGamma& a, const NucGamma& b){ return a.energy < b.energy; });
+
+        for (const auto& gm : sorted) {
+            if (gm.energy <= 0) continue;
+            char buf[320];
+            std::string ref = gm.ensdf_authors.empty() ? "NNDC"
+                            : gm.ensdf_authors + "  (" + gm.ensdf_cutoff + ")";
+            snprintf(buf, sizeof(buf),
+                "  [%s] %s  %.2f keV  I=%.1f%%  %s  | %s",
+                cls.c_str(), isoID.c_str(),
+                gm.energy, gm.intensity,
+                gm.multipolarity.empty() ? "--" : gm.multipolarity.c_str(),
+                ref.c_str());
+            nucRefList_->AddEntry(buf, rowId);
+            ++rowId;
+        }
+        if (sorted.empty()) {
+            nucRefList_->AddEntry("  (no gamma data)", rowId++);
+        }
+        // Blank separator
+        nucRefList_->AddEntry("", rowId++);
+    }
+    nucRefList_->Layout();
+    if (nucRefDetailLbl_)
+        nucRefDetailLbl_->SetText(
+            nucChainIsotopes_.empty() ? "Build a decay chain first (Isotope Chain tab)"
+                                      : "Select a gamma line to see details");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OnNucRefFilterChanged — re-filter the reference list
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnNucRefFilterChanged(Int_t /*id*/)
+{
+    PopulateNucRefTab();
+
+    // If a row was actually selected, update the detail label
+    if (!nucRefList_) return;
+    TGLBEntry* sel = nucRefList_->GetSelectedEntry();
+    if (!sel || !nucRefDetailLbl_) return;
+    std::string txt = sel->GetTitle();
+    // Skip header/blank rows
+    if (txt.empty() || txt.substr(0,2) == "──") return;
+    nucRefDetailLbl_->SetText(txt.c_str());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OnNucRefOpen — open the NuDat page for the selected gamma's isotope
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnNucRefOpen()
+{
+    if (!nucRefList_) return;
+    TGLBEntry* sel = nucRefList_->GetSelectedEntry();
+    if (!sel) { AppendLog("References: select a gamma line first."); return; }
+
+    std::string txt = sel->GetTitle();
+    if (txt.empty() || txt.substr(0,2) == "──") {
+        AppendLog("References: select a gamma line row (not a header)."); return;
+    }
+
+    // Extract isotope ID from the row — format: "  [Class] ISOID  E keV ..."
+    // Find the isotope ID: first non-space token after ']'
+    std::string isoID;
+    auto bracket = txt.find(']');
+    if (bracket != std::string::npos) {
+        std::istringstream ss(txt.substr(bracket + 1));
+        ss >> isoID;
+    }
+    if (isoID.empty()) { AppendLog("References: could not parse isotope from row."); return; }
+
+    // Build NuDat URL: https://www.nndc.bnl.gov/nudat3/getdatasetClassic.jsp?nucleus=44S
+    std::string url = "https://www.nndc.bnl.gov/nudat3/getdatasetClassic.jsp?nucleus=" + isoID;
+    std::string cmd = "xdg-open '" + url + "' &";
+    gSystem->Exec(cmd.c_str());
+    AppendLog("References: opening " + url);
+    if (nucRefDetailLbl_) nucRefDetailLbl_->SetText(("NNDC: " + url).c_str());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OnNucSetHistParent — assign the typed histogram to the typed parent nucleus
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::OnNucSetHistParent()
+{
+    // Find the two text entries by name in the References sub-tab
+    TGTextEntry* histEntry   = nullptr;
+    TGTextEntry* parentEntry = nullptr;
+    // Walk the widget tree looking for our named entries
+    auto findEntry = [&](TGCompositeFrame* frame, const char* name) -> TGTextEntry* {
+        if (!frame) return nullptr;
+        TList* list = frame->GetList();
+        if (!list) return nullptr;
+        TIter next(list);
+        while (TObject* obj = next()) {
+            if (TGTextEntry* te = dynamic_cast<TGTextEntry*>(obj)) {
+                if (strcmp(te->GetName(), name) == 0) return te;
+            }
+        }
+        return nullptr;
+    };
+    // Search in the main frame
+    histEntry   = findEntry(this, "nucHistParentHistEntry");
+    parentEntry = findEntry(this, "nucHistParentEntry");
+
+    std::string histName, parentID;
+    if (histEntry)   histName = histEntry->GetText();
+    if (parentEntry) parentID = parentEntry->GetText();
+
+    // Trim
+    auto trim = [](std::string s) {
+        while (!s.empty() && s.front() == ' ') s = s.substr(1);
+        while (!s.empty() && s.back()  == ' ') s.pop_back();
+        return s;
+    };
+    histName = trim(histName);
+    parentID = trim(parentID);
+
+    if (histName.empty() || parentID.empty()) {
+        AppendLog("References: enter both histogram name and parent nucleus ID.");
+        return;
+    }
+
+    histParent_[histName] = parentID;
+    SaveChainCache();
+    AppendLog("References: '" + histName + "' → parent '" + parentID + "'  (saved to chain cache)");
+    SetStatus("Histogram parent set: " + histName + " → " + parentID);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SaveChainCache — persist decay chain + histParent_ to a .chaindat file
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::SaveChainCache()
+{
+    if (nucChainIsotopes_.empty()) return;
+    std::string parentID = nucChainIsotopes_.empty() ? "unknown" : nucChainIsotopes_.front();
+    std::string dir = nucCacheDir_.empty()
+                    ? (launchDir_ + "/nuclear_cache")
+                    : nucCacheDir_;
+    // Ensure directory exists
+    struct stat st{};
+    if (stat(dir.c_str(), &st) != 0) mkdir(dir.c_str(), 0755);
+
+    std::string path = dir + "/" + parentID + ".chaindat";
+    std::ofstream f(path);
+    if (!f.is_open()) { AppendLog("SaveChainCache: cannot write " + path); return; }
+
+    f << "# AutoGammaFit chain cache — do not edit manually\n";
+    f << "PARENT " << parentID << "\n";
+    f << "CHAIN_SIZE " << nucChainIsotopes_.size() << "\n";
+    for (size_t i = 0; i < nucChainIsotopes_.size(); i++)
+        f << "CHAIN_" << i << " " << nucChainIsotopes_[i] << "\n";
+
+    // Histogram → parent mappings
+    for (const auto& kv : histParent_)
+        f << "HIST_PARENT " << kv.first << "|" << kv.second << "\n";
+
+    // Per-isotope gamma lines with references
+    for (const auto& isoID : nucChainIsotopes_) {
+        auto it = nuclearDB_.find(isoID);
+        if (it == nuclearDB_.end() || !it->second.valid()) continue;
+        f << "ISO_BEGIN " << isoID << "\n";
+        for (const auto& gm : it->second.gammas) {
+            if (gm.energy <= 0) continue;
+            f << "REF_GAMMA " << gm.energy << "|" << gm.intensity << "|"
+              << gm.start_level << "|" << gm.end_level << "|"
+              << gm.multipolarity << "|" << gm.ensdf_authors << "|"
+              << gm.ensdf_cutoff << "\n";
+        }
+        f << "ISO_END\n";
+    }
+    AppendLog("Chain cache saved: " + path);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadChainCache — restore chain + histParent_ from .chaindat file
+// ─────────────────────────────────────────────────────────────────────────────
+void GammaFitGUI::LoadChainCache()
+{
+    std::string dir = nucCacheDir_.empty()
+                    ? (launchDir_ + "/nuclear_cache")
+                    : nucCacheDir_;
+
+    // Find any .chaindat files and load the most recently modified one
+    std::string bestFile;
+    double bestTime = -1;
+    DIR* d = opendir(dir.c_str());
+    if (!d) return;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != nullptr) {
+        std::string name = ent->d_name;
+        if (name.size() > 9 && name.substr(name.size()-9) == ".chaindat") {
+            std::string fp = dir + "/" + name;
+            struct stat st{};
+            if (stat(fp.c_str(), &st) == 0 && (double)st.st_mtime > bestTime) {
+                bestTime = (double)st.st_mtime;
+                bestFile = fp;
+            }
+        }
+    }
+    closedir(d);
+    if (bestFile.empty()) return;
+
+    std::ifstream f(bestFile);
+    if (!f.is_open()) return;
+
+    nucChainIsotopes_.clear();
+    histParent_.clear();
+
+    std::string line, curISO;
+    size_t chainSize = 0;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream ss(line);
+        std::string tag; ss >> tag;
+
+        if (tag == "CHAIN_SIZE") { ss >> chainSize; nucChainIsotopes_.resize(chainSize); }
+        else if (tag.substr(0, 6) == "CHAIN_") {
+            size_t idx = 0;
+            try { idx = std::stoul(tag.substr(6)); } catch (...) {}
+            std::string iso; ss >> iso;
+            if (idx < nucChainIsotopes_.size()) nucChainIsotopes_[idx] = iso;
+        }
+        else if (tag == "HIST_PARENT") {
+            std::string rec; std::getline(ss, rec);
+            auto pipe = rec.find('|');
+            if (pipe != std::string::npos) {
+                std::string hist   = rec.substr(0, pipe);
+                std::string parent = rec.substr(pipe + 1);
+                auto trim = [](std::string s) {
+                    while (!s.empty() && s.front()==' ') s=s.substr(1);
+                    while (!s.empty() && s.back()==' ') s.pop_back();
+                    return s; };
+                hist = trim(hist); parent = trim(parent);
+                if (!hist.empty() && !parent.empty())
+                    histParent_[hist] = parent;
+            }
+        }
+        else if (tag == "ISO_BEGIN") { ss >> curISO; }
+        else if (tag == "REF_GAMMA" && !curISO.empty()) {
+            std::string rec; std::getline(ss, rec);
+            std::istringstream ps(rec);
+            std::string field;
+            std::vector<std::string> fields;
+            while (std::getline(ps, field, '|')) fields.push_back(field);
+            if (fields.size() >= 2) {
+                NucGamma gm;
+                try { gm.energy      = std::stod(fields[0]); } catch (...) {}
+                try { gm.intensity   = std::stod(fields[1]); } catch (...) {}
+                if (fields.size() > 2) try { gm.start_level = std::stod(fields[2]); } catch (...) {}
+                if (fields.size() > 3) try { gm.end_level   = std::stod(fields[3]); } catch (...) {}
+                if (fields.size() > 4) gm.multipolarity  = fields[4];
+                if (fields.size() > 5) gm.ensdf_authors  = fields[5];
+                if (fields.size() > 6) gm.ensdf_cutoff   = fields[6];
+                if (gm.energy > 0) {
+                    auto& iso = nuclearDB_[curISO];
+                    iso._valid = true;
+                    iso.symbol = curISO;
+                    iso.gammas.push_back(gm);
+                }
+            }
+        }
+        else if (tag == "ISO_END") { curISO.clear(); }
+    }
+
+    if (!nucChainIsotopes_.empty())
+        AppendLog("Chain cache loaded: " + bestFile + " ("
+                  + std::to_string(nucChainIsotopes_.size()) + " isotopes)");
 }

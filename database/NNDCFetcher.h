@@ -163,9 +163,30 @@ public:
                 iso.levels.push_back(lv);
             }
             else if (tag == "GAMMA") {
+                // Legacy format: start_level energy intensity
                 NucGamma gm;
                 ss >> gm.start_level >> gm.energy >> gm.intensity;
                 iso.gammas.push_back(gm);
+            }
+            else if (tag == "GAMMA2") {
+                // New pipe-delimited format:
+                // start_level|end_level|energy|intensity|multipolarity|authors|cutoff
+                std::string rec; std::getline(ss, rec); TrimInPlace(rec);
+                std::istringstream ps(rec);
+                std::string f;
+                std::vector<std::string> fields;
+                while (std::getline(ps, f, '|')) fields.push_back(f);
+                if (fields.size() >= 4) {
+                    NucGamma gm;
+                    try { gm.start_level = std::stod(fields[0]); } catch (...) {}
+                    try { gm.end_level   = std::stod(fields[1]); } catch (...) {}
+                    try { gm.energy      = std::stod(fields[2]); } catch (...) {}
+                    try { gm.intensity   = std::stod(fields[3]); } catch (...) {}
+                    if (fields.size() > 4) gm.multipolarity  = fields[4];
+                    if (fields.size() > 5) gm.ensdf_authors  = fields[5];
+                    if (fields.size() > 6) gm.ensdf_cutoff   = fields[6];
+                    if (gm.energy > 0) iso.gammas.push_back(gm);
+                }
             }
             else if (tag == "BETA") {
                 NucBetaBranch bb;
@@ -201,7 +222,10 @@ public:
         for (const auto& lv : iso.levels)
             f << "LEVEL " << lv.energy << " " << lv.halflife_s << " " << lv.jpi << "\n";
         for (const auto& gm : iso.gammas)
-            f << "GAMMA " << gm.start_level << " " << gm.energy << " " << gm.intensity << "\n";
+            f << "GAMMA2 " << gm.start_level << "|" << gm.end_level << "|"
+              << gm.energy << "|" << gm.intensity << "|"
+              << gm.multipolarity << "|" << gm.ensdf_authors << "|"
+              << gm.ensdf_cutoff << "\n";
         for (const auto& bb : iso.betaBranches)
             f << "BETA " << bb.endpoint << " " << bb.intensity << "\n";
         return true;
@@ -259,12 +283,15 @@ public:
         if (rows.size() < 2) return;
         const auto& hdr = rows[0];
 
-        // Find column indices
-        int iStartLv = ColIdx(hdr, "start_level_energy");
-        int iEnergy  = ColIdx(hdr, "energy");
+        int iStartLv  = ColIdx(hdr, "start_level_energy");
+        int iEndLv    = ColIdx(hdr, "end_level_energy");
+        int iEnergy   = ColIdx(hdr, "energy");
         if (iEnergy < 0) iEnergy = ColIdx(hdr, "gamma_energy");
-        int iIntens  = ColIdx(hdr, "intensity");
+        int iIntens   = ColIdx(hdr, "intensity");
         if (iIntens < 0) iIntens = ColIdx(hdr, "gamma_intensity");
+        int iMulti    = ColIdx(hdr, "multipolarity");
+        int iAuthors  = ColIdx(hdr, "ensdf_authors");
+        int iCutoff   = ColIdx(hdr, "ensdf_publication_cut-off");
 
         for (size_t r = 1; r < rows.size(); r++) {
             const auto& row = rows[r];
@@ -272,10 +299,18 @@ public:
             NucGamma gm;
             if (iStartLv >= 0 && (size_t)iStartLv < row.size())
                 try { gm.start_level = std::stod(row[iStartLv]); } catch (...) {}
+            if (iEndLv >= 0 && (size_t)iEndLv < row.size())
+                try { gm.end_level = std::stod(row[iEndLv]); } catch (...) {}
             if (iEnergy >= 0 && (size_t)iEnergy < row.size())
                 try { gm.energy = std::stod(row[iEnergy]); } catch (...) {}
             if (iIntens >= 0 && (size_t)iIntens < row.size())
                 try { gm.intensity = std::stod(row[iIntens]); } catch (...) {}
+            if (iMulti >= 0 && (size_t)iMulti < row.size())
+                gm.multipolarity = row[iMulti];
+            if (iAuthors >= 0 && (size_t)iAuthors < row.size())
+                gm.ensdf_authors = row[iAuthors];
+            if (iCutoff >= 0 && (size_t)iCutoff < row.size())
+                gm.ensdf_cutoff = row[iCutoff];
             if (gm.energy > 0) iso.gammas.push_back(gm);
         }
     }

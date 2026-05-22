@@ -362,6 +362,17 @@ public:
     void OnShortcutSave();
     void OnShortcutDialogClose();
 
+    // ── References sub-tab ───────────────────────────────────────────────────
+    void PopulateNucRefTab();
+    void OnNucRefOpen();
+    void OnNucRefFilterChanged(Int_t id);
+    void OnNucSetHistParent();
+    void SaveChainCache();
+    void LoadChainCache();
+
+    // ── AutoFit tab: parent nucleus quick-assign ──────────────────────────────
+    void OnAutoFitSetHistParent();
+
     // ── Cache backup ──────────────────────────────────────────────────────────
     void BackupCacheFile(const std::string& srcPath);  // copy to <cacheDir>_backup/
 
@@ -443,6 +454,9 @@ private:
     std::vector<std::string> recentFiles_;       // most-recent-first
     TGTextButton*  peakZoomBtn_       = nullptr;
     bool           peakClickZoom_     = false;
+
+    // Parent nucleus quick-assign (AutoFit tab)
+    TGTextEntry*   autoParentEntry_   = nullptr;
 
     // Custom projection widgets
     TGComboBox*    custProjTh2Combo_  = nullptr;
@@ -557,6 +571,13 @@ private:
     std::string   nucCacheDir_;                 // path to nuclear data cache
     std::vector<std::string> nucChainIsotopes_; // isotope IDs in chain (e.g. "44S")
     std::map<std::string, NucIsotope> nuclearDB_; // fetched nuclear data by ID
+
+    // ── References sub-tab widgets ────────────────────────────────────────────
+    TGListBox*    nucRefList_        = nullptr;  // gamma reference list
+    TGLabel*      nucRefDetailLbl_   = nullptr;  // selected entry detail
+    TGComboBox*   nucRefDecayFilter_ = nullptr;  // filter by decay class
+    // histogram → parent nucleus mapping (persisted in cache)
+    std::map<std::string, std::string> histParent_; // histName → parentNucleusID (e.g. "44S")
 
     // ── Level Scheme data + widgets ───────────────────────────────────────────
     LevelSchemeData lsData_;              // current user-edited level scheme

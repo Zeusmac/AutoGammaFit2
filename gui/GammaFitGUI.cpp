@@ -148,6 +148,9 @@ GammaFitGUI::GammaFitGUI(const TGWindow* p, UInt_t w, UInt_t h)
     AppendLog("AutoGammaFit 2.0 GUI ready.  Open a ROOT file to begin.");
     AppendLog("Optional packages: " + optDeps_.Summary());
     SetStatus("Ready");
+
+    // Restore nuclear chain + histogram-parent map from .chaindat if it exists
+    LoadChainCache();
 }
 
 GammaFitGUI::~GammaFitGUI()
@@ -527,7 +530,7 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
     // Delete histogram row
     {
         TGHorizontalFrame* dr = new TGHorizontalFrame(hg);
-        hg->AddFrame(dr, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 4));
+        hg->AddFrame(dr, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
         TGTextButton* delBtn = new TGTextButton(dr, "Delete Selected from File");
         delBtn->SetForegroundColor(0xCC0000);
         dr->AddFrame(delBtn, new TGLayoutHints(kLHintsExpandX));
@@ -536,6 +539,23 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
             "Permanently removes the selected histogram from the ROOT file.\n"
             "Virtual histograms (projections, bg-subtracted) are removed from\n"
             "the session only — they are not stored in the file.");
+    }
+
+    // ── Parent nucleus quick-assign ───────────────────────────────────────────
+    {
+        TGHorizontalFrame* pr = new TGHorizontalFrame(hg);
+        hg->AddFrame(pr, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        pr->AddFrame(new TGLabel(pr, "Parent Nucleus:"),
+                     new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        autoParentEntry_ = new TGTextEntry(pr, "");
+        autoParentEntry_->SetToolTipText(
+            "Parent nucleus ID for the current histogram (e.g. '44S').\n"
+            "Links this histogram to its nuclear decay chain (Nuclear tab).");
+        pr->AddFrame(autoParentEntry_, new TGLayoutHints(kLHintsExpandX, 0, 4, 0, 0));
+        TGTextButton* setBtn = new TGTextButton(pr, "Set");
+        pr->AddFrame(setBtn, new TGLayoutHints(kLHintsLeft));
+        setBtn->Connect("Clicked()", "GammaFitGUI", this, "OnAutoFitSetHistParent()");
+        setBtn->SetToolTipText("Assign the current histogram to this parent nucleus");
     }
 
     // ── Fit options ───────────────────────────────────────────────────────────
@@ -1927,8 +1947,28 @@ void GammaFitGUI::OnHistogramSelected(Int_t id)
         rebinEntry_->SetNumber(rbit != rebinFactors_.end() ? rbit->second : 1);
     }
 
+    // Sync parent nucleus entry
+    if (autoParentEntry_) {
+        auto pit = histParent_.find(currentHist_);
+        autoParentEntry_->SetText(pit != histParent_.end() ? pit->second.c_str() : "");
+    }
+
     DrawOnCanvas(rawHist_);
     SetStatus("Selected: " + currentHist_);
+}
+
+void GammaFitGUI::OnAutoFitSetHistParent()
+{
+    if (currentHist_.empty()) { AppendLog("Select a histogram first."); return; }
+    std::string parentID = autoParentEntry_ ? autoParentEntry_->GetText() : "";
+    while (!parentID.empty() && parentID.front() == ' ') parentID = parentID.substr(1);
+    while (!parentID.empty() && parentID.back()  == ' ') parentID.pop_back();
+    if (parentID.empty()) { AppendLog("Enter a parent nucleus ID (e.g. '44S')."); return; }
+
+    histParent_[currentHist_] = parentID;
+    SaveChainCache();
+    AppendLog("'" + currentHist_ + "' → parent '" + parentID + "'  (saved)");
+    SetStatus(currentHist_ + " → " + parentID);
 }
 
 void GammaFitGUI::OnLoadManual()
