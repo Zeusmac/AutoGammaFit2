@@ -140,6 +140,8 @@ public:
     void OnShowEfficiency();
     void OnShowSourceFWHM();
     void OnActivityUnitChanged(Int_t id);
+    void OnSrcDetTh2Changed(Int_t id);
+    void OnSrcExtractDetector();
 
     // ── Fit Results tab ───────────────────────────────────────────────────────
     void OnFitResultSelected(Int_t id);
@@ -732,6 +734,13 @@ private:
     // ── Source tab widgets ────────────────────────────────────────────────────
     TGLabel*       srcRootFileLbl_  = nullptr;
     TGComboBox*    srcHistCombo_    = nullptr;
+    // Detector-array (TH2) sub-group
+    TGComboBox*    srcDetTh2Combo_  = nullptr;  // source TH2 selector
+    TGComboBox*    srcDetAxisCombo_ = nullptr;  // which axis holds detector number
+    TGNumberEntry* srcDetLoEntry_   = nullptr;  // first detector bin (0 = all)
+    TGNumberEntry* srcDetHiEntry_   = nullptr;  // last detector bin (≥ lo)
+    TGLabel*       srcDetInfoLbl_   = nullptr;
+    TH1*           srcDetHist_      = nullptr;  // owned extracted 1D slice
     TGCheckButton* srcBgSubChk_     = nullptr;
     TGTextEntry*   srcTh2XLabelEntry_ = nullptr;  // axis label for TH2 X axis (source)
     TGTextEntry*   srcTh2YLabelEntry_ = nullptr;  // axis label for TH2 Y axis (source)

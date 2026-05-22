@@ -168,6 +168,7 @@ GammaFitGUI::~GammaFitGUI()
     }
 
     if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; }
+    delete srcDetHist_;  srcDetHist_ = nullptr;
     if (inputFile_)   { inputFile_->Close();   delete inputFile_; }
     if (srcRootFile_) { srcRootFile_->Close(); delete srcRootFile_; }
     delete bgTF1_;
@@ -1040,6 +1041,69 @@ void GammaFitGUI::BuildSourceTab(TGCompositeFrame* p)
             TGNumberFormat::kNEAPositive,
             TGNumberFormat::kNELLimitMinMax, 1, 100);
         row->AddFrame(srcBgIterEntry_, new TGLayoutHints(kLHintsLeft));
+    }
+
+    // ── Detector Array (TH2) ──────────────────────────────────────────────────
+    TGGroupFrame* dg = new TGGroupFrame(p, "Detector Array (TH2)");
+    p->AddFrame(dg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+
+    // Row 1: TH2 selector
+    {
+        TGHorizontalFrame* row = new TGHorizontalFrame(dg);
+        dg->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+        row->AddFrame(new TGLabel(row, "TH2:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        srcDetTh2Combo_ = new TGComboBox(row, 930);
+        srcDetTh2Combo_->AddEntry("(open ROOT file)", 1);
+        srcDetTh2Combo_->Select(1, kFALSE);
+        srcDetTh2Combo_->Resize(180, 22);
+        row->AddFrame(srcDetTh2Combo_, new TGLayoutHints(kLHintsExpandX));
+        srcDetTh2Combo_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                                 "OnSrcDetTh2Changed(Int_t)");
+    }
+
+    // Row 2: detector axis choice + bin range
+    {
+        TGHorizontalFrame* row = new TGHorizontalFrame(dg);
+        dg->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+        row->AddFrame(new TGLabel(row, "Det. axis:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        srcDetAxisCombo_ = new TGComboBox(row, 931);
+        srcDetAxisCombo_->AddEntry("X  (Y = energy)", 1);
+        srcDetAxisCombo_->AddEntry("Y  (X = energy)", 2);
+        srcDetAxisCombo_->Select(1, kFALSE);
+        srcDetAxisCombo_->Resize(120, 22);
+        row->AddFrame(srcDetAxisCombo_, new TGLayoutHints(kLHintsLeft, 0, 8, 0, 0));
+
+        row->AddFrame(new TGLabel(row, "Det. range:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        srcDetLoEntry_ = new TGNumberEntry(row, 0, 5, -1,
+            TGNumberFormat::kNESInteger, TGNumberFormat::kNEANonNegative,
+            TGNumberFormat::kNELLimitMin, 0.0);
+        srcDetLoEntry_->SetWidth(55);
+        row->AddFrame(srcDetLoEntry_, new TGLayoutHints(kLHintsLeft, 0, 2, 0, 0));
+        row->AddFrame(new TGLabel(row, "–"),
+                      new TGLayoutHints(kLHintsCenterY, 2, 2, 0, 0));
+        srcDetHiEntry_ = new TGNumberEntry(row, 0, 5, -1,
+            TGNumberFormat::kNESInteger, TGNumberFormat::kNEANonNegative,
+            TGNumberFormat::kNELLimitMin, 0.0);
+        srcDetHiEntry_->SetWidth(55);
+        row->AddFrame(srcDetHiEntry_, new TGLayoutHints(kLHintsLeft));
+    }
+
+    // Row 3: info label
+    srcDetInfoLbl_ = new TGLabel(dg, "  (0 = sum all detectors)");
+    dg->AddFrame(srcDetInfoLbl_, new TGLayoutHints(kLHintsLeft, 4, 4, 0, 2));
+
+    // Row 4: extract button
+    {
+        TGTextButton* extBtn = new TGTextButton(dg, "Extract Detector Spectrum");
+        dg->AddFrame(extBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        extBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSrcExtractDetector()");
+        extBtn->SetToolTipText(
+            "Project the TH2 along the energy axis for the chosen detector bin range.\n"
+            "0–0 = sum all detectors.  Single value = one detector.\n"
+            "Result loads as the active source spectrum for fitting.");
     }
 
     // ── Source file ────────────────────────────────────────────────────────────
@@ -6928,12 +6992,31 @@ void GammaFitGUI::OnOpenSourceRootFile()
     }
     PopulateSrcHistCombo();
 
+    // Populate the detector-array TH2 combo
+    if (srcDetTh2Combo_) {
+        srcDetTh2Combo_->RemoveAll();
+        if (srcTh2Names_.empty()) {
+            srcDetTh2Combo_->AddEntry("(no TH2 in file)", 1);
+            srcDetTh2Combo_->Select(1, kFALSE);
+        } else {
+            int did = 1;
+            for (const auto& n : srcTh2Names_)
+                srcDetTh2Combo_->AddEntry(n.c_str(), did++);
+            srcDetTh2Combo_->Select(1, kFALSE);
+            // Fire the change handler to show axis info for the first TH2
+            OnSrcDetTh2Changed(1);
+        }
+        srcDetTh2Combo_->MapSubwindows();
+        srcDetTh2Combo_->Layout();
+    }
+
     std::string display = srcRootPath_;
     size_t slash = display.rfind('/');
     if (slash != std::string::npos) display = display.substr(slash + 1);
     srcRootFileLbl_->SetText(display.c_str());
     AppendLog("Source ROOT file: " + srcRootPath_ +
-              "  (" + std::to_string(srcHistNames_.size()) + " histograms)");
+              "  (" + std::to_string(srcHistNames_.size()) + " histograms," +
+              std::to_string(srcTh2Names_.size()) + " TH2)");
 }
 
 void GammaFitGUI::PopulateSrcHistCombo()
@@ -6956,6 +7039,112 @@ void GammaFitGUI::PopulateSrcHistCombo()
             srcHistCombo_->AddEntry(display.c_str(), (Int_t)i + 1);
     }
     srcHistCombo_->MapSubwindows(); srcHistCombo_->Layout();
+}
+
+void GammaFitGUI::OnSrcDetTh2Changed(Int_t /*id*/)
+{
+    if (!srcDetTh2Combo_ || !srcDetInfoLbl_ || !srcRootFile_) return;
+    TGLBEntry* e = srcDetTh2Combo_->GetSelectedEntry();
+    if (!e) return;
+    std::string th2Name = e->GetTitle();
+    TH2* h2 = dynamic_cast<TH2*>(srcRootFile_->Get(th2Name.c_str()));
+    if (!h2) return;
+
+    bool detOnX = !srcDetAxisCombo_ || srcDetAxisCombo_->GetSelected() == 1;
+    TAxis* detAxis  = detOnX ? h2->GetXaxis() : h2->GetYaxis();
+    TAxis* engAxis  = detOnX ? h2->GetYaxis() : h2->GetXaxis();
+    int nDets = detAxis->GetNbins();
+    int nBins = engAxis->GetNbins();
+    std::string detTitle = detAxis->GetTitle();
+    std::string engTitle = engAxis->GetTitle();
+    if (detTitle.empty()) detTitle = detOnX ? "X" : "Y";
+    if (engTitle.empty()) engTitle = detOnX ? "Y" : "X";
+    srcDetInfoLbl_->SetText(
+        Form("  Det (%s): %d bins  |  Energy (%s): %d bins",
+             detTitle.c_str(), nDets, engTitle.c_str(), nBins));
+    srcDetInfoLbl_->Layout();
+}
+
+void GammaFitGUI::OnSrcExtractDetector()
+{
+    if (!srcRootFile_) {
+        AppendLog("Source: open a ROOT file first."); return;
+    }
+    if (!srcDetTh2Combo_) return;
+    TGLBEntry* e = srcDetTh2Combo_->GetSelectedEntry();
+    std::string th2Name = e ? e->GetTitle() : "";
+    if (th2Name.empty() || th2Name[0] == '(') {
+        AppendLog("Source: select a TH2 histogram."); return;
+    }
+
+    TH2* h2 = dynamic_cast<TH2*>(srcRootFile_->Get(th2Name.c_str()));
+    if (!h2) {
+        AppendLog("Source: TH2 '" + th2Name + "' not found in file."); return;
+    }
+
+    bool detOnX = !srcDetAxisCombo_ || srcDetAxisCombo_->GetSelected() == 1;
+    TAxis* detAxis = detOnX ? h2->GetXaxis() : h2->GetYaxis();
+    int nBins = detAxis->GetNbins();
+
+    int lo = srcDetLoEntry_ ? (int)srcDetLoEntry_->GetNumber() : 0;
+    int hi = srcDetHiEntry_ ? (int)srcDetHiEntry_->GetNumber() : 0;
+
+    TH1* proj = nullptr;
+    std::string histName;
+
+    if (lo <= 0) {
+        // Sum all detectors
+        histName = th2Name + "_det_all";
+        proj = detOnX
+            ? h2->ProjectionY(histName.c_str())
+            : h2->ProjectionX(histName.c_str());
+    } else {
+        if (hi < lo) hi = lo;
+        lo = std::max(1, std::min(lo, nBins));
+        hi = std::max(1, std::min(hi, nBins));
+        histName = (lo == hi)
+            ? th2Name + Form("_det%d", lo)
+            : th2Name + Form("_det%d_%d", lo, hi);
+        proj = detOnX
+            ? h2->ProjectionY(histName.c_str(), lo, hi)
+            : h2->ProjectionX(histName.c_str(), lo, hi);
+    }
+
+    if (!proj) { AppendLog("Source: projection failed."); return; }
+
+    // Detach from any current canvas owner and clone it
+    delete srcDetHist_;
+    srcDetHist_ = (TH1*)proj->Clone(histName.c_str());
+    srcDetHist_->SetDirectory(nullptr);
+    proj->Delete();
+
+    // Give it a descriptive title
+    TAxis* engAxis = detOnX ? h2->GetYaxis() : h2->GetXaxis();
+    std::string engTitle = engAxis->GetTitle();
+    if (engTitle.empty()) engTitle = detOnX ? "Y" : "X";
+    std::string detDesc = (lo <= 0) ? "all detectors"
+                        : (lo == hi ? Form("det %d", lo) : Form("det %d-%d", lo, hi));
+    srcDetHist_->SetTitle(Form("%s  [%s]", th2Name.c_str(), detDesc.c_str()));
+    srcDetHist_->GetXaxis()->SetTitle(engTitle.c_str());
+
+    // Make it the current working histogram (not owned by rawHist_ cleanup)
+    if (rawHistOwned_ && rawHist_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    rawHist_      = srcDetHist_;
+    rawHistOwned_ = false;   // srcDetHist_ owns the object
+    currentHist_  = histName;
+    srcHist_      = histName;
+
+    std::string detAxisTitle = detAxis->GetTitle();
+    if (detAxisTitle.empty()) detAxisTitle = detOnX ? "X" : "Y";
+    if (srcDetInfoLbl_) {
+        srcDetInfoLbl_->SetText(
+            Form("  Extracted: %s  (%s)", histName.c_str(), detDesc.c_str()));
+        srcDetInfoLbl_->Layout();
+    }
+
+    DrawOnCanvas(rawHist_);
+    AppendLog("Extracted: " + histName + "  (" + detDesc + ")  from " + th2Name);
+    SetStatus("Source det: " + histName);
 }
 
 std::string GammaFitGUI::SourceAnalysisFileFor(const std::string& hname) const
