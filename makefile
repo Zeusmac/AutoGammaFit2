@@ -108,10 +108,10 @@ GUI_DICT_OBJ := $(OBJ_DIR)/gui/GammaFitGUIDict.o
 $(GUI_DICT_SRC): $(GUI_DIR)/GammaFitGUI.h $(GUI_DIR)/LinkDef.h
 	@mkdir -p $(dir $@)
 	rootcling -f $@ \
-	    -I$(CURDIR) -I$(CURDIR)/app -I$(CURDIR)/core \
-	    -I$(CURDIR)/fitting -I$(CURDIR)/tracking -I$(CURDIR)/models \
-	    -I$(CURDIR)/database -I$(CURDIR)/io -I$(CURDIR)/analysis_modules \
-	    -I$(CURDIR)/gui -I$(shell root-config --incdir) $^
+	    "-I$(CURDIR)" "-I$(CURDIR)/app" "-I$(CURDIR)/core" \
+	    "-I$(CURDIR)/fitting" "-I$(CURDIR)/tracking" "-I$(CURDIR)/models" \
+	    "-I$(CURDIR)/database" "-I$(CURDIR)/io" "-I$(CURDIR)/analysis_modules" \
+	    "-I$(CURDIR)/gui" -I$(shell root-config --incdir) $^
 
 $(GUI_DICT_OBJ): $(GUI_DICT_SRC)
 	@mkdir -p $(dir $@)
@@ -123,8 +123,11 @@ $(OBJ_DIR)/gui/%.o: $(GUI_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
-.PHONY: gui
+.PHONY: gui run-gui
 gui: $(GUI_TARGET)
+
+run-gui: gui
+	ROOT_INCLUDE_PATH=".:./app:./core:./fitting:./tracking:./models:./database:./io:./analysis_modules:./gui" ./$(GUI_TARGET)
 
 $(GUI_TARGET): $(CORE_OBJS) $(GUI_OWN_OBJS) $(GUI_DICT_OBJ) | $(BIN_DIR)
 	$(CXX) $^ -o $@ $(GUI_ROOTLIBS)
