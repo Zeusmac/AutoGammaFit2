@@ -28,6 +28,7 @@ ClassImp(GammaFitGUI)
 
 #include "PeakFitter.h"
 #include "TSpectrum.h"
+#include "NNDCFetcher.h"
 
 #include <algorithm>
 #include <fstream>
@@ -981,8 +982,13 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
 // ─────────────────────────────────────────────────────────────────────────────
 // BuildSourceTab
 // ─────────────────────────────────────────────────────────────────────────────
-void GammaFitGUI::BuildSourceTab(TGCompositeFrame* p)
+void GammaFitGUI::BuildSourceTab(TGCompositeFrame* tab)
 {
+    TGCanvas* scroller = new TGCanvas(tab, 10, 600, kSunkenFrame);
+    tab->AddFrame(scroller, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY));
+    TGCompositeFrame* p = new TGCompositeFrame(scroller->GetViewPort(), 1, 1, kVerticalFrame);
+    scroller->SetContainer(p);
+
     // ── Spectrum (separate ROOT file) ──────────────────────────────────────────
     TGGroupFrame* hg = new TGGroupFrame(p, "Spectrum");
     p->AddFrame(hg, new TGLayoutHints(kLHintsExpandX, 4, 4, 4, 2));
@@ -1105,6 +1111,75 @@ void GammaFitGUI::BuildSourceTab(TGCompositeFrame* p)
             "0–0 = sum all detectors.  Single value = one detector.\n"
             "Result loads as the active source spectrum for fitting.");
     }
+
+    // ── Multi-Source TH2 Manager ──────────────────────────────────────────────
+    TGGroupFrame* mg = new TGGroupFrame(p, "Multi-Source Manager");
+    p->AddFrame(mg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+
+    // List of TH2s with their source labels
+    srcTh2List_ = new TGListBox(mg, 940);
+    srcTh2List_->Resize(290, 90);
+    mg->AddFrame(srcTh2List_, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+    srcTh2List_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                         "OnSrcTh2ListSelected(Int_t)");
+    srcTh2List_->AddEntry("(open a ROOT file)", 1);
+
+    // Label assignment row
+    {
+        TGHorizontalFrame* row = new TGHorizontalFrame(mg);
+        mg->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+        row->AddFrame(new TGLabel(row, "Source:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        srcTh2LabelEntry_ = new TGTextEntry(row, "");
+        srcTh2LabelEntry_->SetToolTipText(
+            "Isotope ID for the selected TH2, e.g. '60Co', '137Cs', '152Eu'.\n"
+            "Used to fetch gamma energies and branching ratios from NNDC.");
+        row->AddFrame(srcTh2LabelEntry_, new TGLayoutHints(kLHintsExpandX, 0, 4, 0, 0));
+        TGTextButton* setBtn = new TGTextButton(row, "Set");
+        row->AddFrame(setBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        setBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSrcSetTh2Label()");
+        setBtn->SetToolTipText("Assign this isotope ID to the selected TH2 histogram");
+        TGTextButton* autoBtn = new TGTextButton(row, "Auto-detect");
+        row->AddFrame(autoBtn, new TGLayoutHints(kLHintsLeft));
+        autoBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSrcAutoDetectLabels()");
+        autoBtn->SetToolTipText(
+            "Try to parse isotope names from TH2 histogram names\n"
+            "(e.g. 'h_Co60' → 60Co, 'Cs137_data' → 137Cs)");
+    }
+
+    // Action buttons row 1
+    {
+        TGHorizontalFrame* row = new TGHorizontalFrame(mg);
+        mg->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+        TGTextButton* fetchBtn = new TGTextButton(row, "Fetch NNDC Lines");
+        row->AddFrame(fetchBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        fetchBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSrcFetchNNDC()");
+        fetchBtn->SetToolTipText(
+            "Download gamma energies and branching ratios from IAEA LiveChart\n"
+            "for every labeled TH2. Results are cached in nuclear_cache/.");
+        TGTextButton* useBtn = new TGTextButton(row, "Use Lines for Selected");
+        row->AddFrame(useBtn, new TGLayoutHints(kLHintsLeft));
+        useBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSrcLoadLinesForTh2()");
+        useBtn->SetToolTipText(
+            "Load the NNDC gamma lines for the selected TH2's isotope\n"
+            "into the Source Lines & Assignments list for efficiency calibration.");
+    }
+
+    // Action buttons row 2
+    {
+        TGTextButton* projBtn = new TGTextButton(mg, "Auto-Project All Detectors to ROOT File...");
+        mg->AddFrame(projBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+        projBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSrcAutoProjectAll()");
+        projBtn->SetToolTipText(
+            "For every TH2 in the source file, project each detector bin into\n"
+            "a separate 1D histogram and save to a new ROOT file.\n"
+            "Structure:  output.root / <SourceLabel> / <label>_detNN\n"
+            "The output file can be opened in the AutoFit tab to fit each detector.");
+    }
+
+    // Status label
+    srcMultiSrcLbl_ = new TGLabel(mg, "  Open a ROOT file to begin.");
+    mg->AddFrame(srcMultiSrcLbl_, new TGLayoutHints(kLHintsLeft, 4, 4, 0, 4));
 
     // ── Source file ────────────────────────────────────────────────────────────
     TGGroupFrame* sg = new TGGroupFrame(p, "Source Description");
@@ -7010,6 +7085,10 @@ void GammaFitGUI::OnOpenSourceRootFile()
         srcDetTh2Combo_->Layout();
     }
 
+    srcTh2Labels_.clear();  // reset labels when new file opened
+    srcNucDB_.clear();
+    PopulateSrcTh2List();
+
     std::string display = srcRootPath_;
     size_t slash = display.rfind('/');
     if (slash != std::string::npos) display = display.substr(slash + 1);
@@ -7039,6 +7118,304 @@ void GammaFitGUI::PopulateSrcHistCombo()
             srcHistCombo_->AddEntry(display.c_str(), (Int_t)i + 1);
     }
     srcHistCombo_->MapSubwindows(); srcHistCombo_->Layout();
+}
+
+// ── helpers ────────────────────────────────────────────────────────────────────
+
+// Split "60Co" → A=60, sym="Co"; also handles "Co60" → A=60, sym="Co".
+static bool SplitIsoID(const std::string& id, int& A, std::string& sym)
+{
+    if (id.empty()) return false;
+    size_t i = 0;
+    while (i < id.size() && std::isdigit((unsigned char)id[i])) ++i;
+    if (i > 0 && i < id.size()) {
+        try { A = std::stoi(id.substr(0, i)); } catch (...) { return false; }
+        sym = id.substr(i);
+        if (!sym.empty()) sym[0] = (char)std::toupper((unsigned char)sym[0]);
+        return A > 0 && A < 300 && !sym.empty();
+    }
+    size_t j = id.size();
+    while (j > 0 && std::isdigit((unsigned char)id[j-1])) --j;
+    if (j < id.size() && j > 0) {
+        try { A = std::stoi(id.substr(j)); } catch (...) { return false; }
+        sym = id.substr(0, j);
+        if (!sym.empty()) sym[0] = (char)std::toupper((unsigned char)sym[0]);
+        return A > 0 && A < 300 && !sym.empty();
+    }
+    return false;
+}
+
+// Tokenize a histogram name by non-alphanumeric delimiters and try SplitIsoID on each token.
+static std::string GuessIsotopeFromName(const std::string& name)
+{
+    std::string tok;
+    auto tryTok = [&]() -> std::string {
+        if (tok.empty()) return {};
+        int A; std::string sym;
+        if (SplitIsoID(tok, A, sym) && sym.size() >= 1 && sym.size() <= 3
+                && std::isalpha((unsigned char)sym[0]))
+            return std::to_string(A) + sym;
+        return {};
+    };
+    for (char c : name) {
+        if (std::isalnum((unsigned char)c)) { tok += c; }
+        else {
+            std::string r = tryTok(); if (!r.empty()) return r;
+            tok.clear();
+        }
+    }
+    return tryTok();
+}
+
+// ── Multi-Source Manager slots ─────────────────────────────────────────────────
+
+void GammaFitGUI::PopulateSrcTh2List()
+{
+    if (!srcTh2List_) return;
+    srcTh2List_->RemoveAll();
+    if (srcTh2Names_.empty()) {
+        srcTh2List_->AddEntry("(no TH2 histograms in file)", 1);
+        srcTh2List_->MapSubwindows(); srcTh2List_->Layout();
+        return;
+    }
+    int id = 1;
+    for (const auto& name : srcTh2Names_) {
+        auto lit = srcTh2Labels_.find(name);
+        std::string label = (lit != srcTh2Labels_.end()) ? lit->second : "";
+        std::string display = name + "  →  ";
+        if (label.empty()) {
+            display += "(unlabeled)";
+        } else {
+            display += label;
+            auto nit = srcNucDB_.find(label);
+            if (nit != srcNucDB_.end() && nit->second.valid())
+                display += Form("  (%d γ)", (int)nit->second.gammas.size());
+        }
+        srcTh2List_->AddEntry(display.c_str(), id++);
+    }
+    srcTh2List_->MapSubwindows(); srcTh2List_->Layout();
+}
+
+void GammaFitGUI::OnSrcTh2ListSelected(Int_t id)
+{
+    if (!srcTh2List_ || srcTh2Names_.empty()) return;
+    // Convert list id → index into the ordered set
+    auto it = srcTh2Names_.begin();
+    std::advance(it, std::min((size_t)(id - 1), srcTh2Names_.size() - 1));
+    const std::string& name = *it;
+    auto lit = srcTh2Labels_.find(name);
+    if (srcTh2LabelEntry_)
+        srcTh2LabelEntry_->SetText(lit != srcTh2Labels_.end() ? lit->second.c_str() : "");
+    // Sync the single-extract combo
+    if (srcDetTh2Combo_) {
+        TGListBox* lb = srcDetTh2Combo_->GetListBox();
+        for (int i = 1; lb && i <= lb->GetNumberOfEntries(); ++i) {
+            TGLBEntry* e = lb->GetEntry(i);
+            if (e && std::string(e->GetTitle()) == name) {
+                srcDetTh2Combo_->Select(i, kFALSE);
+                OnSrcDetTh2Changed(i);
+                break;
+            }
+        }
+    }
+}
+
+void GammaFitGUI::OnSrcSetTh2Label()
+{
+    if (!srcTh2List_ || srcTh2Names_.empty()) return;
+    Int_t sel = srcTh2List_->GetSelected();
+    if (sel < 1 || (size_t)sel > srcTh2Names_.size()) {
+        AppendLog("Source: select a TH2 from the list first."); return;
+    }
+    std::string label = srcTh2LabelEntry_ ? srcTh2LabelEntry_->GetText() : "";
+    while (!label.empty() && label.front() == ' ') label = label.substr(1);
+    while (!label.empty() && label.back()  == ' ') label.pop_back();
+
+    auto it = srcTh2Names_.begin();
+    std::advance(it, sel - 1);
+    if (label.empty())
+        srcTh2Labels_.erase(*it);
+    else
+        srcTh2Labels_[*it] = label;
+
+    PopulateSrcTh2List();
+    AppendLog("Source: " + *it + " → " + (label.empty() ? "(cleared)" : label));
+}
+
+void GammaFitGUI::OnSrcAutoDetectLabels()
+{
+    if (srcTh2Names_.empty()) {
+        AppendLog("Source: open a ROOT file first."); return;
+    }
+    int nDetected = 0;
+    for (const auto& name : srcTh2Names_) {
+        std::string guess = GuessIsotopeFromName(name);
+        if (!guess.empty()) {
+            srcTh2Labels_[name] = guess;
+            ++nDetected;
+        }
+    }
+    PopulateSrcTh2List();
+    AppendLog(Form("Source: auto-detected %d / %d isotope labels from histogram names.",
+                   nDetected, (int)srcTh2Names_.size()));
+    if (srcMultiSrcLbl_)
+        srcMultiSrcLbl_->SetText(Form("  Auto-detected %d label(s).", nDetected));
+}
+
+void GammaFitGUI::OnSrcFetchNNDC()
+{
+    if (srcTh2Labels_.empty()) {
+        AppendLog("Source: assign source labels to TH2 histograms first."); return;
+    }
+    std::string cacheDir = launchDir_ + "/nuclear_cache";
+    int nFetched = 0, nFailed = 0;
+    for (const auto& kv : srcTh2Labels_) {
+        const std::string& isoID = kv.second;
+        if (isoID.empty()) continue;
+        if (srcNucDB_.count(isoID) && srcNucDB_.at(isoID).valid()) continue;  // already loaded
+        int A; std::string sym;
+        if (!SplitIsoID(isoID, A, sym)) {
+            AppendLog("Source: cannot parse isotope ID '" + isoID + "' — skip.");
+            ++nFailed; continue;
+        }
+        AppendLog("Source: fetching " + isoID + " ...");
+        NucIsotope iso;
+        bool ok = NNDCFetcher::Fetch(A, sym, iso, cacheDir);
+        if (ok) { srcNucDB_[isoID] = iso; ++nFetched; }
+        else    { ++nFailed; AppendLog("  WARNING: fetch failed for " + isoID); }
+    }
+    PopulateSrcTh2List();
+    std::string msg = Form("NNDC fetch: %d ok, %d failed.", nFetched, nFailed);
+    AppendLog(msg);
+    if (srcMultiSrcLbl_) srcMultiSrcLbl_->SetText(("  " + msg).c_str());
+}
+
+void GammaFitGUI::OnSrcLoadLinesForTh2()
+{
+    if (!srcTh2List_ || srcTh2Names_.empty()) return;
+    Int_t sel = srcTh2List_->GetSelected();
+    if (sel < 1 || (size_t)sel > srcTh2Names_.size()) {
+        AppendLog("Source: select a TH2 from the Multi-Source list."); return;
+    }
+    auto it = srcTh2Names_.begin();
+    std::advance(it, sel - 1);
+    const std::string& th2name = *it;
+    auto lit = srcTh2Labels_.find(th2name);
+    if (lit == srcTh2Labels_.end() || lit->second.empty()) {
+        AppendLog("Source: assign a source label to '" + th2name + "' first."); return;
+    }
+    const std::string& isoID = lit->second;
+    auto nit = srcNucDB_.find(isoID);
+    if (nit == srcNucDB_.end() || !nit->second.valid()) {
+        AppendLog("Source: no NNDC data for " + isoID + " — click 'Fetch NNDC Lines' first.");
+        return;
+    }
+    const NucIsotope& iso = nit->second;
+
+    srcLines_.clear();
+    for (const auto& gm : iso.gammas) {
+        if (gm.energy <= 0 || gm.intensity <= 0) continue;
+        srcLines_.push_back({gm.energy, gm.intensity / 100.0, -1});
+    }
+    // Sort by energy
+    std::sort(srcLines_.begin(), srcLines_.end(),
+              [](const SourceLine& a, const SourceLine& b){ return a.energy < b.energy; });
+
+    // Also set isotope metadata so the info label updates
+    srcIsotope_      = isoID;
+    srcHalflifeDays_ = (iso.halflife_s > 0) ? iso.halflife_s / 86400.0 : 0.0;
+    UpdateSourceInfoLabel();
+    PopulateSourceList();
+    AppendLog(Form("Source: loaded %d gamma lines for %s  (T½=%s)",
+                   (int)srcLines_.size(), isoID.c_str(), iso.hl_str.c_str()));
+    if (srcMultiSrcLbl_)
+        srcMultiSrcLbl_->SetText(Form("  %d lines loaded for %s",
+                                      (int)srcLines_.size(), isoID.c_str()));
+}
+
+void GammaFitGUI::OnSrcAutoProjectAll()
+{
+    if (!srcRootFile_ || srcTh2Names_.empty()) {
+        AppendLog("Source: open a ROOT file with TH2 histograms first."); return;
+    }
+
+    // Ask for output file path
+    static const char* kRootTypes[] = {
+        "ROOT files", "*.root", "All files", "*", nullptr, nullptr
+    };
+    TGFileInfo fi;
+    fi.fFileTypes = kRootTypes;
+    fi.fIniDir    = StrDup(launchDir_.c_str());
+    OpenFileDialog(this, kFDSave, &fi);
+    if (!fi.fFilename) return;
+    std::string outPath = fi.fFilename;
+    if (outPath.find('.') == std::string::npos) outPath += ".root";
+
+    TFile* fout = TFile::Open(outPath.c_str(), "RECREATE");
+    if (!fout || fout->IsZombie()) {
+        AppendLog("Source: cannot create output file: " + outPath);
+        delete fout; return;
+    }
+
+    bool detOnX = !srcDetAxisCombo_ || srcDetAxisCombo_->GetSelected() == 1;
+    int nTotal = 0;
+
+    for (const auto& th2name : srcTh2Names_) {
+        TH2* h2 = dynamic_cast<TH2*>(srcRootFile_->Get(th2name.c_str()));
+        if (!h2) continue;
+
+        // Directory name: use source label if set, else the TH2 histogram name
+        auto lit = srcTh2Labels_.find(th2name);
+        std::string dirName = (lit != srcTh2Labels_.end() && !lit->second.empty())
+                              ? lit->second : th2name;
+
+        fout->cd();
+        TDirectory* dir = fout->mkdir(dirName.c_str());
+        if (!dir) continue;
+        dir->cd();
+
+        TAxis* detAxis = detOnX ? h2->GetXaxis() : h2->GetYaxis();
+        int nDets = detAxis->GetNbins();
+
+        // Zero-padding width for detector index
+        int padW = (nDets >= 1000) ? 4 : (nDets >= 100) ? 3 : (nDets >= 10) ? 2 : 1;
+        std::string fmtStr = dirName + "_det%0" + std::to_string(padW) + "d";
+
+        // Sum of all detectors
+        {
+            std::string aname = dirName + "_det_all";
+            TH1* hall = detOnX
+                ? h2->ProjectionY(aname.c_str())
+                : h2->ProjectionX(aname.c_str());
+            if (hall) { hall->SetDirectory(dir); hall->Write(); }
+        }
+
+        // Individual detectors
+        for (int i = 1; i <= nDets; i++) {
+            std::string dname = Form(fmtStr.c_str(), i);
+            TH1* hd = detOnX
+                ? h2->ProjectionY(dname.c_str(), i, i)
+                : h2->ProjectionX(dname.c_str(), i, i);
+            if (!hd) continue;
+            // Use the detector axis bin label as the title if present
+            std::string binLbl = detAxis->GetBinLabel(i);
+            if (!binLbl.empty()) hd->SetTitle((th2name + " det:" + binLbl).c_str());
+            else                 hd->SetTitle(Form("%s  det %d", th2name.c_str(), i));
+            hd->SetDirectory(dir);
+            hd->Write();
+            ++nTotal;
+        }
+    }
+
+    fout->Save();
+    fout->Close();
+    delete fout;
+
+    std::string msg = Form("Projected %d detector spectra across %d TH2(s) → %s",
+                           nTotal, (int)srcTh2Names_.size(), outPath.c_str());
+    AppendLog(msg);
+    if (srcMultiSrcLbl_) srcMultiSrcLbl_->SetText(("  " + msg.substr(0, 60)).c_str());
+    SetStatus("Auto-project done: " + outPath);
 }
 
 void GammaFitGUI::OnSrcDetTh2Changed(Int_t /*id*/)

@@ -142,6 +142,12 @@ public:
     void OnActivityUnitChanged(Int_t id);
     void OnSrcDetTh2Changed(Int_t id);
     void OnSrcExtractDetector();
+    void OnSrcTh2ListSelected(Int_t id);
+    void OnSrcSetTh2Label();
+    void OnSrcAutoDetectLabels();
+    void OnSrcFetchNNDC();
+    void OnSrcLoadLinesForTh2();
+    void OnSrcAutoProjectAll();
 
     // ── Fit Results tab ───────────────────────────────────────────────────────
     void OnFitResultSelected(Int_t id);
@@ -741,6 +747,12 @@ private:
     TGNumberEntry* srcDetHiEntry_   = nullptr;  // last detector bin (≥ lo)
     TGLabel*       srcDetInfoLbl_   = nullptr;
     TH1*           srcDetHist_      = nullptr;  // owned extracted 1D slice
+    // Multi-source manager
+    TGListBox*     srcTh2List_       = nullptr;  // TH2 names + labels
+    TGTextEntry*   srcTh2LabelEntry_ = nullptr;  // label entry for selected TH2
+    TGLabel*       srcMultiSrcLbl_   = nullptr;  // status label
+    std::map<std::string, std::string> srcTh2Labels_; // th2name → isotope ID
+    std::map<std::string, NucIsotope>  srcNucDB_;     // isoID → nuclear data
     TGCheckButton* srcBgSubChk_     = nullptr;
     TGTextEntry*   srcTh2XLabelEntry_ = nullptr;  // axis label for TH2 X axis (source)
     TGTextEntry*   srcTh2YLabelEntry_ = nullptr;  // axis label for TH2 Y axis (source)
@@ -971,6 +983,7 @@ private:
     void        ExtractPeaksFromCache(const std::string& hname);
     void        UpdateSourceInfoLabel();
     void        PopulateSrcHistCombo();
+    void        PopulateSrcTh2List();
     std::string SourceAnalysisFileFor(const std::string& hname) const;
     void        SaveSourceAnalysis();
 
