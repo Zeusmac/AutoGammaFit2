@@ -22,12 +22,13 @@ static constexpr const char* kIsotopeDBDefault = "../Isotope_energys.txt";
 static constexpr const char* kResolutionKey    = "__RESOLUTION__";
 static constexpr const char* kExcludedFwhmKey  = "__EXCLUDED_FWHM__";
 static constexpr const char* kFwhmInclKey      = "__FWHM_INCL__";
+static constexpr const char* kEnergyCalKey     = "__ENERGY_CAL__";
 static constexpr const char* kFwhmPrefix       = "FWHM: ";
 static constexpr const char* kSettingsFile     = "gamma_gui.conf";
 static constexpr const char* kResSourceKey     = "__RES_SOURCE__";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Widget IDs — one place to own all numeric IDs so collisions surface here
+// Widget IDs  -  one place to own all numeric IDs so collisions surface here
 // ─────────────────────────────────────────────────────────────────────────────
 enum WidgetID : Int_t {
     kWID_HistList         = 100,
@@ -43,7 +44,7 @@ enum WidgetID : Int_t {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FitLayout — describes the parameter layout of a fitted TF1.
+// FitLayout  -  describes the parameter layout of a fitted TF1.
 //
 // Four supported layouts (where N = number of Gaussians):
 //   Standard:              3N+2   params  (bg0, bg1)
@@ -52,7 +53,7 @@ enum WidgetID : Int_t {
 //   QuadBG + ComptonStep:  4N+3   params  (bg0, bg1, bg2, step_0..step_N-1)
 //
 // Special case: Double-Gaussian (DG) model from AdaptiveFitter has 7 params
-// but a different formula — detected by TryDetectDG(TF1*) below.
+// but a different formula  -  detected by TryDetectDG(TF1*) below.
 // ─────────────────────────────────────────────────────────────────────────────
 struct FitLayout {
     int  n           = 0;      // number of Gaussians; 0 = unrecognised
@@ -107,7 +108,7 @@ inline bool TryDetectDG(TF1* f, FitLayout& lay) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FitModel — self-describing model for building TF1 formulas.
+// FitModel  -  self-describing model for building TF1 formulas.
 // ─────────────────────────────────────────────────────────────────────────────
 struct FitModel {
     int  n           = 1;
@@ -138,7 +139,7 @@ inline void ApplyHistStyle(TH1* h, const char* title = nullptr) {
     h->SetMinimum(0);
 }
 
-// Set histogram y-range: minimum always 0, maximum = highest visible bin × margin.
+// Set histogram y-range: minimum always 0, maximum = highest visible bin x margin.
 inline void SetYMaxFromVisible(TH1* h, double margin = 1.30) {
     int first = h->GetXaxis()->GetFirst();
     int last  = h->GetXaxis()->GetLast();
@@ -151,7 +152,7 @@ inline void SetYMaxFromVisible(TH1* h, double margin = 1.30) {
     h->SetMaximum(ymax > 0.0 ? ymax * margin : 1.0);
 }
 
-// Set Y-axis title based on actual bin width — works for both rebinned and
+// Set Y-axis title based on actual bin width  -  works for both rebinned and
 // original histograms with non-unit bins.
 inline void SetHistYTitle(TH1* h, bool isDecay = false) {
     double bw = h->GetBinWidth(1);
@@ -170,7 +171,7 @@ inline std::string Fmt(double v, int n = 3) {
 }
 
 // Format energy with uncertainty in NNDC parenthesis notation.
-// e.g. E=1332.492, err=0.004 → "1332.492(4)"
+// e.g. E=1332.492, err=0.004 -> "1332.492(4)"
 inline std::string NNDCFormat(double E, double err) {
     if (err <= 0.0 || !std::isfinite(err)) return Fmt(E, 1);
     double mag  = std::floor(std::log10(err));
@@ -197,7 +198,7 @@ inline std::string BuildNGaussFormula(int n) {
     return f;
 }
 
-// Extended formula builder — single source of truth for all TF1 strings.
+// Extended formula builder  -  single source of truth for all TF1 strings.
 // Parameter layout:
 //   [3i], [3i+1], [3i+2]   = A_i, E_i, sig_i     for i in [0,n)
 //   [3n], [3n+1]            = bg0, bg1             (always present)
@@ -241,7 +242,7 @@ inline std::string FitModel::Formula() const {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Classification helpers — used by Isotopes, Decay, and Results tabs
+// Classification helpers  -  used by Isotopes, Decay, and Results tabs
 // ─────────────────────────────────────────────────────────────────────────────
 
 inline std::string ClassToString(int sel, const std::string& custom)
@@ -278,7 +279,7 @@ inline int ClassToComboIndex(const std::string& cls)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OpenFileDialog — drop-in for `new TGFileDialog(...)` that preserves CWD.
+// OpenFileDialog  -  drop-in for `new TGFileDialog(...)` that preserves CWD.
 //
 // ROOT's TGFileDialog calls gSystem->cd() as the user navigates, permanently
 // changing the process working directory.  All relative cache paths built by

@@ -36,7 +36,7 @@ static void EnsureLSDir(const std::string& launchDir)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BuildLSLevelSchemeTab — sub-tab 3 content
+// BuildLSLevelSchemeTab  -  sub-tab 3 content
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::BuildLSLevelSchemeTab(TGCompositeFrame* p)
 {
@@ -104,13 +104,13 @@ void GammaFitGUI::BuildLSLevelSchemeTab(TGCompositeFrame* p)
         lsLevelEnergyEntry_->SetWidth(65);
         addRow->AddFrame(lsLevelEnergyEntry_, new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
 
-        addRow->AddFrame(new TGLabel(addRow, "Jπ:"),
+        addRow->AddFrame(new TGLabel(addRow, "Jpi:"),
                          new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
         lsLevelJpiEntry_ = new TGTextEntry(addRow, "0+");
         lsLevelJpiEntry_->Resize(40, 22);
         addRow->AddFrame(lsLevelJpiEntry_, new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
 
-        addRow->AddFrame(new TGLabel(addRow, "β%:"),
+        addRow->AddFrame(new TGLabel(addRow, "beta%:"),
                          new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
         lsBetaFeedEntry_ = new TGNumberEntry(addRow, 0.0, 5, -1,
                                              TGNumberFormat::kNESRealFour,
@@ -236,7 +236,7 @@ void GammaFitGUI::BuildLSLevelSchemeTab(TGCompositeFrame* p)
         drawEnhBtn->Connect("Clicked()", "GammaFitGUI", this, "OnLSDrawEnhanced()");
         drawEnhBtn->SetToolTipText(
             "Draw the level scheme using user-edited level/transition data.\n"
-            "Arrow thickness scales with intensity; β-feeding shown on the left.");
+            "Arrow thickness scales with intensity; beta-feeding shown on the left.");
 
         TGTextButton* interBtn = new TGTextButton(dRow, "Browser");
         dRow->AddFrame(interBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
@@ -250,7 +250,7 @@ void GammaFitGUI::BuildLSLevelSchemeTab(TGCompositeFrame* p)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BuildLSLogFtTab — sub-tab 4 content
+// BuildLSLogFtTab  -  sub-tab 4 content
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::BuildLSLogFtTab(TGCompositeFrame* p)
 {
@@ -274,7 +274,7 @@ void GammaFitGUI::BuildLSLogFtTab(TGCompositeFrame* p)
         TGHorizontalFrame* row1 = new TGHorizontalFrame(grp);
         grp->AddFrame(row1, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
 
-        row1->AddFrame(new TGLabel(row1, "T½(s):"),
+        row1->AddFrame(new TGLabel(row1, "T1/2(s):"),
                        new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
         lsParentHlEntry_ = new TGNumberEntry(row1, -1.0, 8, -1,
                                              TGNumberFormat::kNESRealFour,
@@ -282,7 +282,7 @@ void GammaFitGUI::BuildLSLogFtTab(TGCompositeFrame* p)
         lsParentHlEntry_->SetWidth(70);
         row1->AddFrame(lsParentHlEntry_, new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
 
-        row1->AddFrame(new TGLabel(row1, "Q_β(keV):"),
+        row1->AddFrame(new TGLabel(row1, "Q_beta(keV):"),
                        new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
         lsParentQbEntry_ = new TGNumberEntry(row1, -1.0, 8, -1,
                                              TGNumberFormat::kNESRealFour,
@@ -337,9 +337,9 @@ void GammaFitGUI::BuildLSLogFtTab(TGCompositeFrame* p)
         grp->AddFrame(calcLogFtBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
         calcLogFtBtn->Connect("Clicked()", "GammaFitGUI", this, "OnLSCalcLogFt()");
         calcLogFtBtn->SetToolTipText(
-            "Compute log ft (Feenberg-Trigg approx, ±0.3) and B(GT)/B(F)\n"
-            "for every level with non-zero β-feeding.\n"
-            "Requires parent T½, Q_β, and Z to be set.");
+            "Compute log ft (Feenberg-Trigg approx, +/-0.3) and B(GT)/B(F)\n"
+            "for every level with non-zero beta-feeding.\n"
+            "Requires parent T1/2, Q_beta, and Z to be set.");
 
         lsLogFtView_ = new TGTextView(grp, 280, 140);
         grp->AddFrame(lsLogFtView_, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
@@ -355,7 +355,7 @@ void GammaFitGUI::BuildLSLogFtTab(TGCompositeFrame* p)
         grp->AddFrame(calcBalBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
         calcBalBtn->Connect("Clicked()", "GammaFitGUI", this, "OnLSCalcBalance()");
         calcBalBtn->SetToolTipText(
-            "For each level: check that β-feed + cascade-in ≈ γ-out.\n"
+            "For each level: check that beta-feed + cascade-in ~= gamma-out.\n"
             "Large residuals indicate missing feedings or mis-linked peaks.\n"
             "(Infrastructure for the future cascade-balance solver.)");
 
@@ -384,12 +384,12 @@ void GammaFitGUI::RefreshLSLevelList()
     for (const auto& lv : lsData_.levels) {
         std::string tag = (lv.id == 0) ? " GS" : "";
         std::string typeStr = (lv.betaFeedPct > 0.0)
-            ? Form("  β=%.1f%% %s", lv.betaFeedPct, LSBetaTypeStr(lv.betaType).c_str())
+            ? Form("  beta=%.1f%% %s", lv.betaFeedPct, LSBetaTypeStr(lv.betaType).c_str())
             : "";
         std::string logftStr = (lv.logFt > 0.0)
             ? Form("  logft=%.2f  B(GT)=%.3g", lv.logFt, lv.B_GT) : "";
 
-        std::snprintf(buf, sizeof(buf), "[%d] E=%7.1f  Jπ=%s%s%s%s",
+        std::snprintf(buf, sizeof(buf), "[%d] E=%7.1f  Jpi=%s%s%s%s",
                       lv.id, lv.energy,
                       lv.jpi.empty() ? "?" : lv.jpi.c_str(),
                       tag.c_str(), typeStr.c_str(), logftStr.c_str());
@@ -423,7 +423,7 @@ void GammaFitGUI::RefreshLSTransList()
         std::string multStr = tr.multipolStr.empty() ? "?" : tr.multipolStr;
 
         std::snprintf(buf, sizeof(buf),
-                      "[%d] %s→%s keV  E=%.2f  %s  I=%.1f%s",
+                      "[%d] %s->%s keV  E=%.2f  %s  I=%.1f%s",
                       tr.id, fromStr.c_str(), toStr.c_str(),
                       tr.energy, multStr.c_str(), tr.intensity, linkStr.c_str());
         lsTransList_->AddEntry(buf, tr.id + 1);
@@ -465,7 +465,7 @@ void GammaFitGUI::OnLSSeedFromNNDC()
     if (!nucIsoCombo_) return;
     TGLBEntry* e = nucIsoCombo_->GetSelectedEntry();
     if (!e || std::string(e->GetTitle()) == "(none)") {
-        AppendLog("[LevelScheme] Select an isotope first (Isotope Chain tab → Fetch All).");
+        AppendLog("[LevelScheme] Select an isotope first (Isotope Chain tab -> Fetch All).");
         return;
     }
     std::string isoID = e->GetTitle();
@@ -515,7 +515,7 @@ void GammaFitGUI::OnLSSave()
     EnsureLSDir(launchDir_);
     std::string path = LSCachePath(launchDir_, lsData_.isoID);
     if (lsData_.Save(path))
-        AppendLog("[LevelScheme] Saved → " + path);
+        AppendLog("[LevelScheme] Saved -> " + path);
     else
         AppendLog("[LevelScheme] ERROR: could not write " + path);
 }
@@ -573,7 +573,7 @@ void GammaFitGUI::OnLSAddLevel()
     }
     RefreshLSLevelList();
     RefreshLSLevelCombos();
-    AppendLog(Form("[LevelScheme] Added level [%d] E=%.1f keV  Jπ=%s  β=%.1f%% %s",
+    AppendLog(Form("[LevelScheme] Added level [%d] E=%.1f keV  Jpi=%s  beta=%.1f%% %s",
                    id, E, jpi.c_str(), feed, btype.c_str()));
 }
 
@@ -594,7 +594,7 @@ void GammaFitGUI::OnLSRemoveLevel()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnLSLevelSelected — fill entry fields for editing
+// Slot: OnLSLevelSelected  -  fill entry fields for editing
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnLSLevelSelected(Int_t id)
 {
@@ -642,7 +642,7 @@ void GammaFitGUI::OnLSAddTransition()
         tr->intensity   = I;
     }
     RefreshLSTransList();
-    AppendLog(Form("[LevelScheme] Added transition [%d] %d→%d  E=%.2f  %s  I=%.1f",
+    AppendLog(Form("[LevelScheme] Added transition [%d] %d->%d  E=%.2f  %s  I=%.1f",
                    tid, fromId, toId, E, mult.c_str(), I));
 }
 
@@ -661,7 +661,7 @@ void GammaFitGUI::OnLSRemoveTransition()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnLSTransSelected — fill entry fields for editing
+// Slot: OnLSTransSelected  -  fill entry fields for editing
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnLSTransSelected(Int_t id)
 {
@@ -677,7 +677,7 @@ void GammaFitGUI::OnLSTransSelected(Int_t id)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnLSLinkPeak — link selected Peak Table row to selected transition
+// Slot: OnLSLinkPeak  -  link selected Peak Table row to selected transition
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnLSLinkPeak()
 {
@@ -700,12 +700,12 @@ void GammaFitGUI::OnLSLinkPeak()
     if (tr->energy <= 0.0) tr->energy = r.energy;
 
     RefreshLSTransList();
-    AppendLog(Form("[LevelScheme] Linked transition [%d] → E=%.3f keV  I=%.1f±%.1f  [%s]",
+    AppendLog(Form("[LevelScheme] Linked transition [%d] -> E=%.3f keV  I=%.1f+/-%.1f  [%s]",
                    tid, r.energy, r.area, r.areaErr, r.cacheFile.c_str()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnLSCalcBR — compute branching ratios for the selected level
+// Slot: OnLSCalcBR  -  compute branching ratios for the selected level
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnLSCalcBR()
 {
@@ -738,7 +738,7 @@ void GammaFitGUI::OnLSCalcBR()
             ? Form("E=%.1f %s", toLv->energy, toLv->jpi.c_str())
             : Form("[%d]", br.to_id);
         std::snprintf(buf, sizeof(buf),
-                      "  → %s  I=%.2g  BR=%.3f (%.1f%%)  RelBR=%.4f",
+                      "  -> %s  I=%.2g  BR=%.3f (%.1f%%)  RelBR=%.4f",
                       toStr.c_str(), br.absIntensity,
                       br.branchingRatio, br.branchingRatio * 100.0,
                       br.relativeBR);
@@ -749,7 +749,7 @@ void GammaFitGUI::OnLSCalcBR()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnLSBrLevelSelected — recalculate BRs when combo changes
+// Slot: OnLSBrLevelSelected  -  recalculate BRs when combo changes
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnLSBrLevelSelected(Int_t /*id*/)
 {
@@ -773,18 +773,18 @@ void GammaFitGUI::OnLSCalcLogFt()
         lsData_.parentZ     = (int)lsParentZEntry_->GetNumber();
 
     if (lsData_.parentHL_s <= 0.0 || lsData_.parentQbeta <= 0.0) {
-        lsLogFtView_->AddLine("  ERROR: parent T½ and Q_β must be > 0.");
+        lsLogFtView_->AddLine("  ERROR: parent T1/2 and Q_beta must be > 0.");
         lsLogFtView_->Update(); return;
     }
 
     lsData_.ComputeAllLogFt();
     RefreshLSLevelList();  // update list with new logFt values
 
-    lsLogFtView_->AddLine(Form("Parent: %s  T½=%.4g s  Q_β=%.1f keV  Z=%d",
+    lsLogFtView_->AddLine(Form("Parent: %s  T1/2=%.4g s  Q_beta=%.1f keV  Z=%d",
                                 lsData_.parentID.c_str(), lsData_.parentHL_s,
                                 lsData_.parentQbeta, lsData_.parentZ));
     lsLogFtView_->AddLine("──────────────────────────────────────────────────────");
-    lsLogFtView_->AddLine("  Level       Jπ      β-feed%  Type     log ft   B(GT)    B(F)");
+    lsLogFtView_->AddLine("  Level       Jpi      beta-feed%  Type     log ft   B(GT)    B(F)");
 
     bool anyFed = false;
     for (const auto& lv : lsData_.levels) {
@@ -801,7 +801,7 @@ void GammaFitGUI::OnLSCalcLogFt()
                 lv.logFt, lv.B_GT, lv.B_Fermi);
         } else {
             std::snprintf(buf, sizeof(buf),
-                "  E=%7.1f  %-6s  %6.2f%%   %-8s  (Q_β too low or endpoint ≤ 0)",
+                "  E=%7.1f  %-6s  %6.2f%%   %-8s  (Q_beta too low or endpoint <= 0)",
                 lv.energy,
                 lv.jpi.empty() ? "?" : lv.jpi.c_str(),
                 lv.betaFeedPct,
@@ -810,11 +810,11 @@ void GammaFitGUI::OnLSCalcLogFt()
         lsLogFtView_->AddLine(buf);
     }
     if (!anyFed)
-        lsLogFtView_->AddLine("  (no levels with β-feeding set)");
+        lsLogFtView_->AddLine("  (no levels with beta-feeding set)");
 
     lsLogFtView_->AddLine("");
-    lsLogFtView_->AddLine("  Note: log ft uses Feenberg-Trigg approximation (±0.3).");
-    lsLogFtView_->AddLine("  B(GT) = 6146.5 / (ft · g_A²), g_A = 1.2754");
+    lsLogFtView_->AddLine("  Note: log ft uses Feenberg-Trigg approximation (+/-0.3).");
+    lsLogFtView_->AddLine("  B(GT) = 6146.5 / (ft * g_A^2), g_A = 1.2754");
     lsLogFtView_->AddLine("  B(F)  = 6146.5 / ft (pure Fermi limit)");
     lsLogFtView_->Update();
 
@@ -837,7 +837,7 @@ void GammaFitGUI::OnLSCalcBalance()
 
     auto rows = lsData_.CascadeBalance();
     lsBalanceList_->AddEntry(
-        "  Level(keV)    β-in    γ-in    γ-out   residual%", 1);
+        "  Level(keV)    beta-in    gamma-in    gamma-out   residual%", 1);
     int id = 2;
     bool ok = true;
     for (const auto& row : rows) {
@@ -850,18 +850,18 @@ void GammaFitGUI::OnLSCalcBalance()
                       lv ? lv->energy : 0.0,
                       row.betaIn, row.gammaIn, row.gammaOut,
                       resPct,
-                      resPct > 20.0 ? "  ← imbalanced" : "");
+                      resPct > 20.0 ? "  <- imbalanced" : "");
         lsBalanceList_->AddEntry(buf, id++);
         if (resPct > 20.0) ok = false;
     }
     lsBalanceList_->MapSubwindows(); lsBalanceList_->Layout();
     AppendLog(Form("[LevelScheme] Cascade balance: %d levels%s",
-                   (int)rows.size(), ok ? " — all balanced" : " — check flagged levels"));
+                   (int)rows.size(), ok ? "  -  all balanced" : "  -  check flagged levels"));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DrawEnhancedLevelScheme — level scheme with intensity-scaled arrows,
-// multipolarity labels, β-feeding arrows, and Jπ annotations.
+// DrawEnhancedLevelScheme  -  level scheme with intensity-scaled arrows,
+// multipolarity labels, beta-feeding arrows, and Jpi annotations.
 // Falls back to NNDC-only draw if lsData_ is empty.
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::DrawEnhancedLevelScheme(const std::string& isoID)
@@ -887,7 +887,7 @@ void GammaFitGUI::DrawEnhancedLevelScheme(const std::string& isoID)
     eMax *= 1.08;  // headroom
 
     // Layout constants
-    const double xBeta = 0.04;   // β-feeding column left edge
+    const double xBeta = 0.04;   // beta-feeding column left edge
     const double xL    = 0.22;   // level lines left edge
     const double xR    = 0.70;   // level lines right edge
     const double xLbl  = 0.72;   // label column
@@ -917,13 +917,13 @@ void GammaFitGUI::DrawEnhancedLevelScheme(const std::string& isoID)
         ln->SetLineWidth(lv.id == 0 ? 2 : 1);
         ln->Draw();
 
-        // Right label: energy + Jπ
+        // Right label: energy + Jpi
         char buf[80];
         std::snprintf(buf, sizeof(buf), "%.1f  %s",
                       lv.energy, lv.jpi.empty() ? "?" : lv.jpi.c_str());
         tx.DrawLatex(xLbl, y, buf);
 
-        // β-feeding: horizontal bar on the left proportional to betaFeedPct
+        // beta-feeding: horizontal bar on the left proportional to betaFeedPct
         if (lv.betaFeedPct > 0.0) {
             double barW = 0.12 * lv.betaFeedPct / 100.0;
             TBox* box = new TBox(xBeta, y - 0.005, xBeta + barW, y + 0.005);
@@ -994,10 +994,10 @@ void GammaFitGUI::DrawEnhancedLevelScheme(const std::string& isoID)
     // ── Title and legend ──────────────────────────────────────────────────────
     tx.SetTextSize(0.026); tx.SetTextAlign(22); tx.SetTextColor(kBlack);
     std::string title = lsData_.isoID + " Level Scheme";
-    if (!lsData_.parentID.empty()) title += "  (β⁻ from " + lsData_.parentID + ")";
+    if (!lsData_.parentID.empty()) title += "  (beta- from " + lsData_.parentID + ")";
     tx.DrawLatex(0.48, 0.97, title.c_str());
 
-    // Small legend for β-feeding colors
+    // Small legend for beta-feeding colors
     tx.SetTextSize(0.016); tx.SetTextAlign(12);
     double lx = 0.04, ly = 0.30;
     TBox* bGT = new TBox(lx, ly, lx+0.015, ly+0.010);

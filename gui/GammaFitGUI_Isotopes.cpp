@@ -55,9 +55,9 @@ static int SymbolToZ(const std::string& sym) {
 }
 
 // Beta-minus decay chain: given parent (Z0,N0,A0=Z0+N0), compute (Z,N) for a class.
-// Beta-minus:   Z→Z+1, N→N-1, A unchanged.
-// Beta-minus-n: Z→Z+1, N→N-2, A→A-1  (one neutron also emitted).
-// Beta-minus-2n:Z→Z+1, N→N-3, A→A-2  (two neutrons also emitted).
+// Beta-minus:   Z->Z+1, N->N-1, A unchanged.
+// Beta-minus-n: Z->Z+1, N->N-2, A->A-1  (one neutron also emitted).
+// Beta-minus-2n:Z->Z+1, N->N-3, A->A-2  (two neutrons also emitted).
 // "Granddaughter" and deeper are successive beta-minus products of the daughter.
 static bool ClassZN(const std::string& cls, int Z0, int N0, int& Z, int& N)
 {
@@ -65,10 +65,10 @@ static bool ClassZN(const std::string& cls, int Z0, int N0, int& Z, int& N)
     if      (cls == "Parent")                { Z = Z0;   N = N0;   }
     else if (cls == "Daughter")              { Z = Z0+1; N = N0-1; }
     else if (cls == "Granddaughter")         { Z = Z0+2; N = N0-2; }
-    else if (cls == "Beta-n Daughter")       { Z = Z0+1; N = N0-2; }  // β⁻n from parent
-    else if (cls == "Beta-2n Daughter")      { Z = Z0+1; N = N0-3; }  // β⁻2n from parent
-    else if (cls == "Beta-n Granddaughter")  { Z = Z0+2; N = N0-3; }  // β⁻n from daughter
-    else if (cls == "Beta-2n Granddaughter") { Z = Z0+2; N = N0-4; }  // β⁻2n from daughter
+    else if (cls == "Beta-n Daughter")       { Z = Z0+1; N = N0-2; }  // beta-n from parent
+    else if (cls == "Beta-2n Daughter")      { Z = Z0+1; N = N0-3; }  // beta-2n from parent
+    else if (cls == "Beta-n Granddaughter")  { Z = Z0+2; N = N0-3; }  // beta-n from daughter
+    else if (cls == "Beta-2n Granddaughter") { Z = Z0+2; N = N0-4; }  // beta-2n from daughter
     else return false;
     return (Z > 0 && N > 0);
 }
@@ -142,7 +142,7 @@ void GammaFitGUI::LoadLabelClassMap(FitDatabase& fitdb)
         }
     }
 
-    // Restore histogram → parent map if not already populated
+    // Restore histogram -> parent map if not already populated
     if (histParent_.empty()) {
         auto hpit = fitdb.GetEntries().find(kHistParentsKey);
         if (hpit != fitdb.GetEntries().end() && !hpit->second.label.empty()) {
@@ -185,7 +185,7 @@ void GammaFitGUI::SaveLabelClassMap(FitDatabase& fitdb)
         fitdb.ForceStore(kChainIsotopesKey, e);
     }
 
-    // Persist histogram → parent nucleus map
+    // Persist histogram -> parent nucleus map
     if (!histParent_.empty()) {
         std::string s;
         for (const auto& kv : histParent_)
@@ -200,7 +200,7 @@ void GammaFitGUI::SaveLabelClassMap(FitDatabase& fitdb)
     }
 }
 
-// BuildIsotopesTab removed — UI merged into Nuclear tab (Peak Matching sub-tab)
+// BuildIsotopesTab removed  -  UI merged into Nuclear tab (Peak Matching sub-tab)
 
 #if 0
 void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
@@ -238,7 +238,7 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
         p->AddFrame(histRow, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 2));
         histRow->AddFrame(new TGLabel(histRow, "Histogram:"),
                           new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-        isoHistLabel_ = new TGLabel(histRow, "(none — click Refresh)");
+        isoHistLabel_ = new TGLabel(histRow, "(none  -  click Refresh)");
         histRow->AddFrame(isoHistLabel_, new TGLayoutHints(kLHintsLeft));
     }
 
@@ -327,7 +327,7 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
                              new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
         isoCustomLabelEntry_ = new TGTextEntry(custLblRow, "");
         isoCustomLabelEntry_->SetToolTipText(
-            "Free-text label — overrides the combo above when non-empty");
+            "Free-text label  -  overrides the combo above when non-empty");
         custLblRow->AddFrame(isoCustomLabelEntry_, new TGLayoutHints(kLHintsExpandX));
     }
 
@@ -341,7 +341,7 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
     setLblDecayBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoSetLabelDecay()");
     setLblDecayBtn->SetToolTipText(
         "Open a dialog to assign a decay type (class) to any DB isotope.\n"
-        "No peak selection needed — assigns the class globally for that isotope\n"
+        "No peak selection needed  -  assigns the class globally for that isotope\n"
         "and propagates it to ALL peaks in the cache labeled with it.");
 
     TGTextButton* clearBtn = new TGTextButton(editGrp, "Clear Isotope");
@@ -355,7 +355,7 @@ void GammaFitGUI::BuildIsotopesTab(TGCompositeFrame* p)
     schemBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoDrawSchematic()");
     schemBtn->SetToolTipText(
         "Draw a decay chain diagram on the main canvas.\n"
-        "Nodes are classes (Parent → Daughter → Granddaughter).\n"
+        "Nodes are classes (Parent -> Daughter -> Granddaughter).\n"
         "Only classes with labeled peaks are shown.\n"
         "Assign classes via 'Set Class for ALL peaks with this Label'.");
 
@@ -540,7 +540,7 @@ void GammaFitGUI::PopulateIsoList(const std::string& filterLabel)
     }
 
     // Collect unlabeled rows ordered by distance to nearest DB line.
-    // No window cutoff here — the display column always shows the nearest line
+    // No window cutoff here  -  the display column always shows the nearest line
     // regardless of the match threshold.  Distance-first ordering ensures that
     // exact-match rows claim their DB lines before nearby rows steal them.
     std::vector<std::pair<double,size_t>> unlabeledOrder; // {minDist, rowIndex}
@@ -556,7 +556,7 @@ void GammaFitGUI::PopulateIsoList(const std::string& filterLabel)
                   [](const auto& a, const auto& b){ return a.first < b.first; });
     }
 
-    // For each unlabeled row, assign the closest unclaimed DB line — no distance
+    // For each unlabeled row, assign the closest unclaimed DB line  -  no distance
     // cutoff so the display always shows a suggestion even for distant matches.
     std::vector<std::string> autoMatchVec(rows.size());
     std::vector<double>      dbEnergyVec(rows.size(), 0.0);
@@ -1014,8 +1014,8 @@ void GammaFitGUI::OnIsoAutoMatchAll()
     fitdb.Load(CacheFileFor(isoHistName_));
 
     // Each "match unit" is one claimable peak.  For multi-Gaussian entries:
-    //   - if all Gaussians span ≤ 4 keV → one unit (highest-amplitude Gaussian)
-    //   - if span > 4 keV               → one unit per Gaussian (each gets its own label)
+    //   - if all Gaussians span <= 4 keV -> one unit (highest-amplitude Gaussian)
+    //   - if span > 4 keV               -> one unit per Gaussian (each gets its own label)
     // gaussIdx == -1 means the label goes to the entry .label field.
     // gaussIdx >= 0 means the label goes to entry .peakLabels[gaussIdx].
     struct MatchUnit {
@@ -1050,13 +1050,13 @@ void GammaFitGUI::OnIsoAutoMatchAll()
         bool tightCluster = (maxE - minE) <= 4.0;
 
         if (tightCluster || gaussians.size() == 1) {
-            // One unit for the whole entry — use highest-amplitude Gaussian as representative
+            // One unit for the whole entry  -  use highest-amplitude Gaussian as representative
             double repE = gaussians[0].first, bestAmp = gaussians[0].second;
             for (const auto& [e, a] : gaussians) if (a > bestAmp) { bestAmp = a; repE = e; }
             bool hasLbl = !fe.label.empty();
             units.push_back({kv.first, -1, repE, hasLbl});
         } else {
-            // One unit per Gaussian — each gets matched and labeled independently.
+            // One unit per Gaussian  -  each gets matched and labeled independently.
             // Only per-Gaussian labels count here.  A legacy entry-level label (set
             // by old single-unit matching) is intentionally ignored so that all
             // Gaussians in the wide entry are re-matched individually.
@@ -1072,7 +1072,7 @@ void GammaFitGUI::OnIsoAutoMatchAll()
     const double matchThresh = (isoMatchThreshEntry_
                                 ? isoMatchThreshEntry_->GetNumber() : 10.0);
 
-    // Distance-only unclaimed line lookup — rejects lines beyond matchThresh
+    // Distance-only unclaimed line lookup  -  rejects lines beyond matchThresh
     auto findClosestUnclaimed = [&](double energy,
                                     const std::set<std::string>& claimed)
         -> std::pair<std::string, double>
@@ -1140,11 +1140,11 @@ void GammaFitGUI::OnIsoAutoMatchAll()
         }
 
         if (u.gaussIdx < 0) {
-            // Tight cluster or single peak — label the whole entry
+            // Tight cluster or single peak  -  label the whole entry
             e.label = iso;
             if (!cls.empty()) { e.classification = cls; }
         } else {
-            // Wide multi-Gaussian — label only this Gaussian
+            // Wide multi-Gaussian  -  label only this Gaussian
             FitLayout lay = DetectLayout((int)e.params.size());
             int n = lay.valid() ? lay.n : 1;
             if ((int)e.peakLabels.size() < n)          e.peakLabels.resize(n);
@@ -1163,7 +1163,7 @@ void GammaFitGUI::OnIsoAutoMatchAll()
     mkdir(kCacheDir, 0755);
     fitdb.Save(CacheFileFor(isoHistName_));
     BackupCacheFile(CacheFileFor(isoHistName_));
-    AppendLog("Auto-matched " + std::to_string(nMatched) + " peaks (≤4 keV clusters = one unit).");
+    AppendLog("Auto-matched " + std::to_string(nMatched) + " peaks (<=4 keV clusters = one unit).");
     RefreshIsoDisplay();
 }
 
@@ -1253,7 +1253,7 @@ void GammaFitGUI::OnIsoSetParent()
 
     const char* sym = ElementSymbol(isoParentZval_);
     int A = isoParentZval_ + isoParentNval_;
-    AppendLog(Form("Parent set: %s  Z=%d  N=%d  A=%d  (%s)  — auto-classified %d peaks",
+    AppendLog(Form("Parent set: %s  Z=%d  N=%d  A=%d  (%s)   -  auto-classified %d peaks",
                    isoParentIsotope_.c_str(), isoParentZval_, isoParentNval_, A, sym,
                    nClassified));
     RefreshIsoDisplay();
@@ -1274,11 +1274,11 @@ void GammaFitGUI::OnIsoSetLabelDecay()
         return;
     }
 
-    // Save the currently selected peak — the modeless dialog steals focus and
+    // Save the currently selected peak  -  the modeless dialog steals focus and
     // causes isoList_->GetSelected() to return -1 when Apply is clicked.
     isoLabelDecayPeakSel_ = isoList_ ? isoList_->GetSelected() : -1;
 
-    // Create modeless popup — no WaitFor, stays open across multiple Apply clicks
+    // Create modeless popup  -  no WaitFor, stays open across multiple Apply clicks
     isoLabelDecayDlg_ = new TGTransientFrame(gClient->GetRoot(), this, 390, 530);
     isoLabelDecayDlg_->SetWindowName("Set Isotope & Decay Type");
     isoLabelDecayDlg_->SetCleanup(kDeepCleanup);
@@ -1347,7 +1347,7 @@ void GammaFitGUI::OnIsoSetLabelDecay()
         dtRow->AddFrame(isoDecayTypeCombo_, new TGLayoutHints(kLHintsLeft));
     }
 
-    // Buttons row — Apply keeps dialog open; Close dismisses it
+    // Buttons row  -  Apply keeps dialog open; Close dismisses it
     {
         TGHorizontalFrame* bRow = new TGHorizontalFrame(isoLabelDecayDlg_);
         isoLabelDecayDlg_->AddFrame(bRow,
@@ -1364,7 +1364,7 @@ void GammaFitGUI::OnIsoSetLabelDecay()
     isoLabelDecayDlg_->Layout();
     isoLabelDecayDlg_->MapWindow();
     isoLabelDecayDlg_->CenterOnParent();
-    // Dialog is now open and modeless — control returns immediately
+    // Dialog is now open and modeless  -  control returns immediately
 }
 
 void GammaFitGUI::OnIsoLabelDecayApply()
@@ -1423,20 +1423,20 @@ void GammaFitGUI::OnIsoLabelDecayApply()
     fitdb.Save(CacheFileFor(isoHistName_));
     BackupCacheFile(CacheFileFor(isoHistName_));
     AppendLog("Assigned decay type '" + decayType + "' to isotope '" + isotope +
-              "' — updated " + std::to_string(nUpdated) + " peaks.");
+              "'  -  updated " + std::to_string(nUpdated) + " peaks.");
     RefreshIsoDisplay();
     // Dialog stays open for the next assignment
 }
 
 void GammaFitGUI::OnIsoLabelDecayClose()
 {
-    // Triggered by the Close button — let CloseWindow handle deletion
+    // Triggered by the Close button  -  let CloseWindow handle deletion
     if (isoLabelDecayDlg_) isoLabelDecayDlg_->CloseWindow();
 }
 
 void GammaFitGUI::OnIsoLabelDecayDlgClosed()
 {
-    // Triggered by the CloseWindow signal (X button or our Close button) —
+    // Triggered by the CloseWindow signal (X button or our Close button)  - 
     // null member pointers before the widget tree is destroyed
     isoLabelDecayDlg_    = nullptr;
     isoLabelDecayList_   = nullptr;
@@ -1582,7 +1582,7 @@ void GammaFitGUI::OnIsoPeakPreview()
     }
     if (!rawHist_) { AppendLog("Could not load histogram: " + isoHistName_); return; }
 
-    // Zoom to ±6σ (at least 20 keV) around the peak
+    // Zoom to +/-6sig (at least 20 keV) around the peak
     double sigma = res_.Sigma(peakE);
     double halfW = std::max(6.0 * sigma, 20.0);
     viewXmin_ = std::max(peakE - halfW, rawHist_->GetXaxis()->GetXmin());
@@ -1600,14 +1600,14 @@ void GammaFitGUI::OnIsoPeakPreview()
 // ─────────────────────────────────────────────────────────────────────────────
 // Slot: OnIsoPopulateIntensity
 // Populate the Peak Table intensity-calculation fields from the selected peak.
-// Also fills A₀ from the decay fit cache (if loaded) and shows T½ in the label.
+// Also fills A0 from the decay fit cache (if loaded) and shows T1/2 in the label.
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnIsoPopulateIntensity()
 {
     if (!isoList_) return;
     Int_t sel = isoList_->GetSelected();
     if (sel < 1 || (size_t)sel > isoListKeys_.size()) {
-        AppendLog("[→ Intensity] Select a peak first."); return;
+        AppendLog("[-> Intensity] Select a peak first."); return;
     }
     if (isoHistName_.empty()) return;
 
@@ -1619,11 +1619,11 @@ void GammaFitGUI::OnIsoPopulateIntensity()
     fitdb.Load(CacheFileFor(isoHistName_));
     auto it = fitdb.GetEntries().find(key);
     if (it == fitdb.GetEntries().end()) {
-        AppendLog("[→ Intensity] Peak not found in cache."); return;
+        AppendLog("[-> Intensity] Peak not found in cache."); return;
     }
     const FitEntry& fe = it->second;
     FitLayout lay = DetectLayout((int)fe.params.size());
-    if (!lay.valid()) { AppendLog("[→ Intensity] Cannot parse fit layout."); return; }
+    if (!lay.valid()) { AppendLog("[-> Intensity] Cannot parse fit layout."); return; }
 
     // Which Gaussian to use
     int gi = (gaussIdx >= 0 && gaussIdx < lay.n) ? gaussIdx : 0;
@@ -1650,7 +1650,7 @@ void GammaFitGUI::OnIsoPopulateIntensity()
     if (ptAreaEntry_)    ptAreaEntry_->SetNumber(area);
     if (ptAreaErrEntry_) ptAreaErrEntry_->SetNumber(areaErr);
 
-    AppendLog(Form("[→ Intensity] E=%.3f +/-%.3f keV  Area=%.1f +/-%.1f  [%s]",
+    AppendLog(Form("[-> Intensity] E=%.3f +/-%.3f keV  Area=%.1f +/-%.1f  [%s]",
                    E, eErr, area, areaErr, key.c_str()));
 
     // ── Check decay fit cache for this energy ────────────────────────────────
@@ -1675,7 +1675,7 @@ void GammaFitGUI::OnIsoPopulateIntensity()
             isoIntensityInfoLbl_->SetText(lblBuf);
             isoIntensityInfoLbl_->Layout();
         }
-        AppendLog(Form("[→ Intensity] Decay fit: A₀=%.4g  T½=%.4g ms  (Δ=%.2f keV)",
+        AppendLog(Form("[-> Intensity] Decay fit: A0=%.4g  T1/2=%.4g ms  (delta=%.2f keV)",
                        A0, T_half, bestDiff));
     } else {
         if (isoIntensityInfoLbl_) {
@@ -1694,7 +1694,7 @@ void GammaFitGUI::OnIsoPopulateIntensity()
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AME mass-table loader  (NNDC/IAEA AME2020 mass_1.mas format)
-// Q_β- = Δ(parent) - Δ(daughter) - n_emitted × Δ(neutron)
+// Q_beta- = delta(parent) - delta(daughter) - n_emitted x delta(neutron)
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool GammaFitGUI::LoadAMETable(const std::string& path)
@@ -1793,7 +1793,7 @@ bool GammaFitGUI::LoadNubaseTable(const std::string& path)
     if (!in.is_open()) return false;
     nubaseTable_.clear();
 
-    // Unit → seconds conversion
+    // Unit -> seconds conversion
     auto unitToSec = [](const std::string& u) -> double {
         if (u == "ps") return 1e-12;
         if (u == "ns") return 1e-9;
@@ -1832,14 +1832,14 @@ bool GammaFitGUI::LoadNubaseTable(const std::string& path)
         if (line.size() < 10) continue;
         if (line[0] == '#') continue;
 
-        // Cols 0-2: A, cols 4-6: Z (1-indexed in spec → 0-indexed here)
+        // Cols 0-2: A, cols 4-6: Z (1-indexed in spec -> 0-indexed here)
         std::string aStr = line.substr(0, 3);
         std::string zStr = (line.size() >= 7) ? line.substr(4, 3) : "";
         int A = 0, Z = 0;
         try { A = std::stoi(aStr); Z = std::stoi(zStr); } catch (...) { continue; }
         if (A <= 0 || Z < 0 || Z > 118 || Z > A) continue;
 
-        // Isomer indicator at cols 7-10 — skip isomers (keep only ground state)
+        // Isomer indicator at cols 7-10  -  skip isomers (keep only ground state)
         if (line.size() >= 8) {
             char iso = line[7];
             if (iso == 'm' || iso == 'n') continue;  // isomeric state
@@ -1882,7 +1882,7 @@ bool GammaFitGUI::LoadNubaseTable(const std::string& path)
             // e.g. "B-=85.7 4;B-N=14.0 4;B-2N=0.30 10"
             nb.brBetaMinus = parseBR(decayField, "B-");
             // Make sure "B-N" match doesn't steal from "B-"
-            // parseBR for "B-" finds "B-=" but not "B-N=" — correct since B- comes before =
+            // parseBR for "B-" finds "B-=" but not "B-N="  -  correct since B- comes before =
             nb.brBetaN     = parseBR(decayField, "B-N");
             nb.brBeta2N    = parseBR(decayField, "B-2N");
         }
@@ -1999,14 +1999,14 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
 
     const int kFill[3] = {kOrange-9, kAzure-9, kGreen-9};
 
-    // NDC center map — all 7 nodes always present
+    // NDC center map  -  all 7 nodes always present
     std::map<std::string, std::pair<double,double>> pos;
     for (int i = 0; i < kNSchNodes; i++)
         pos[kSchNodes[i].cls] = {xCol[kSchNodes[i].col], yRows[kSchNodes[i].row]};
 
     TLatex ltx; ltx.SetNDC(kTRUE);
 
-    // Q-value helper: Q_β- = Δ(from) - Δ(to) - neutrons × Δ(n) [keV]
+    // Q-value helper: Q_beta- = delta(from) - delta(to) - neutrons x delta(n) [keV]
     // Returns -9999.0 when mass data are unavailable (AME not loaded / parent not set).
     const double kNeutronMex = 8071.3171;  // keV
     auto computeQ = [&](const char* fromCls, const char* toCls, int neutrons) -> double {
@@ -2020,7 +2020,7 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
         return ipf->second - ipt->second - neutrons * kNeutronMex;
     };
 
-    // An arrow is drawn only when Q ≥ 0 (or when the AME table isn't loaded so
+    // An arrow is drawn only when Q >= 0 (or when the AME table isn't loaded so
     // we have no way to judge).
     auto arrowEnabled = [&](const SchArrowDef& ad) -> bool {
         double Q = computeQ(ad.from, ad.to, ad.neutrons);
@@ -2097,7 +2097,7 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
         }
     }
 
-    // ── Pass 3: box text (element symbol, Z, N, A, isotope, T½, BRs, Sn) ───────
+    // ── Pass 3: box text (element symbol, Z, N, A, isotope, T1/2, BRs, Sn) ───────
     // Drawn last so text is never obscured by arrows.
     for (int i = 0; i < kNSchNodes; i++) {
         const SchNodeDef& nd = kSchNodes[i];
@@ -2110,16 +2110,16 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
         int A = Z + N;
 
         if (hasZ) {
-            // Mass number — top left
+            // Mass number  -  top left
             ltx.SetTextSize(0.018); ltx.SetTextColor(kBlack); ltx.SetTextAlign(11);
             ltx.DrawLatex(x1+0.005, y2-0.026, Form("%d", A));
-            // Z — bottom left
+            // Z  -  bottom left
             ltx.SetTextAlign(11);
             ltx.DrawLatex(x1+0.005, y1+0.006, Form("Z=%d", Z));
-            // N — bottom right
+            // N  -  bottom right
             ltx.SetTextAlign(31);
             ltx.DrawLatex(x2-0.005, y1+0.006, Form("N=%d", N));
-            // Element symbol — large, upper center
+            // Element symbol  -  large, upper center
             ltx.SetTextSize(0.035); ltx.SetTextColor(kBlack); ltx.SetTextAlign(22);
             ltx.DrawLatex(xc, yc+0.018, ElementSymbol(Z));
         }
@@ -2171,7 +2171,7 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
             }
         }
 
-        // AME: neutron separation energy Sn = Δ(Z,A-1) + Δ_n - Δ(Z,A)
+        // AME: neutron separation energy Sn = delta(Z,A-1) + delta_n - delta(Z,A)
         if (ameLoaded_ && hasZ && A > 1) {
             auto it0 = ameTable_.find({Z, A});
             auto it1 = ameTable_.find({Z, A-1});
@@ -2183,7 +2183,7 @@ void GammaFitGUI::DrawDecaySchematic(TCanvas* c)
             }
         }
 
-        // Peak count — only shown when > 0
+        // Peak count  -  only shown when > 0
         int nPks = classPeaks.count(nd.cls) ? classPeaks.at(nd.cls) : 0;
         if (nPks > 0) {
             ltx.SetTextSize(0.013); ltx.SetTextColor(kBlack); ltx.SetTextAlign(22);

@@ -105,9 +105,11 @@ GUI_OWN_OBJS := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(GUI_SRCS))
 GUI_DICT_SRC := $(OBJ_DIR)/gui/GammaFitGUIDict.cpp
 GUI_DICT_OBJ := $(OBJ_DIR)/gui/GammaFitGUIDict.o
 
+ROOTCLING := $(shell root-config --bindir)/rootcling
+
 $(GUI_DICT_SRC): $(GUI_DIR)/GammaFitGUI.h $(GUI_DIR)/LinkDef.h
 	@mkdir -p $(dir $@)
-	rootcling -f $@ \
+	$(ROOTCLING) -f $@ -D_POSIX_SEM_VALUE_MAX=32767 \
 	    "-I$(CURDIR)" "-I$(CURDIR)/app" "-I$(CURDIR)/core" \
 	    "-I$(CURDIR)/fitting" "-I$(CURDIR)/tracking" "-I$(CURDIR)/models" \
 	    "-I$(CURDIR)/database" "-I$(CURDIR)/io" "-I$(CURDIR)/analysis_modules" \

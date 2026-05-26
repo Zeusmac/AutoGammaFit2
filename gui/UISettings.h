@@ -7,7 +7,7 @@
 #include <sstream>
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UISettings — flat key/value store persisted to gamma_gui.conf
+// UISettings  -  flat key/value store persisted to gamma_gui.conf
 //
 // Format: one "key=value" per line; blank lines and '#' comments ignored.
 // All values stored as strings; typed helpers below convert on access.

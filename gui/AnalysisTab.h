@@ -5,14 +5,14 @@
 #include "UISettings.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AnalysisTab — lightweight interface that all tab implementations satisfy.
+// AnalysisTab  -  lightweight interface that all tab implementations satisfy.
 //
 // Each tab owns a ROOT widget tree built in BuildUI(). The GammaFitGUI
 // main class calls OnHistogramChanged() when the active histogram switches,
 // SaveState()/RestoreState() on shutdown/startup, and Reset() when the
 // user clears the session.
 //
-// Not a TObject — tabs communicate back to the host via direct slot calls
+// Not a TObject  -  tabs communicate back to the host via direct slot calls
 // on GammaFitGUI (passed as a pointer) rather than through ROOT signals, to
 // keep the interface thin and avoid rootcling overhead for the base class.
 // ─────────────────────────────────────────────────────────────────────────────

@@ -23,7 +23,7 @@
 #include <unistd.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NucCacheDirPath — returns the nuclear data cache directory path
+// NucCacheDirPath  -  returns the nuclear data cache directory path
 // ─────────────────────────────────────────────────────────────────────────────
 std::string GammaFitGUI::NucCacheDirPath() const
 {
@@ -31,7 +31,7 @@ std::string GammaFitGUI::NucCacheDirPath() const
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PopulateNucGammaRef — fill nucGammaRefView_ with gamma lines for chain
+// PopulateNucGammaRef  -  fill nucGammaRefView_ with gamma lines for chain
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::PopulateNucGammaRef()
 {
@@ -45,7 +45,7 @@ void GammaFitGUI::PopulateNucGammaRef()
 
         // Header line
         std::string cls = labelClassMap_.count(isoID) ? labelClassMap_.at(isoID) : "?";
-        std::string header = isoID + "  [" + cls + "]  T½=" + iso.hl_str;
+        std::string header = isoID + "  [" + cls + "]  T1/2=" + iso.hl_str;
         nucGammaRefView_->AddLine(header.c_str());
 
         // Gamma lines sorted by energy
@@ -66,7 +66,7 @@ void GammaFitGUI::PopulateNucGammaRef()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RefreshIsoComboHelper — repopulate a TGComboBox with chain isotope names
+// RefreshIsoComboHelper  -  repopulate a TGComboBox with chain isotope names
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::RefreshIsoComboHelper(TGComboBox* combo,
                                          const std::vector<std::string>& chain,
@@ -90,7 +90,7 @@ void GammaFitGUI::RefreshIsoComboHelper(TGComboBox* combo,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DrawLevelScheme — draw nuclear level scheme for a single isotope
+// DrawLevelScheme  -  draw nuclear level scheme for a single isotope
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::DrawLevelScheme(const std::string& isoID)
 {
@@ -161,7 +161,7 @@ void GammaFitGUI::DrawLevelScheme(const std::string& isoID)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BuildNuclearTab — main Nuclear tab with 6 sub-tabs
+// BuildNuclearTab  -  main Nuclear tab with 6 sub-tabs
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
 {
@@ -403,7 +403,7 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
             new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
 
         {
-            TGTextButton* confirmBtn = new TGTextButton(gammaRefGrp, "Confirm Chain → Isotope DB");
+            TGTextButton* confirmBtn = new TGTextButton(gammaRefGrp, "Confirm Chain -> Isotope DB");
             gammaRefGrp->AddFrame(confirmBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
             confirmBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNucConfirmChainToIsoDB()");
             confirmBtn->SetToolTipText(
@@ -543,7 +543,7 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
                                  new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
             isoCustomLabelEntry_ = new TGTextEntry(custLblRow, "");
             isoCustomLabelEntry_->SetToolTipText(
-                "Free-text label — overrides the combo above when non-empty");
+                "Free-text label  -  overrides the combo above when non-empty");
             custLblRow->AddFrame(isoCustomLabelEntry_, new TGLayoutHints(kLHintsExpandX));
         }
 
@@ -608,7 +608,7 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
         schemBtn->Connect("Clicked()", "GammaFitGUI", this, "OnIsoDrawSchematic()");
         schemBtn->SetToolTipText(
             "Draw a decay chain diagram on the main canvas.\n"
-            "Nodes are classes (Parent → Daughter → Granddaughter).\n"
+            "Nodes are classes (Parent -> Daughter -> Granddaughter).\n"
             "Only classes with labeled peaks are shown.");
 
         // ── Isotope Database browser ───────────────────────────────────────
@@ -697,7 +697,7 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
     // Sub-tab 5: gamma-gamma (TODO)
     // ═══════════════════════════════════════════════════════════════════════
     {
-        TGCompositeFrame* tab = nucTab->AddTab("γ-γ (TODO)");
+        TGCompositeFrame* tab = nucTab->AddTab("gamma-gamma (TODO)");
         tab->AddFrame(new TGLabel(tab, "Gamma-gamma coincidence analysis coming soon."),
                       new TGLayoutHints(kLHintsLeft, 4, 4, 8, 2));
     }
@@ -747,7 +747,7 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
 
         // ── Gamma reference list ──────────────────────────────────────────
         {
-            TGGroupFrame* listGrp = new TGGroupFrame(cf, "Gamma Rays & References  (select → Open NNDC)");
+            TGGroupFrame* listGrp = new TGGroupFrame(cf, "Gamma Rays & References  (select -> Open NNDC)");
             cf->AddFrame(listGrp, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY, 4, 4, 2, 2));
 
             nucRefList_ = new TGListBox(listGrp, 3710);
@@ -768,7 +768,7 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
             TGHorizontalFrame* btnRow = new TGHorizontalFrame(listGrp);
             listGrp->AddFrame(btnRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
 
-            TGTextButton* openBtn = new TGTextButton(btnRow, "Open NNDC ↗");
+            TGTextButton* openBtn = new TGTextButton(btnRow, "Open NNDC ");
             btnRow->AddFrame(openBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
             openBtn->Connect("Clicked()", "GammaFitGUI", this, "OnNucRefOpen()");
             openBtn->SetToolTipText("Open NuDat page for the selected isotope in your browser");
@@ -778,7 +778,7 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
             refreshBtn->Connect("Clicked()", "GammaFitGUI", this, "PopulateNucRefTab()");
         }
 
-        // ── Histogram → Parent nucleus ────────────────────────────────────
+        // ── Histogram -> Parent nucleus ────────────────────────────────────
         {
             TGGroupFrame* histGrp = new TGGroupFrame(cf, "Assign Histogram to Parent Nucleus");
             cf->AddFrame(histGrp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 4));
@@ -788,7 +788,7 @@ void GammaFitGUI::BuildNuclearTab(TGCompositeFrame* p)
 
             row->AddFrame(new TGLabel(row, "Histogram:"),
                           new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
-            // Reuse nucCombo selector — we'll populate from the hist list at fill time
+            // Reuse nucCombo selector  -  we'll populate from the hist list at fill time
             // Use a plain text entry so any name can be typed
             TGTextEntry* histEntry = new TGTextEntry(row, "");
             histEntry->SetName("nucHistParentHistEntry");
@@ -851,7 +851,7 @@ void GammaFitGUI::OnNucSetParentFromChain()
             auto dbIt = nuclearDB_.find(id);
             std::string entry = id;
             if (dbIt != nuclearDB_.end() && !dbIt->second.hl_str.empty())
-                entry += "  T½=" + dbIt->second.hl_str;
+                entry += "  T1/2=" + dbIt->second.hl_str;
             entry += "  [" + (labelClassMap_.count(id) ? labelClassMap_.at(id) : "?") + "]";
             nucChainList_->AddEntry(entry.c_str(), i + 1);
         }
@@ -868,10 +868,10 @@ void GammaFitGUI::OnNucSetParentFromChain()
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OnNucAutoTraceChain
-// BFS over all decay branches (β⁻, β⁻n, β⁻2n).  Each branch is traced until
-// stable, long-lived, Q < 0, or not a β⁻ emitter.
+// BFS over all decay branches (beta-, beta-n, beta-2n).  Each branch is traced until
+// stable, long-lived, Q < 0, or not a beta- emitter.
 // Generation naming: absStep encodes total steps from the Parent regardless of
-// path.  prefix "" = main β⁻ chain; "Beta-n" / "Beta-2n" = neutron-emission
+// path.  prefix "" = main beta- chain; "Beta-n" / "Beta-2n" = neutron-emission
 // sub-chains.
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucAutoTraceChain()
@@ -957,16 +957,16 @@ void GammaFitGUI::OnNucAutoTraceChain()
             const NucIsotope& iso = dbIt->second;
             if (iso.halflife_s == 0.0 &&
                 (iso.hl_str == "stable" || iso.hl_str == "STABLE")) {
-                AppendLog("  " + isoID + " is stable — branch ends.");
+                AppendLog("  " + isoID + " is stable  -  branch ends.");
                 continue;
             }
             if (absStep > 0 && iso.halflife_s > kLongLivedThreshold && iso.halflife_s > 0.0) {
-                AppendLog("  " + isoID + "  T½=" + iso.hl_str + " — long-lived, stopping branch.");
+                AppendLog("  " + isoID + "  T1/2=" + iso.hl_str + "  -  long-lived, stopping branch.");
                 continue;
             }
         }
 
-        // Determine if β⁻ emitter (also covers B-N/B-2N which are β⁻ + neutron emission)
+        // Determine if beta- emitter (also covers B-N/B-2N which are beta- + neutron emission)
         bool isBetaMinus = false;
         if (hasData) {
             const NucIsotope& iso = dbIt->second;
@@ -982,11 +982,11 @@ void GammaFitGUI::OnNucAutoTraceChain()
         }
 
         if (!isBetaMinus) {
-            AppendLog("  " + isoID + " — not β⁻ emitter, stopping branch.");
+            AppendLog("  " + isoID + "  -  not beta- emitter, stopping branch.");
             continue;
         }
 
-        // ── β⁻ daughter: Q = ME(Z,A) - ME(Z+1,A) ────────────────────────────
+        // ── beta- daughter: Q = ME(Z,A) - ME(Z+1,A) ────────────────────────────
         bool qBetaOk = true;
         if (ameLoaded_) {
             auto itP = ameTable_.find(std::make_pair(Z,   A));
@@ -994,7 +994,7 @@ void GammaFitGUI::OnNucAutoTraceChain()
             if (itP != ameTable_.end() && itD != ameTable_.end()) {
                 double Q = itP->second - itD->second;
                 if (Q < 0.0) {
-                    AppendLog("  " + isoID + "  Q_β⁻ = " + Fmt(Q, 1) + " keV < 0 — forbidden.");
+                    AppendLog("  " + isoID + "  Q_beta- = " + Fmt(Q, 1) + " keV < 0  -  forbidden.");
                     qBetaOk = false;
                 }
             }
@@ -1002,8 +1002,8 @@ void GammaFitGUI::OnNucAutoTraceChain()
         if (qBetaOk && !visited.count(std::make_pair(Z+1, A)))
             queue.push_back({Z+1, A, absStep+1, prefix});
 
-        // ── β⁻n / β⁻2n branching ratios ─────────────────────────────────────
-        // Priority: NUBASE table (most accurate) → all three NNDC decay mode slots
+        // ── beta-n / beta-2n branching ratios ─────────────────────────────────────
+        // Priority: NUBASE table (most accurate) -> all three NNDC decay mode slots
         double brBetaN  = 0.0;
         double brBeta2N = 0.0;
 
@@ -1039,8 +1039,8 @@ void GammaFitGUI::OnNucAutoTraceChain()
             }
         }
 
-        // ── β⁻n daughter: (Z+1, A-1) ─────────────────────────────────────────
-        // Q_βn = ME(Z,A) - ME(Z+1,A-1) - Δ_n
+        // ── beta-n daughter: (Z+1, A-1) ─────────────────────────────────────────
+        // Q_betan = ME(Z,A) - ME(Z+1,A-1) - delta_n
         if (brBetaN > 1.0) {
             bool qOk = true;
             if (ameLoaded_) {
@@ -1049,7 +1049,7 @@ void GammaFitGUI::OnNucAutoTraceChain()
                 if (itP != ameTable_.end() && itD != ameTable_.end()) {
                     double Q = itP->second - itD->second - kNeutronME;
                     if (Q < 0.0) {
-                        AppendLog("  " + isoID + "  Q_β⁻n = " + Fmt(Q, 1) + " keV < 0 — forbidden.");
+                        AppendLog("  " + isoID + "  Q_beta-n = " + Fmt(Q, 1) + " keV < 0  -  forbidden.");
                         qOk = false;
                     }
                 }
@@ -1058,8 +1058,8 @@ void GammaFitGUI::OnNucAutoTraceChain()
                 queue.push_back({Z+1, A-1, absStep+1, "Beta-n"});
         }
 
-        // ── β⁻2n daughter: (Z+1, A-2) ────────────────────────────────────────
-        // Q_β2n = ME(Z,A) - ME(Z+1,A-2) - 2·Δ_n
+        // ── beta-2n daughter: (Z+1, A-2) ────────────────────────────────────────
+        // Q_beta2n = ME(Z,A) - ME(Z+1,A-2) - 2*delta_n
         if (brBeta2N > 1.0) {
             bool qOk = true;
             if (ameLoaded_) {
@@ -1068,7 +1068,7 @@ void GammaFitGUI::OnNucAutoTraceChain()
                 if (itP != ameTable_.end() && itD != ameTable_.end()) {
                     double Q = itP->second - itD->second - 2.0 * kNeutronME;
                     if (Q < 0.0) {
-                        AppendLog("  " + isoID + "  Q_β⁻2n = " + Fmt(Q, 1) + " keV < 0 — forbidden.");
+                        AppendLog("  " + isoID + "  Q_beta-2n = " + Fmt(Q, 1) + " keV < 0  -  forbidden.");
                         qOk = false;
                     }
                 }
@@ -1085,7 +1085,7 @@ void GammaFitGUI::OnNucAutoTraceChain()
         auto dbIt2 = nuclearDB_.find(id);
         std::string entry = id;
         if (dbIt2 != nuclearDB_.end() && !dbIt2->second.hl_str.empty())
-            entry += "  T½=" + dbIt2->second.hl_str;
+            entry += "  T1/2=" + dbIt2->second.hl_str;
         entry += "  [" + (labelClassMap_.count(id) ? labelClassMap_.at(id) : "?") + "]";
         nucChainList_->AddEntry(entry.c_str(), i + 1);
     }
@@ -1103,12 +1103,12 @@ void GammaFitGUI::OnNucAutoTraceChain()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnNucFetchAll — fetch NNDC data for all chain isotopes
+// OnNucFetchAll  -  fetch NNDC data for all chain isotopes
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucFetchAll()
 {
     if (nucChainIsotopes_.empty()) {
-        AppendLog("Nuclear: chain is empty — set parent and add isotopes first.");
+        AppendLog("Nuclear: chain is empty  -  set parent and add isotopes first.");
         return;
     }
     NNDCFetcher::EnsureDir(nucCacheDir_);
@@ -1128,8 +1128,20 @@ void GammaFitGUI::OnNucFetchAll()
         bool ok = NNDCFetcher::Fetch(A, sym, iso, nucCacheDir_);
         if (ok) {
             nuclearDB_[isoID] = iso;
-            AppendLog("Fetched: " + isoID + "  " + iso.hl_str +
-                      "  (" + std::to_string(iso.gammas.size()) + " gammas)");
+            // Compare with live NNDC to catch newly published gammas
+            if (nucStatusLbl_) nucStatusLbl_->SetText(("Checking " + isoID + "...").c_str());
+            gSystem->ProcessEvents();
+            auto newGs = NNDCFetcher::CheckForNewGammas(A, sym, nuclearDB_[isoID], nucCacheDir_);
+            if (!newGs.empty()) {
+                AppendLog(Form("Fetched: %s  %s  (%d gammas, +%d NEW from NNDC)",
+                               isoID.c_str(), iso.hl_str.c_str(),
+                               (int)nuclearDB_[isoID].gammas.size(), (int)newGs.size()));
+                for (const auto& g : newGs)
+                    AppendLog(Form("  + %.3f keV  I=%.2f%%", g.energy, g.intensity));
+            } else {
+                AppendLog("Fetched: " + isoID + "  " + iso.hl_str +
+                          "  (" + std::to_string(iso.gammas.size()) + " gammas, up to date)");
+            }
         } else {
             AppendLog("Fetch failed: " + isoID);
         }
@@ -1142,7 +1154,7 @@ void GammaFitGUI::OnNucFetchAll()
         auto dbIt = nuclearDB_.find(id);
         std::string entry = id;
         if (dbIt != nuclearDB_.end() && !dbIt->second.hl_str.empty())
-            entry += "  T½=" + dbIt->second.hl_str;
+            entry += "  T1/2=" + dbIt->second.hl_str;
         entry += "  [" + (labelClassMap_.count(id) ? labelClassMap_.at(id) : "?") + "]";
         nucChainList_->AddEntry(entry.c_str(), i + 1);
     }
@@ -1155,7 +1167,7 @@ void GammaFitGUI::OnNucFetchAll()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnNucReloadCache — reload nuclear data from local cache files
+// OnNucReloadCache  -  reload nuclear data from local cache files
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucReloadCache()
 {
@@ -1175,7 +1187,7 @@ void GammaFitGUI::OnNucReloadCache()
         auto dbIt = nuclearDB_.find(id);
         std::string entry = id;
         if (dbIt != nuclearDB_.end() && !dbIt->second.hl_str.empty())
-            entry += "  T½=" + dbIt->second.hl_str;
+            entry += "  T1/2=" + dbIt->second.hl_str;
         entry += "  [" + (labelClassMap_.count(id) ? labelClassMap_.at(id) : "?") + "]";
         nucChainList_->AddEntry(entry.c_str(), i + 1);
     }
@@ -1188,7 +1200,7 @@ void GammaFitGUI::OnNucReloadCache()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnNucAddToChain — manually add an isotope to the chain
+// OnNucAddToChain  -  manually add an isotope to the chain
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucAddToChain()
 {
@@ -1247,7 +1259,7 @@ void GammaFitGUI::OnNucRemoveFromChain()
         auto dbIt = nuclearDB_.find(id);
         std::string entry = id;
         if (dbIt != nuclearDB_.end() && !dbIt->second.hl_str.empty())
-            entry += "  T½=" + dbIt->second.hl_str;
+            entry += "  T1/2=" + dbIt->second.hl_str;
         entry += "  [" + (labelClassMap_.count(id) ? labelClassMap_.at(id) : "?") + "]";
         nucChainList_->AddEntry(entry.c_str(), i + 1);
     }
@@ -1271,7 +1283,7 @@ void GammaFitGUI::OnNucClearChain()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnNucAddBackground — add a background isotope from the combo
+// OnNucAddBackground  -  add a background isotope from the combo
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucAddBackground()
 {
@@ -1305,7 +1317,7 @@ void GammaFitGUI::OnNucAddBackground()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnNucLoadNNDCTxt — load a locally-saved IAEA CSV file
+// OnNucLoadNNDCTxt  -  load a locally-saved IAEA CSV file
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucLoadNNDCTxt()
 {
@@ -1369,14 +1381,14 @@ void GammaFitGUI::OnNucLoadNNDCTxt()
     PopulateNucGammaRef();
     RefreshIsoComboHelper(nucIsoCombo_,      nucChainIsotopes_, nuclearDB_);
     RefreshIsoComboHelper(nucIsoLogftCombo_, nucChainIsotopes_, nuclearDB_);
-    AppendLog("Nuclear: loaded from file " + path + " → " + isoID +
+    AppendLog("Nuclear: loaded from file " + path + " -> " + isoID +
               "  (" + std::to_string(iso.gammas.size()) + " gammas, " +
               std::to_string(iso.levels.size()) + " levels)");
     if (nucStatusLbl_) nucStatusLbl_->SetText(("Loaded: " + isoID).c_str());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnNucDrawLevelScheme — draw on the embedded ROOT canvas
+// OnNucDrawLevelScheme  -  draw on the embedded ROOT canvas
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucDrawLevelScheme()
 {
@@ -1388,14 +1400,14 @@ void GammaFitGUI::OnNucDrawLevelScheme()
         AppendLog("[Nuclear] No isotope selected"); return;
     }
     if (nuclearDB_.find(isoID) == nuclearDB_.end()) {
-        AppendLog("[Nuclear] No data for " + isoID + " — fetch first");
+        AppendLog("[Nuclear] No data for " + isoID + "  -  fetch first");
         return;
     }
     DrawLevelScheme(isoID);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnNucOpenInteractive — generate Plotly HTML and open in browser
+// OnNucOpenInteractive  -  generate Plotly HTML and open in browser
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucOpenInteractive()
 {
@@ -1407,7 +1419,7 @@ void GammaFitGUI::OnNucOpenInteractive()
         AppendLog("[Nuclear] No isotope selected"); return;
     }
     if (nuclearDB_.find(isoID) == nuclearDB_.end()) {
-        AppendLog("[Nuclear] No data for " + isoID + " — fetch first");
+        AppendLog("[Nuclear] No data for " + isoID + "  -  fetch first");
         return;
     }
 
@@ -1429,13 +1441,13 @@ void GammaFitGUI::OnNucOpenInteractive()
     std::string cmd = "xdg-open \"" + outPath + "\" &";
     int ret = system(cmd.c_str());
     if (ret != 0)
-        AppendLog("[Nuclear] Could not open browser — file saved to " + outPath);
+        AppendLog("[Nuclear] Could not open browser  -  file saved to " + outPath);
     else
         AppendLog("[Nuclear] Opened interactive level scheme: " + outPath);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GenerateLevelSchemePlotlyHTML — build a self-contained Plotly HTML string
+// GenerateLevelSchemePlotlyHTML  -  build a self-contained Plotly HTML string
 // ─────────────────────────────────────────────────────────────────────────────
 std::string GammaFitGUI::GenerateLevelSchemePlotlyHTML(const std::string& isoID) const
 {
@@ -1525,8 +1537,8 @@ std::string GammaFitGUI::GenerateLevelSchemePlotlyHTML(const std::string& isoID)
         hx   << "0.38";
         hy   << y;
         htxt << "\"E=" << Form("%.3f", y) << " keV"
-             << "<br>Jπ=" << jsStr(jpi)
-             << "<br>T½=" << jsStr(hl) << "\"";
+             << "<br>Jpi=" << jsStr(jpi)
+             << "<br>T1/2=" << jsStr(hl) << "\"";
         firstH = false;
     }
 
@@ -1578,7 +1590,7 @@ std::string GammaFitGUI::GenerateLevelSchemePlotlyHTML(const std::string& isoID)
                    << "\"text\":\"" << jsStr(label) << "\","
                    << "\"font\":{\"color\":\"#ffe060\",\"size\":8},"
                    << "\"showarrow\":true,"
-                   << "\"hovertext\":\"Eγ=" << Form("%.3f", gm.energy)
+                   << "\"hovertext\":\"Egamma=" << Form("%.3f", gm.energy)
                    << " keV<br>I=" << Form("%.1f", gm.intensity) << "%"
                    << "<br>from " << Form("%.1f", startE) << " keV\","
                    << "\"bgcolor\":\"rgba(20,20,40,0.85)\","
@@ -1589,8 +1601,8 @@ std::string GammaFitGUI::GenerateLevelSchemePlotlyHTML(const std::string& isoID)
     annots << "]";
 
     std::string title = Form("<sup>%d</sup>%s Level Scheme", iso.A, iso.symbol.c_str());
-    std::string sub   = "Jπ=" + iso.jpi + "  T½=" + iso.hl_str
-                      + Form("  (%d levels, %d γs shown)",
+    std::string sub   = "Jpi=" + iso.jpi + "  T1/2=" + iso.hl_str
+                      + Form("  (%d levels, %d gammas shown)",
                              (int)levels.size(),
                              (int)std::min((size_t)120, iso.gammas.size()));
 
@@ -1606,7 +1618,7 @@ std::string GammaFitGUI::GenerateLevelSchemePlotlyHTML(const std::string& isoID)
 </head>
 <body>
 <div id="plot" style="width:100%;height:100vh;"></div>
-<div id="info">AutoGammaFit — hover over levels and arrows for details</div>
+<div id="info">AutoGammaFit  -  hover over levels and arrows for details</div>
 <script>
 var trace = {
   x:[)" << hx.str() << R"(],
@@ -1653,7 +1665,7 @@ Plotly.newPlot('plot',[trace],layout,
 void GammaFitGUI::OnNucConfirmChainToIsoDB()
 {
     if (nucChainIsotopes_.empty()) {
-        AppendLog("Nuclear: chain is empty — trace a chain first.");
+        AppendLog("Nuclear: chain is empty  -  trace a chain first.");
         return;
     }
 
@@ -1695,7 +1707,7 @@ void GammaFitGUI::OnNucConfirmChainToIsoDB()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PopulateNucRefTab — fill nucRefList_ with gammas classified by decay type,
+// PopulateNucRefTab  -  fill nucRefList_ with gammas classified by decay type,
 // each row carrying ENSDF author/cutoff reference info.
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::PopulateNucRefTab()
@@ -1724,9 +1736,9 @@ void GammaFitGUI::PopulateNucRefTab()
 
         std::string decayMode = iso.decayMode1.empty() ? "?" : iso.decayMode1;
 
-        // Section header row (not selectable — we mark it with negative id)
+        // Section header row (not selectable  -  we mark it with negative id)
         std::string hdr = "── " + isoID + "  [" + cls + "]  decay=" + decayMode
-                        + "  T½=" + iso.hl_str + " ──";
+                        + "  T1/2=" + iso.hl_str + " ──";
         nucRefList_->AddEntry(hdr.c_str(), -rowId);
         ++rowId;
 
@@ -1763,7 +1775,7 @@ void GammaFitGUI::PopulateNucRefTab()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnNucRefFilterChanged — re-filter the reference list
+// OnNucRefFilterChanged  -  re-filter the reference list
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucRefFilterChanged(Int_t /*id*/)
 {
@@ -1780,7 +1792,7 @@ void GammaFitGUI::OnNucRefFilterChanged(Int_t /*id*/)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnNucRefOpen — open the NuDat page for the selected gamma's isotope
+// OnNucRefOpen  -  open the NuDat page for the selected gamma's isotope
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucRefOpen()
 {
@@ -1793,7 +1805,7 @@ void GammaFitGUI::OnNucRefOpen()
         AppendLog("References: select a gamma line row (not a header)."); return;
     }
 
-    // Extract isotope ID from the row — format: "  [Class] ISOID  E keV ..."
+    // Extract isotope ID from the row  -  format: "  [Class] ISOID  E keV ..."
     // Find the isotope ID: first non-space token after ']'
     std::string isoID;
     auto bracket = txt.find(']');
@@ -1812,7 +1824,7 @@ void GammaFitGUI::OnNucRefOpen()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnNucSetHistParent — assign the typed histogram to the typed parent nucleus
+// OnNucSetHistParent  -  assign the typed histogram to the typed parent nucleus
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnNucSetHistParent()
 {
@@ -1856,12 +1868,12 @@ void GammaFitGUI::OnNucSetHistParent()
 
     histParent_[histName] = parentID;
     SaveChainCache();
-    AppendLog("References: '" + histName + "' → parent '" + parentID + "'  (saved to chain cache)");
-    SetStatus("Histogram parent set: " + histName + " → " + parentID);
+    AppendLog("References: '" + histName + "' -> parent '" + parentID + "'  (saved to chain cache)");
+    SetStatus("Histogram parent set: " + histName + " -> " + parentID);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SaveChainCache — persist decay chain + histParent_ to a .chaindat file
+// SaveChainCache  -  persist decay chain + histParent_ to a .chaindat file
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::SaveChainCache()
 {
@@ -1878,13 +1890,13 @@ void GammaFitGUI::SaveChainCache()
     std::ofstream f(path);
     if (!f.is_open()) { AppendLog("SaveChainCache: cannot write " + path); return; }
 
-    f << "# AutoGammaFit chain cache — do not edit manually\n";
+    f << "# AutoGammaFit chain cache  -  do not edit manually\n";
     f << "PARENT " << parentID << "\n";
     f << "CHAIN_SIZE " << nucChainIsotopes_.size() << "\n";
     for (size_t i = 0; i < nucChainIsotopes_.size(); i++)
         f << "CHAIN_" << i << " " << nucChainIsotopes_[i] << "\n";
 
-    // Histogram → parent mappings
+    // Histogram -> parent mappings
     for (const auto& kv : histParent_)
         f << "HIST_PARENT " << kv.first << "|" << kv.second << "\n";
 
@@ -1906,7 +1918,7 @@ void GammaFitGUI::SaveChainCache()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LoadChainCache — restore chain + histParent_ from .chaindat file
+// LoadChainCache  -  restore chain + histParent_ from .chaindat file
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::LoadChainCache()
 {

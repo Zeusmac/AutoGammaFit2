@@ -25,6 +25,9 @@
 #include "FitStorage.h"
 #include "PeakTracker.h"
 #include "FitDatabase.h"
+#include "SourceFitDatabase.h"
+#include "CalibrationModel.h"
+#include "EnergyCalibration.h"
 #include "Debug.h"
 #include "NuclearData.h"
 #include "OptionalDeps.h"
@@ -45,7 +48,7 @@ struct CustomProjDef {
     double      lo, hi;  // cut range on the non-projected axis
 };
 
-// Keyboard shortcut descriptor — one per configurable action.
+// Keyboard shortcut descriptor  -  one per configurable action.
 struct KbShortcut {
     std::string   id;           // unique action ID, e.g. "choose_peaks"
     std::string   label;        // human-readable label shown in dialog
@@ -69,6 +72,14 @@ struct SourceLine {
     int    assigned;  // index into srcPeakEs_; -1 = unassigned
 };
 
+struct SrcMatchedLine {
+    double refE;       // NNDC reference energy (keV)
+    double intensity;  // relative intensity [0,1]
+    double fittedE;    // fitted peak energy (keV), or -1 if unmatched
+    double counts;
+    double countsErr;
+};
+
 struct PeakTableRow {
     std::string histName;
     int         histIdx      = 0;
@@ -87,14 +98,14 @@ struct PeakTableRow {
     bool        needsRefit     = false;
 };
 
-// Named efficiency fit: ln(ε) = a - b·ln(E) + c·ln(E)² - d/E²
+// Named efficiency fit: ln(eff) = a - b*ln(E) + c*ln(E)^2 - d/E^2
 struct EfficiencyCache {
     std::string name;
     double a = 0.0, b = 0.0, c = 0.0, d = 0.0;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GammaFitGUI — Main interactive analysis window.
+// GammaFitGUI  -  Main interactive analysis window.
 //
 // Left panel (310 px): TGTab with "AutoFit", "Manual Fit", "Fit Results" tabs
 // Right panel         : shared spectrum canvas + log strip
@@ -136,7 +147,22 @@ public:
     void OnLoadSourceCache();
     void OnAutoIdentify();
     void OnManualAssign();
+    void RefreshSrcPeakCombo();
     void OnShowEnergyCalib();
+    // ── Energy calibration tab (Source) ───────────────────────────────────────
+    void OnAddECalHist();           // legacy helper — still used by OnAddECalFromSelected
+    void OnAddECalFromSelected();   // add single projection via ecalSrcCombo_
+    void OnAddECalFromRootFile();   // add all projections from a .root file
+    void OnRemoveECalHist();
+    void OnClearECalHists();
+    void OnFitECal();
+    void OnAcceptECal();
+    void OnRefreshECalCalibs();
+    void OnApplyECalFromAutoFit();
+    void OnApplyECalFromSource();
+    void OnApplyECalFromEfficiency();   // apply cache cal to source hist, from Efficiency sub-tab
+    // ── FWHM source cache ──────────────────────────────────────────────────────
+    void OnLoadFWHMFromSource();
     void OnShowEfficiency();
     void OnShowSourceFWHM();
     void OnActivityUnitChanged(Int_t id);
@@ -147,7 +173,40 @@ public:
     void OnSrcAutoDetectLabels();
     void OnSrcFetchNNDC();
     void OnSrcLoadLinesForTh2();
+    void OnSrcIsoComboChanged(Int_t id);
+    void OnSrcLineSearch();
+    void PopulateSourceIsoCombo();
+    void PopulateSrcIsoLines(const std::string& isoID, const std::string& filterKeV = "");
+    void OnSrcAutoMatchAll();
+    void ApplyAutoMatchToCurrentHist();
+    void OnSrcClearHistCache();
+    void OnSrcClearFileCache();
+    void OnSrcAutoFitAllProjections();
     void OnSrcAutoProjectAll();
+    void OnSrcAutoProjectInPlace();   // project all TH2 detectors into TDirs in the source file itself
+    void OnSrcSendToFitResults();      // add current source histogram to the Fit Results list
+    void OnSrcOpenCacheProjections();  // open auto-generated cache projections file
+    void OnOpenRecentSrc();                 // open a source file from the recent-files combo
+    void OnSrcHistSearch();                 // filter srcHistCombo_ by search text
+    void OnSrcHistComboChanged(Int_t id);   // histogram selected in srcHistCombo_
+    void OnSrcHistMetaSave();               // persist metadata for current histogram
+    void OnSrcPreviewTh2FromList();         // preview TH2 selected in srcTh2List_
+    void OnSrcCalcExpected();               // compute & display expected counts with equations
+
+    // ── Source 2D histogram preview and calibration ────────────────────────────
+    void OnSrcPreviewTh2();          // display/preview selected TH2
+    void OnSrcRefreshTh2Preview();   // refresh preview after selection change
+    void OnSrcToggleTh2Projection(); // toggle between 2D and 1D projection view
+    void OnSrcBuildCalibrationPlot();     // build energy vs channel from selected sources
+    void OnSrcFitCalibration();           // fit linear calibration to selected points
+    void OnSrcApplyCalibrationToHist();   // apply fitted calibration to any histogram
+    void OnSrcClearCalibration();         // clear current calibration data
+    void OnSrcSaveCalibration();          // save calibration to file
+    void OnSrcLoadCalibration();          // load calibration from file
+    void OnSrcCalibrateHist();            // apply calibration interactively to selected hist
+    void OnSrcRemoveCalibPoint(Int_t id); // remove point from calibration
+    void OnSrcToggleCalibPoint(Int_t id); // enable/disable calibration point
+    void OnPlotCalibrationPoints();        // plot energy vs channel graph
 
     // ── Fit Results tab ───────────────────────────────────────────────────────
     void OnFitResultSelected(Int_t id);
@@ -207,7 +266,7 @@ public:
     void OnResModelComboChanged();
     void OnLoadResFromHist();
 
-    // ── Channel→keV calibration ───────────────────────────────────────────────
+    // ── Channel->keV calibration ───────────────────────────────────────────────
     void OnApplyCalibration();
 
     // ── Efficiency correction ─────────────────────────────────────────────────
@@ -306,6 +365,7 @@ public:
     void OnPTDbCompare();
 
     // ── FWHM tab ──────────────────────────────────────────────────────────────
+    TGComboBox*    fwhmSrcCombo_   = nullptr;   // source histogram selector for FWHM
     void OnLoadFWHM();
     void OnRemoveFWHMHist();
     void OnClearFWHMHists();
@@ -323,6 +383,7 @@ public:
     void OnSeedParams();
     void OnPreview();
     void OnManualFit();
+    void UpdateFitEquation();
     void OnShowCompToggled();
     void OnAcceptFit();
     void OnRejectFit();
@@ -378,6 +439,9 @@ public:
     void SaveChainCache();
     void LoadChainCache();
 
+    // ── AutoFit tab: histogram search bar ────────────────────────────────────
+    void OnHistSearch();
+
     // ── AutoFit tab: parent nucleus quick-assign ──────────────────────────────
     void OnAutoFitSetHistParent();
 
@@ -404,7 +468,7 @@ private:
     bool          dbLoaded_ = false;
 
     // ── Run-time state ────────────────────────────────────────────────────────
-    std::string  launchDir_;    // CWD at construction — all cache paths anchored here
+    std::string  launchDir_;    // CWD at construction  -  all cache paths anchored here
     OptionalDeps optDeps_;      // probed once at construction
     TFile*       inputFile_   = nullptr;
     std::string  inputPath_;
@@ -422,16 +486,17 @@ private:
     // Histogram classification: "Gamma" | "Decay" | "2D"
     std::map<std::string, std::string> histClass_;
 
-    // Custom projections — created by the user with explicit cut ranges
+    // Custom projections  -  created by the user with explicit cut ranges
     std::map<std::string, CustomProjDef> customProjDefs_;
 
-    // TH2 support — main file
+    // TH2 support  -  main file
     std::set<std::string>              th2Names_;    // TH2 names in inputFile_
     std::map<std::string, std::string> projParent_;  // "name_px"/"name_py" -> parent TH2 name
 
-    // TH2 support — source file
+    // TH2 support  -  source file
     std::set<std::string>              srcTh2Names_;
     std::map<std::string, std::string> srcProjParent_;
+    std::vector<std::string>           srcDirNames_;   // directories found in source file scan
 
     // ── Shared widgets ────────────────────────────────────────────────────────
     TGStatusBar*         statusBar_ = nullptr;
@@ -452,6 +517,7 @@ private:
     TGNumberEntry* bgIterEntry_      = nullptr;
     TGNumberEntry* tspecSigmaEntry_  = nullptr;
     TGNumberEntry* tspecThreshEntry_ = nullptr;
+    TGTextEntry*   histSearchEntry_  = nullptr;  // filter for histList_
     TGListBox*     histList_         = nullptr;
     TGCheckButton* useSeedsChk_      = nullptr;
     TGCheckButton* autoLogLikChk_    = nullptr;
@@ -485,13 +551,13 @@ private:
     // S/N pre-screen threshold for AutoFit (0 = disabled)
     TGNumberEntry* snThreshEntry_     = nullptr;
 
-    // Efficiency correction parameters (ln(ε) = a - b·ln(E) + c·(ln(E))² - d/E²)
+    // Efficiency correction parameters (ln(eff) = a - b*ln(E) + c*(ln(E))^2 - d/E^2)
     TGNumberEntry* effA_              = nullptr;
     TGNumberEntry* effB_              = nullptr;
     TGNumberEntry* effC_              = nullptr;
     TGNumberEntry* effD_              = nullptr;
 
-    // Channel→keV calibration parameters (E = a + b·ch + c·ch²)
+    // Channel->keV calibration parameters (E = a + b*ch + c*ch^2)
     TGNumberEntry* calibA_            = nullptr;
     TGNumberEntry* calibB_            = nullptr;
     TGNumberEntry* calibC_            = nullptr;
@@ -513,9 +579,9 @@ private:
     struct NubaseEntry {
         std::string halflifeStr;       // human-readable, e.g. "125 ms"
         double halflifeSec  = -1.0;    // seconds; 0=stable, -1=unknown
-        double brBetaMinus  = -1.0;    // % β⁻   (-1=unknown)
-        double brBetaN      = -1.0;    // % β⁻n
-        double brBeta2N     = -1.0;    // % β⁻2n
+        double brBetaMinus  = -1.0;    // % beta-   (-1=unknown)
+        double brBetaN      = -1.0;    // % beta-n
+        double brBeta2N     = -1.0;    // % beta-2n
     };
     std::map<std::pair<int,int>, NubaseEntry> nubaseTable_;  // (Z,A) -> entry
     bool           nubaseLoaded_ = false;
@@ -538,7 +604,7 @@ private:
     std::vector<double>      isoListDbEnergy_;   // matched DB line energy (0 if none)
     std::string              isoHistName_;  // histogram whose cache is shown
     bool                     schematicDrawn_ = false;  // true after first DrawDecaySchematic call
-    // Label → class mapping (label name → class string, e.g. "Co-60" → "Parent")
+    // Label -> class mapping (label name -> class string, e.g. "Co-60" -> "Parent")
     std::map<std::string, std::string> labelClassMap_;
     // Parent nucleus info (set by user in Isotopes tab)
     std::string isoParentIsotope_;
@@ -561,7 +627,7 @@ private:
     TGTextEntry*   isoDbSearch_    = nullptr;
     TGComboBox*    isoDbClassCombo_ = nullptr;
     std::vector<int> isoDbIndices_;  // index into db_.db for each visible row
-    TGLabel*       isoIntensityInfoLbl_ = nullptr;  // shows matched decay fit A0/T½
+    TGLabel*       isoIntensityInfoLbl_ = nullptr;  // shows matched decay fit A0/T1/2
 
     // ── Nuclear tab widgets ───────────────────────────────────────────────────
     TGListBox*    nucChainList_     = nullptr;  // isotopes in the decay chain
@@ -584,8 +650,8 @@ private:
     TGListBox*    nucRefList_        = nullptr;  // gamma reference list
     TGLabel*      nucRefDetailLbl_   = nullptr;  // selected entry detail
     TGComboBox*   nucRefDecayFilter_ = nullptr;  // filter by decay class
-    // histogram → parent nucleus mapping (persisted in cache)
-    std::map<std::string, std::string> histParent_; // histName → parentNucleusID (e.g. "44S")
+    // histogram -> parent nucleus mapping (persisted in cache)
+    std::map<std::string, std::string> histParent_; // histName -> parentNucleusID (e.g. "44S")
 
     // ── Level Scheme data + widgets ───────────────────────────────────────────
     LevelSchemeData lsData_;              // current user-edited level scheme
@@ -593,8 +659,8 @@ private:
     TGListBox*     lsLevelList_       = nullptr;  // shows all levels
     TGListBox*     lsTransList_       = nullptr;  // shows all transitions
     TGNumberEntry* lsLevelEnergyEntry_= nullptr;  // E for new level (keV)
-    TGTextEntry*   lsLevelJpiEntry_   = nullptr;  // Jπ for new level
-    TGNumberEntry* lsBetaFeedEntry_   = nullptr;  // β-feeding % for selected level
+    TGTextEntry*   lsLevelJpiEntry_   = nullptr;  // Jpi for new level
+    TGNumberEntry* lsBetaFeedEntry_   = nullptr;  // beta-feeding % for selected level
     TGTextEntry*   lsBetaTypeEntry_   = nullptr;  // "GT", "Fermi", "Mixed", "1F"
     TGComboBox*    lsTransFromCombo_  = nullptr;  // from-level combo for new transition
     TGComboBox*    lsTransToCombo_    = nullptr;  // to-level combo for new transition
@@ -606,8 +672,8 @@ private:
     TGListBox*     lsBrList_          = nullptr;  // branching ratio results
     TGTextView*    lsLogFtView_       = nullptr;  // log ft / B(GT) table
     TGListBox*     lsBalanceList_     = nullptr;  // cascade balance results
-    TGNumberEntry* lsParentHlEntry_   = nullptr;  // parent T½ (s) override
-    TGNumberEntry* lsParentQbEntry_   = nullptr;  // parent Q_β (keV) override
+    TGNumberEntry* lsParentHlEntry_   = nullptr;  // parent T1/2 (s) override
+    TGNumberEntry* lsParentQbEntry_   = nullptr;  // parent Q_beta (keV) override
     TGNumberEntry* lsParentZEntry_    = nullptr;  // parent Z override
 
     // ── Peak Table tab widgets ────────────────────────────────────────────────
@@ -632,7 +698,7 @@ private:
     TGNumberEntry* ptAreaEntry_     = nullptr;  // peak area (auto-filled)
     TGNumberEntry* ptAreaErrEntry_  = nullptr;  // peak area error (auto-filled)
     TGLabel*       ptIntensityLbl_  = nullptr;  // computed intensity result
-    TGLabel*       ptDecayInfoLbl_  = nullptr;  // shows A₀/T½ after Populate
+    TGLabel*       ptDecayInfoLbl_  = nullptr;  // shows A0/T1/2 after Populate
     std::vector<EfficiencyCache> ptEffCaches_;  // loaded efficiency fits
     int            ptSelectedRow_   = -1;       // index into ptRows_ of current selection
     TGCheckButton* ptShowRefitOnly_ = nullptr;  // when on: hide refit-marked peaks (show fitted only)
@@ -644,7 +710,8 @@ private:
 
     // ── Fit Results tab widgets ───────────────────────────────────────────────
     TGListBox*           fitResultsList_ = nullptr;
-    std::vector<std::string> fittedHists_;   // parallel to fitResultsList_ entries
+    std::vector<std::string> fittedHists_;     // parallel to fitResultsList_ entries
+    std::set<std::string>    fittedSrcHists_;  // subset of fittedHists_ that came from the source tab
 
     // Canvas annotation widgets
     TGTextEntry*   frTitleEntry_  = nullptr;
@@ -665,7 +732,7 @@ private:
     TGNumberEntry* mBg1_         = nullptr;
     TGNumberEntry* mRange_       = nullptr;
     // Fit bounds (editable via Fit Parameters popup)
-    TGNumberEntry* mEnergyWin_   = nullptr;  // ± keV window for E
+    TGNumberEntry* mEnergyWin_   = nullptr;  // +/- keV window for E
     TGNumberEntry* mAmpLoFrac_   = nullptr;  // A lower = val * frac
     TGNumberEntry* mAmpHiFrac_   = nullptr;  // A upper = val * frac
     TGNumberEntry* mSigLoFrac_   = nullptr;  // sigma lower = model * frac
@@ -674,6 +741,7 @@ private:
     TGLabel*       mResultLbl_   = nullptr;
     TGTextView*    mFitParamsView_ = nullptr;  // per-parameter values + uncertainties
     TGTextView*    peakStatsView_  = nullptr;  // derived statistics per fitted peak
+    TGTextView*    fitEqView_      = nullptr;  // current fit equation display
 
     // Multi-peak
     std::vector<double>  manualPeaks_;
@@ -685,11 +753,11 @@ private:
     TGComboBox*          mPeakClass_      = nullptr;
     TGTextEntry*         mPeakCustom_     = nullptr;
 
-    // Choose Peaks mode — when ON, canvas clicks place peak seeds; default is label-pick
+    // Choose Peaks mode  -  when ON, canvas clicks place peak seeds; default is label-pick
     bool                 peakPlaceMode_   = false;
     TGTextButton*        choosePeakBtn_   = nullptr;
 
-    // Label pick (always-on default) — click on canvas to select a cached peak and relabel it
+    // Label pick (always-on default)  -  click on canvas to select a cached peak and relabel it
     std::string          labelPickKey_;          // cache key of the selected entry
     int                  labelPickGaussIdx_ = -1; // which Gaussian in that entry (-1 = whole entry)
     TGLabel*             labelPickInfo_   = nullptr;
@@ -711,11 +779,11 @@ private:
     TGCheckButton*       mTieWidthsChk_    = nullptr;  // tie sigma to resolution model
     TGCheckButton*       mTieSameSigmaChk_ = nullptr;  // force same sigma for all Gaussians
     TGComboBox*          mResModelCombo_  = nullptr;  // "Auto" | "Custom"
-    TGNumberEntry*       mResParA_        = nullptr;  // FWHM²=a+b·E+c·E² — a
+    TGNumberEntry*       mResParA_        = nullptr;  // FWHM^2=a+b*E+c*E^2  -  a
     TGNumberEntry*       mResParB_        = nullptr;  // b
     TGNumberEntry*       mResParC_        = nullptr;  // c
 
-    // BG anchor markers — two regions used to seed the linear BG
+    // BG anchor markers  -  two regions used to seed the linear BG
     TGNumberEntry*       mBgAnch1Lo_      = nullptr;
     TGNumberEntry*       mBgAnch1Hi_      = nullptr;
     TGNumberEntry*       mBgAnch2Lo_      = nullptr;
@@ -738,36 +806,89 @@ private:
     int                  rangeClickCount_ = 0;
 
     // ── Source tab widgets ────────────────────────────────────────────────────
-    TGLabel*       srcRootFileLbl_  = nullptr;
+    TGLabel*       srcRootFileLbl_      = nullptr;
+    TGComboBox*    recentSrcCombo_      = nullptr;  // recent source ROOT files
+    TGTextEntry*   srcHistSearchEntry_  = nullptr;  // filter for srcHistCombo_
     TGComboBox*    srcHistCombo_    = nullptr;
     // Detector-array (TH2) sub-group
     TGComboBox*    srcDetTh2Combo_  = nullptr;  // source TH2 selector
     TGComboBox*    srcDetAxisCombo_ = nullptr;  // which axis holds detector number
     TGNumberEntry* srcDetLoEntry_   = nullptr;  // first detector bin (0 = all)
-    TGNumberEntry* srcDetHiEntry_   = nullptr;  // last detector bin (≥ lo)
+    TGNumberEntry* srcDetHiEntry_   = nullptr;  // last detector bin (>= lo)
     TGLabel*       srcDetInfoLbl_   = nullptr;
     TH1*           srcDetHist_      = nullptr;  // owned extracted 1D slice
     // Multi-source manager
     TGListBox*     srcTh2List_       = nullptr;  // TH2 names + labels
     TGTextEntry*   srcTh2LabelEntry_ = nullptr;  // label entry for selected TH2
     TGLabel*       srcMultiSrcLbl_   = nullptr;  // status label
-    std::map<std::string, std::string> srcTh2Labels_; // th2name → isotope ID
-    std::map<std::string, NucIsotope>  srcNucDB_;     // isoID → nuclear data
-    TGCheckButton* srcBgSubChk_     = nullptr;
-    TGTextEntry*   srcTh2XLabelEntry_ = nullptr;  // axis label for TH2 X axis (source)
-    TGTextEntry*   srcTh2YLabelEntry_ = nullptr;  // axis label for TH2 Y axis (source)
-    TGNumberEntry* srcBgIterEntry_  = nullptr;
-    TGLabel*       srcFileLbl_      = nullptr;
-    TGLabel*       srcInfoLbl_      = nullptr;
-    TGComboBox*    srcActivityUnit_ = nullptr;  // 1=Bq, 2=µCi
-    TGNumberEntry* srcLiveTime_     = nullptr;
-    TGListBox*     srcLineList_     = nullptr;
-    TGNumberEntry* srcManualE_      = nullptr;
+    std::map<std::string, std::string> srcTh2Labels_; // th2name -> isotope ID
+    std::map<std::string, NucIsotope>  srcNucDB_;     // isoID -> nuclear data
+    TGCheckButton* srcBgSubChk_          = nullptr;
+    TGTextEntry*   srcTh2XLabelEntry_    = nullptr;
+    TGTextEntry*   srcTh2YLabelEntry_    = nullptr;
+    TGNumberEntry* srcBgIterEntry_       = nullptr;
+    // Extended source-tab fit options (mirror the AutoFit tab options)
+    TGNumberEntry* srcTspecSigmaEntry_   = nullptr;  // TSpectrum sigma (bins)
+    TGNumberEntry* srcTspecThreshEntry_  = nullptr;  // TSpectrum threshold
+    TGCheckButton* srcLogLikChk_         = nullptr;  // log-likelihood fit
+    TGCheckButton* srcImprovChk_         = nullptr;  // IMPROVE after MIGRAD
+    TGNumberEntry* srcSnThreshEntry_     = nullptr;  // min S/N ratio pre-screen
+    TGLabel*       srcFileLbl_        = nullptr;
+    TGLabel*       srcInfoLbl_        = nullptr;
+    TGComboBox*    srcActivityUnit_   = nullptr;  // 1=Bq, 2=uCi
+    TGNumberEntry* srcLiveTime_       = nullptr;
+    // Editable source description fields (per-histogram cache)
+    TGTextEntry*   srcIsotopeEntry_   = nullptr;  // isotope / source label
+    TGTextEntry*   srcCalDateEntry_   = nullptr;  // calibration date yyyy-mm-dd
+    TGTextEntry*   srcMeasDateEntry_  = nullptr;  // measurement date yyyy-mm-dd
+    // Equations / expected-counts display
+    TGTextView*    srcPhysicsView_    = nullptr;
+    TGComboBox*    srcIsoCombo_          = nullptr;  // isotope selector for lines browser (ID 957)
+    TGTextEntry*   srcLineSearchEntry_   = nullptr;  // energy filter for the lines list
+    TGListBox*     srcLineList_          = nullptr;
+    TGNumberEntry* srcManualE_           = nullptr;  // kept for legacy; hidden when srcPeakCombo_ present
+    TGComboBox*    srcPeakCombo_         = nullptr;  // dropdown of fitted peaks for manual assign
+
+    // ── Energy Calibration tab widgets ────────────────────────────────────────
+    TGComboBox*    ecalSrcCombo_      = nullptr;  // source histogram selector
+    TGListBox*     ecalHistList_      = nullptr;  // list of added histograms
+    TGListBox*     ecalPtList_        = nullptr;  // calibration point list
+    TGLabel*       ecalResultLbl_     = nullptr;
+    TGNumberEntry* ecalA_             = nullptr;
+    TGNumberEntry* ecalB_             = nullptr;
+    TGNumberEntry* ecalC_             = nullptr;
+    TGTextEntry*   ecalNameEntry_     = nullptr;
+    TGComboBox*    ecalApplyCombo_    = nullptr;  // saved calibration selector (src tab)
+    TGComboBox*    autoFitEcalCombo_  = nullptr;  // saved calibration selector (autofit tab)
+    TGComboBox*    effEcalCombo_      = nullptr;  // saved calibration selector (efficiency tab)
+
+    // Energy calibration data
+    std::vector<double>      ecalAllX_;           // fitted peak positions
+    std::vector<double>      ecalAllY_;           // reference energies from NNDC
+    std::vector<std::string> ecalHistSources_;    // per-point source histogram name
+    std::vector<std::string> ecalLoadedHists_;    // histograms contributing
+    double ecalFitA_ = 0.0, ecalFitB_ = 1.0, ecalFitC_ = 0.0;
 
     // Source ROOT file (separate from the main inputFile_)
     TFile*                   srcRootFile_  = nullptr;
     std::string              srcRootPath_;
+    std::vector<std::string> recentSrcFiles_;  // most-recent-first
     std::vector<std::string> srcHistNames_;
+
+    // Per-histogram source description metadata
+    struct SourceHistMeta {
+        std::string isotope;
+        std::string calDate;
+        std::string measDate;
+        double      livetime        = 1.0;
+        double      activity        = 0.0;   // Bq at calDate
+        std::string th2Parent;               // TH2 this 1D was projected from
+        std::string th2Label;                // source/isotope label of parent TH2
+        std::string sourceRootFile;          // source ROOT file the projection was derived from
+        std::string externalFile;            // if set, load histogram from this file
+        std::string pathInFile;              // path within externalFile (e.g. "Co60/Co60_det01")
+    };
+    std::map<std::string, SourceHistMeta> srcHistMeta_;  // histname -> metadata
 
     // Source description data
     std::string    srcIsotope_;
@@ -783,6 +904,34 @@ private:
     std::vector<double> srcPeakEs_;
     std::vector<double> srcPeakCounts_;
     std::vector<double> srcPeakCountsErr_;
+
+    // Per-histogram auto-match results (populated by OnSrcAutoMatchAll)
+    std::map<std::string, std::vector<SrcMatchedLine>> srcAutoMatches_;
+    
+    // ── Source Fit Database (separate cache for source spectrum fits) ─────────
+    SourceFitDatabase   srcFitDB_;
+    std::string         srcFitCachePath_ = "fit_caches/source_fits.txt";
+    
+    // ── 2D Histogram Preview ─────────────────────────────────────────────────
+    TH2*                srcTh2Preview_  = nullptr;  // current TH2 being previewed
+    bool                srcShowingTh2_  = false;    // whether 2D view is active
+    TRootEmbeddedCanvas* srcPreviewCanvas_ = nullptr;
+    
+    // ── Calibration Infrastructure ──────────────────────────────────────────
+    CalibrationBuilder  calibBuilder_;          // aggregates calibration points
+    LinearCalibrationModel currentCalibration_;  // fitted linear model
+    EnergyCalibration   energyCalibManager_;    // manages multiple calibrations
+    std::string         activeCalibName_;       // name of active calibration
+    bool                calibrationFitted_ = false;
+    
+    // ── Calibration UI Widgets ─────────────────────────────────────────────
+    TGListBox*     calibPointList_     = nullptr;  // display calibration points
+    TGNumberEntry* calibPointEnergyEntry_ = nullptr;
+    TGNumberEntry* calibPointChannelEntry_ = nullptr;
+    TGTextEntry*   calibPointSourceEntry_ = nullptr;
+    TGLabel*       calibResultsLbl_    = nullptr;  // displays fitted A, B, chi^2
+    TGCheckButton* calibUsePointChk_   = nullptr;  // enable/disable point
+    TGComboBox*    calibNameCombo_     = nullptr;  // select which calibration to use
 
     // ── FWHM tab widgets ─────────────────────────────────────────────────────
     TGComboBox*    fwhmCombo_         = nullptr;
@@ -806,7 +955,7 @@ private:
     std::vector<std::string> fwhmLoadedHists_;    // names of loaded histograms in order
     std::vector<std::string> fwhmHistSources_;    // per-point: which histogram it came from
     std::vector<double> fwhmAllX_;       // all FWHM data points (energy)
-    std::vector<double> fwhmAllY_;       // all FWHM data points (FWHM² value, keV²)
+    std::vector<double> fwhmAllY_;       // all FWHM data points (FWHM^2 value, keV^2)
     std::vector<bool>   fwhmExcluded_;   // parallel exclusion flags
     std::vector<bool>   fwhmTied_;       // true = sigma was fixed to res model
     double         fwhmChi2Ndf_   = -1.0;
@@ -823,7 +972,7 @@ private:
     TGListBox*     decayPeakList_       = nullptr;  // fitted peaks from gamma projection
     TGComboBox*    decayModelCombo_     = nullptr;
     TGComboBox*    decayBGTypeCombo_    = nullptr;  // 1=Flat, 2=Flat+Exp, 3=Exp only
-    // Half-life rows — labels are updated dynamically per model
+    // Half-life rows  -  labels are updated dynamically per model
     TGLabel*       decayThalfPLbl_      = nullptr;
     TGNumberEntry* decayThalfP_         = nullptr;
     TGCheckButton* decayFixP_           = nullptr;
@@ -834,7 +983,7 @@ private:
     TGNumberEntry* decayThalfG_         = nullptr;
     TGCheckButton* decayFixG_           = nullptr;
     TGLabel*       decayThalfBGLbl_     = nullptr;
-    TGNumberEntry* decayThalfBGExp_     = nullptr;  // T½ of exponential BG component (ms)
+    TGNumberEntry* decayThalfBGExp_     = nullptr;  // T1/2 of exponential BG component (ms)
     TGCheckButton* decayFixBGExp_       = nullptr;
     TGTextView*    decayResultView_     = nullptr;
     TGTextEntry*   decayLabelEntry_     = nullptr;
@@ -846,7 +995,7 @@ private:
     TGNumberEntry* decayRebinEntry_     = nullptr;
     TGLabel*       decayEquationLabel_  = nullptr;
 
-    // Decay fit result — stored per peak energy for the active TH2
+    // Decay fit result  -  stored per peak energy for the active TH2
     struct DecayFitResult {
         double peakE  = 0.0;
         int    model  = 0;
@@ -986,6 +1135,23 @@ private:
     void        PopulateSrcTh2List();
     std::string SourceAnalysisFileFor(const std::string& hname) const;
     void        SaveSourceAnalysis();
+    // Source histogram metadata helpers
+    std::string SrcHistMetaPath() const;
+    void        SaveSrcHistMeta();
+    void        LoadSrcHistMeta();
+    void        ApplySrcMetaToUI(const std::string& histName);
+    void        CollectSrcMetaFromUI(const std::string& histName);
+    // TH2 label persistence (Multi-Source Manager)
+    std::string SrcTh2LabelsPath() const;
+    void        SaveSrcTh2Labels();
+    void        LoadSrcTh2Labels();
+    // Source recent files
+    void        LoadRecentSrcFiles();
+    void        SaveRecentSrcFiles() const;
+    void        AddToRecentSrcFiles(const std::string& path);
+    void        RefreshRecentSrcCombo();
+    // Load a source histogram  -  checks externalFile in metadata first
+    TH1*        GetSrcHistogram(const std::string& histName, bool& owned) const;
 
     // Peak-nav helpers
     void NavigateToPeak(int idx);
@@ -1012,7 +1178,7 @@ private:
     void SaveRecentFiles() const;
     void RefreshRecentCombo();
 
-    // gnuScope export helper — returns false on I/O error
+    // gnuScope export helper  -  returns false on I/O error
     bool ExportGnuScopeFile(TH1* h, const std::string& outPath) const;
     bool ExportGnuScopeFit(TH1* h, const std::string& outPath,
                            const std::string& histName) const;

@@ -231,6 +231,43 @@ public:
         return true;
     }
 
+    // Fetch just the gammas endpoint from NNDC and compare with cached data.
+    // Returns gammas present in the live data but absent from `existing` (by
+    // energy within `tol` keV).  If new gammas are found, they are merged into
+    // `existing` and the cache file is rewritten.  Returns an empty vector when
+    // the network is unreachable or no new gammas exist.
+    static std::vector<NucGamma> CheckForNewGammas(int A, const std::string& symbol,
+                                                    NucIsotope& existing,
+                                                    const std::string& cacheDir,
+                                                    double tol = 0.5)
+    {
+        std::string nuc = "&nuclides=" + std::to_string(A) + symbol;
+        std::string url = "https://nds.iaea.org/relnsd/v1/data?fields=gammas" + nuc;
+        std::string csv = WgetToString(url);
+        if (csv.empty()) return {};
+
+        NucIsotope live;
+        ParseGammas(csv, live);
+        if (live.gammas.empty()) return {};
+
+        std::vector<NucGamma> newGammas;
+        for (const auto& lg : live.gammas) {
+            bool found = false;
+            for (const auto& eg : existing.gammas)
+                if (std::abs(lg.energy - eg.energy) < tol) { found = true; break; }
+            if (!found) newGammas.push_back(lg);
+        }
+
+        if (!newGammas.empty()) {
+            for (const auto& ng : newGammas)
+                existing.gammas.push_back(ng);
+            EnsureDir(cacheDir);
+            std::string cachePath = cacheDir + "/" + std::to_string(A) + symbol + ".nucdat";
+            SaveCache(cachePath, existing);
+        }
+        return newGammas;
+    }
+
     // ─── Parse methods (also called by LoadFromFile) ─────────────────────────
 
     static void ParseGroundStates(const std::string& csv, NucIsotope& iso) {
@@ -289,6 +326,15 @@ public:
         if (iEnergy < 0) iEnergy = ColIdx(hdr, "gamma_energy");
         int iIntens   = ColIdx(hdr, "intensity");
         if (iIntens < 0) iIntens = ColIdx(hdr, "gamma_intensity");
+        if (iIntens < 0) iIntens = ColIdx(hdr, "ia");
+        if (iIntens < 0) iIntens = ColIdx(hdr, "ig");
+        if (iIntens < 0) iIntens = ColIdx(hdr, "ri");
+        // Debug: print header if intensity column still not found
+        if (iIntens < 0 && !hdr.empty()) {
+            std::string dbg = "[NNDCFetcher] gamma CSV columns: ";
+            for (const auto& h : hdr) dbg += "'" + h + "' ";
+            std::fprintf(stderr, "%s\n", dbg.c_str());
+        }
         int iMulti    = ColIdx(hdr, "multipolarity");
         int iAuthors  = ColIdx(hdr, "ensdf_authors");
         int iCutoff   = ColIdx(hdr, "ensdf_publication_cut-off");

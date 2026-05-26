@@ -25,7 +25,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
-// ln(ε) = a - b·ln(E) + c·ln(E)² - d/E²
+// ln(eff) = a - b*ln(E) + c*ln(E)^2 - d/E^2
 static double EvalEfficiency(double E_keV, double a, double b, double c, double d) {
     if (E_keV <= 0.0) return 0.0;
     double lnE = std::log(E_keV);
@@ -33,7 +33,7 @@ static double EvalEfficiency(double E_keV, double a, double b, double c, double 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LoadIntensitySidecar — read <cachePath>_intensity.dat and populate intensity
+// LoadIntensitySidecar  -  read <cachePath>_intensity.dat and populate intensity
 // fields on matching rows.  Sidecar format:  energy  intensity  intensityErr
 // ─────────────────────────────────────────────────────────────────────────────
 static void LoadIntensitySidecar(const std::string& cachePath,
@@ -67,7 +67,7 @@ static void LoadIntensitySidecar(const std::string& cachePath,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LoadPeakCacheIntoTable — load all peaks from a cache file
+// LoadPeakCacheIntoTable  -  load all peaks from a cache file
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::LoadPeakCacheIntoTable(const std::string& cachePath,
                                           const std::string& histName)
@@ -247,9 +247,9 @@ void GammaFitGUI::BuildPeakTableTab(TGCompositeFrame* p) {
         ptShowRefitOnly_ = new TGCheckButton(sortRow, "Fitted only");
         sortRow->AddFrame(ptShowRefitOnly_, new TGLayoutHints(kLHintsCenterY, 4, 0, 0, 0));
         ptShowRefitOnly_->Connect("Toggled(Bool_t)", "GammaFitGUI", this, "OnPTRebuildTable()");
-        ptShowRefitOnly_->SetToolTipText("When checked, hide peaks marked for refit — show fitted peaks only");
+        ptShowRefitOnly_->SetToolTipText("When checked, hide peaks marked for refit  -  show fitted peaks only");
 
-        // Selectable list box — click a row to preview the peak
+        // Selectable list box  -  click a row to preview the peak
         ptTableList_ = new TGListBox(grp, 5210);
         ptTableList_->Resize(280, 220);
         grp->AddFrame(ptTableList_, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
@@ -687,7 +687,7 @@ void GammaFitGUI::OnPTRebuildTable() {
     for (size_t idx : indices)
         if (ptRows_[idx].intensity > 0.0) { anyIntensity = true; break; }
 
-    // Header row (ID=0 — clicking it is harmless; OnPTRowSelected guards id < 1)
+    // Header row (ID=0  -  clicking it is harmless; OnPTRowSelected guards id < 1)
     {
         char hdr[600];
         if (anyIntensity)
@@ -741,7 +741,7 @@ void GammaFitGUI::OnPTRebuildTable() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnPTRowSelected — preview the selected peak on the canvas
+// Slot: OnPTRowSelected  -  preview the selected peak on the canvas
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnPTRowSelected(Int_t id) {
     if (id < 1 || (size_t)id > ptFilteredRows_.size()) return;
@@ -754,7 +754,7 @@ void GammaFitGUI::OnPTRowSelected(Int_t id) {
         h = dynamic_cast<TH1*>(inputFile_->Get(r.histName.c_str()));
     }
     if (!h) {
-        // Histogram not in open file — just log the info
+        // Histogram not in open file  -  just log the info
         AppendLog(Form("PeakTable: E=%.3f keV  FWHM=%.3f  Area=%.1f +/-%.1f  %s  {%s}",
                        r.energy, r.fwhm, r.area, r.areaErr,
                        r.label.c_str(), r.histName.c_str()));
@@ -805,7 +805,7 @@ void GammaFitGUI::OnPTRowSelected(Int_t id) {
     // Compute efficiency from selected model
     if (ptEffCombo_ && ptEffValEntry_) {
         Int_t effSel = ptEffCombo_->GetSelected();
-        // effSel == 1 → Manual; effSel >= 2 → ptEffCaches_[effSel-2]
+        // effSel == 1 -> Manual; effSel >= 2 -> ptEffCaches_[effSel-2]
         if (effSel >= 2) {
             int ci = effSel - 2;
             if (ci < (int)ptEffCaches_.size()) {
@@ -955,7 +955,7 @@ void GammaFitGUI::OnPTExportCSV() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnPTScanEffCaches — load eff_caches.dat from the launch directory
+// Slot: OnPTScanEffCaches  -  load eff_caches.dat from the launch directory
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnPTScanEffCaches() {
     ptEffCaches_.clear();
@@ -989,7 +989,7 @@ void GammaFitGUI::OnPTScanEffCaches() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnPTSaveEffCache — save current effA..D params under a user-chosen name
+// Slot: OnPTSaveEffCache  -  save current effA..D params under a user-chosen name
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnPTSaveEffCache() {
     std::string name = ptEffNameEntry_ ? ptEffNameEntry_->GetText() : "";
@@ -1024,10 +1024,10 @@ void GammaFitGUI::OnPTSaveEffCache() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnPTEffSelected — recompute efficiency entry when model changes
+// Slot: OnPTEffSelected  -  recompute efficiency entry when model changes
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnPTEffSelected(Int_t id) {
-    if (id <= 1 || !ptEffValEntry_ || !ptEnergyEntry_) return;  // "Manual" → user edits
+    if (id <= 1 || !ptEffValEntry_ || !ptEnergyEntry_) return;  // "Manual" -> user edits
     int ci = id - 2;
     if (ci < 0 || ci >= (int)ptEffCaches_.size()) return;
 
@@ -1040,7 +1040,7 @@ void GammaFitGUI::OnPTEffSelected(Int_t id) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnPTCalculateIntensity — I = Area / (ε × N)
+// Slot: OnPTCalculateIntensity  -  I = Area / (eff x N)
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnPTCalculateIntensity() {
     if (!ptIntensityLbl_) return;
@@ -1078,7 +1078,7 @@ void GammaFitGUI::OnPTCalculateIntensity() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnPTSaveIntensity — save computed I ± err to sidecar file and update row
+// Slot: OnPTSaveIntensity  -  save computed I +/- err to sidecar file and update row
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnPTSaveIntensity() {
     if (ptSelectedRow_ < 0 || ptSelectedRow_ >= (int)ptRows_.size()) {
@@ -1141,7 +1141,7 @@ void GammaFitGUI::OnPTSaveIntensity() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slot: OnPTDbCompare — match all DB lines for an isotope against fitted peaks
+// Slot: OnPTDbCompare  -  match all DB lines for an isotope against fitted peaks
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnPTDbCompare() {
     if (!ptDbResultList_) return;
@@ -1155,7 +1155,7 @@ void GammaFitGUI::OnPTDbCompare() {
     }
 
     if (!dbLoaded_) {
-        ptDbResultList_->AddEntry("  (no isotope DB loaded — use Open DB button)", 1);
+        ptDbResultList_->AddEntry("  (no isotope DB loaded  -  use Open DB button)", 1);
         ptDbResultList_->MapSubwindows(); ptDbResultList_->Layout();
         return;
     }
@@ -1222,7 +1222,7 @@ void GammaFitGUI::OnPTDbCompare() {
 
     ptDbResultList_->MapSubwindows();
     ptDbResultList_->Layout();
-    AppendLog(Form("PeakTable DB: '%s' — %d lines, %d matched within %.1f keV",
+    AppendLog(Form("PeakTable DB: '%s'  -  %d lines, %d matched within %.1f keV",
                    isoName.c_str(), (int)lines.size(), nMatched, tol));
 }
 
@@ -1256,7 +1256,7 @@ void GammaFitGUI::OnPTRestoreMissing() {
     struct dirent* ent;
     while ((ent = readdir(bd)) != nullptr) {
         std::string name(ent->d_name);
-        // Only process .dat cache files (not _intensity.dat sidecars — those come with the main file)
+        // Only process .dat cache files (not _intensity.dat sidecars  -  those come with the main file)
         if (name.size() < 5 || name.substr(name.size() - 4) != ".dat") continue;
         if (name.size() > 14 && name.substr(name.size() - 14) == "_intensity.dat") continue;
 
@@ -1266,7 +1266,7 @@ void GammaFitGUI::OnPTRestoreMissing() {
         std::string sideBack   = backPath  + "_intensity.dat";
 
         struct stat st;
-        if (::stat(mainPath.c_str(), &st) == 0) continue;  // already exists — skip
+        if (::stat(mainPath.c_str(), &st) == 0) continue;  // already exists  -  skip
 
         if (copyFile(backPath, mainPath)) {
             ++nRestored;
@@ -1279,10 +1279,10 @@ void GammaFitGUI::OnPTRestoreMissing() {
     closedir(bd);
 
     if (nRestored > 0) {
-        AppendLog(Form("[Restore] %d cache(s) restored. Rescanning…", nRestored));
+        AppendLog(Form("[Restore] %d cache(s) restored. Rescanning...", nRestored));
         OnPTScanAll();
     } else {
-        AppendLog("[Restore] No missing caches found — everything is present.");
+        AppendLog("[Restore] No missing caches found  -  everything is present.");
     }
 }
 
@@ -1316,7 +1316,7 @@ void GammaFitGUI::OnPTPopulate()
     if (decRes && decRes->params.size() >= 2) {
         double A0     = decRes->params[0];
         double T_half = decRes->params[1];
-        // Total population = integral of exponential from 0→∞ = A₀ × T½ / ln(2)
+        // Total population = integral of exponential from 0->inf = A0 x T1/2 / ln(2)
         double N = A0 * T_half / 0.6931471805599453;
         if (ptPopulationEntry_) ptPopulationEntry_->SetNumber(N);
         char buf[160];
@@ -1354,5 +1354,5 @@ void GammaFitGUI::OnPTPreviewPeak()
     }
     // Fallback: call directly with the stored row data
     OnPTRowSelected(-1);  // will be a no-op; log it
-    AppendLog("[Preview] Selected row not in current filtered view — click Rebuild first.");
+    AppendLog("[Preview] Selected row not in current filtered view  -  click Rebuild first.");
 }

@@ -71,15 +71,15 @@ void GammaFitGUI::BuildFitResultsTab(TGCompositeFrame* p)
     gsExportBtn->Connect("Clicked()", "GammaFitGUI", this, "OnExportGnuScope()");
     gsExportBtn->SetToolTipText(
         "Export the currently displayed histogram to gnuScope binary format.\n"
-        "1D histograms → .spe (Fortran unformatted float array)\n"
-        "2D histograms → .sqr (square matrix, same format as dump_square_asym.C)");
+        "1D histograms -> .spe (Fortran unformatted float array)\n"
+        "2D histograms -> .sqr (square matrix, same format as dump_square_asym.C)");
 
     TGTextButton* gsExportAllBtn = new TGTextButton(gsg, "Export All Histograms to Folder...");
     gsg->AddFrame(gsExportAllBtn, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 4));
     gsExportAllBtn->Connect("Clicked()", "GammaFitGUI", this, "OnExportGnuScopeAll()");
     gsExportAllBtn->SetToolTipText(
         "Batch-export every loaded histogram to gnuScope format in a chosen folder.\n"
-        "1D → <histname>.spe,  2D → <histname>.sqr");
+        "1D -> <histname>.spe,  2D -> <histname>.sqr");
 
     // ── Canvas Annotations ────────────────────────────────────────────────────
     TGGroupFrame* annGrp = new TGGroupFrame(p, "Canvas Annotations");
@@ -133,7 +133,7 @@ void GammaFitGUI::BuildFitResultsTab(TGCompositeFrame* p)
 
 void GammaFitGUI::OnFitResultSelected(Int_t id)
 {
-    // id may be 0 when the button fires without a selection — use list selection
+    // id may be 0 when the button fires without a selection  -  use list selection
     if (id < 1) id = fitResultsList_->GetSelected();
     if (id < 1 || id > (Int_t)fittedHists_.size()) return;
     ShowFitResult(fittedHists_[id - 1]);
@@ -157,10 +157,16 @@ void GammaFitGUI::ShowFitResult(const std::string& hname)
         return;
     }
 
-    if (!inputFile_) return;
     if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+
     bool rawOwned = false;
-    TH1* raw = LoadHistFromFile(hname, rawOwned);
+    TH1* raw = nullptr;
+    if (fittedSrcHists_.count(hname)) {
+        raw = GetSrcHistogram(hname, rawOwned);
+    } else {
+        if (!inputFile_) return;
+        raw = LoadHistFromFile(hname, rawOwned);
+    }
     if (!raw) return;
 
     // Keep currentHist_ / rawHist_ consistent so residuals & nav work
@@ -296,9 +302,15 @@ void GammaFitGUI::SaveFitResultToFile(const std::string& hname, TFile* fout)
         return;
     }
 
-    if (!inputFile_) return;
+    bool isSrc = fittedSrcHists_.count(hname) > 0;
     bool rawOwned2 = false;
-    TH1* raw = LoadHistFromFile(hname, rawOwned2);
+    TH1* raw = nullptr;
+    if (isSrc) {
+        raw = GetSrcHistogram(hname, rawOwned2);
+    } else {
+        if (!inputFile_) return;
+        raw = LoadHistFromFile(hname, rawOwned2);
+    }
     if (!raw) return;
 
     FitDatabase fitdb;
@@ -314,7 +326,10 @@ void GammaFitGUI::SaveFitResultToFile(const std::string& hname, TFile* fout)
 
     Bool_t wasBatch = gROOT->IsBatch();
     gROOT->SetBatch(kTRUE);
-    TCanvas* csave = new TCanvas(Form("c_%s", hname.c_str()), hname.c_str(), 1200, 800);
+    // Sanitise canvas name (ROOT keys cannot contain '/')
+    std::string safeName = hname;
+    std::replace(safeName.begin(), safeName.end(), '/', '_');
+    TCanvas* csave = new TCanvas(Form("c_%s", safeName.c_str()), hname.c_str(), 1200, 800);
     gROOT->SetBatch(wasBatch);
     csave->cd();
 
@@ -326,7 +341,44 @@ void GammaFitGUI::SaveFitResultToFile(const std::string& hname, TFile* fout)
 
     fout->cd();
     csave->Write();
-    hbg->Write(Form("%s_bgsub", hname.c_str()));
+    hbg->Write(Form("%s_bgsub", safeName.c_str()));
+
+    // ── Metadata objects ──────────────────────────────────────────────────────
+    // BG subtraction provenance
+    {
+        std::string bgDesc;
+        if (fitdb.bgSubtracted)
+            bgDesc = "type=R-reverse_background_subtraction  iterations=" +
+                     std::to_string(fitdb.bgIterations);
+        else
+            bgDesc = "type=TSpectrum_standard  iterations=" +
+                     std::to_string(fitdb.bgIterations);
+        TNamed bgMeta("bg_subtraction", bgDesc.c_str());
+        bgMeta.Write();
+    }
+    // Source histogram label and provenance (if sent from source tab)
+    if (isSrc) {
+        auto mit = srcHistMeta_.find(hname);
+        if (mit != srcHistMeta_.end()) {
+            const SourceHistMeta& m = mit->second;
+            if (!m.isotope.empty()) {
+                TNamed lbl("isotope_label", m.isotope.c_str());
+                lbl.Write();
+            }
+            // Full provenance string
+            std::string prov = "histogram=" + hname;
+            if (!m.isotope.empty())   prov += "  isotope=" + m.isotope;
+            if (!m.calDate.empty())   prov += "  cal_date=" + m.calDate;
+            if (!m.measDate.empty())  prov += "  meas_date=" + m.measDate;
+            if (m.livetime > 0)       prov += "  livetime_s=" + std::to_string(m.livetime);
+            if (m.activity > 0)       prov += "  activity_Bq=" + std::to_string(m.activity);
+            if (!m.th2Parent.empty()) prov += "  th2_parent=" + m.th2Parent;
+            if (!m.th2Label.empty())  prov += "  th2_label=" + m.th2Label;
+            if (!m.sourceRootFile.empty()) prov += "  source_file=" + m.sourceRootFile;
+            TNamed provMeta("source_provenance", prov.c_str());
+            provMeta.Write();
+        }
+    }
 
     delete hbg;
     delete csave;
@@ -378,7 +430,7 @@ void GammaFitGUI::OnSaveAll()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnExportCacheCSV — column-picker popup then write CSV
+// OnExportCacheCSV  -  column-picker popup then write CSV
 // ─────────────────────────────────────────────────────────────────────────────
 
 void GammaFitGUI::OnExportCacheCSV()
@@ -395,6 +447,7 @@ void GammaFitGUI::OnExportCacheCSV()
     struct ColDef { const char* label; bool def; };
     static const ColDef kCols[] = {
         { "Histogram",            true  },
+        { "Isotope label",        true  },
         { "Centroid (keV)",       true  },
         { "Centroid error (keV)", true  },
         { "Sigma (keV)",          true  },
@@ -408,6 +461,8 @@ void GammaFitGUI::OnExportCacheCSV()
         { "Chi2/NDF",             true  },
         { "BG constant",          false },
         { "BG slope",             false },
+        { "BG subtraction type",  true  },
+        { "BG iterations",        true  },
         { "Match isotope",        false },
         { "Match energy (keV)",   false },
         { "Match distance (keV)", false },
@@ -427,7 +482,7 @@ void GammaFitGUI::OnExportCacheCSV()
     btnRow->AddFrame(okBtn,  new TGLayoutHints(kLHintsLeft, 0, 8, 0, 0));
     btnRow->AddFrame(canBtn, new TGLayoutHints(kLHintsLeft));
 
-    // Unmap (hide) the window on button press — WaitForUnmap returns while
+    // Unmap (hide) the window on button press  -  WaitForUnmap returns while
     // the C++ objects are still alive, so chk[] is safe to read afterwards.
     // WaitFor would return only after deletion, making chk[] dangling.
     okBtn ->Connect("Clicked()", "TGFrame", dlg, "UnmapWindow()");
@@ -463,11 +518,13 @@ void GammaFitGUI::OnExportCacheCSV()
 
     // Header row
     const char* kColNames[] = {
-        "histogram", "centroid_keV", "centroid_err_keV",
+        "histogram", "isotope_label",
+        "centroid_keV", "centroid_err_keV",
         "sigma_keV", "sigma_err_keV", "fwhm_keV", "fwhm_err_keV",
         "peak_area", "peak_area_err",
         "label", "classification", "chi2ndf",
         "bg_constant", "bg_slope",
+        "bg_subtraction_type", "bg_iterations",
         "match_isotope", "match_energy_keV", "match_distance_keV"
     };
     bool first = true;
@@ -479,27 +536,42 @@ void GammaFitGUI::OnExportCacheCSV()
     }
     csv << "\n";
 
-    // Resolve which histogram to export: selected in the list, else current
-    Int_t selId = fitResultsList_ ? fitResultsList_->GetSelected() : -1;
-    std::string exportHist;
-    if (selId >= 1 && selId <= (Int_t)fittedHists_.size())
-        exportHist = fittedHists_[selId - 1];
-    else if (!currentHist_.empty())
-        exportHist = currentHist_;
-    else {
-        AppendLog("Select a histogram from the Fitted Histograms list first.");
-        return;
+    // Collect all histograms to export: every entry in fittedHists_, plus
+    // current histogram if the list is empty, to preserve old behaviour.
+    std::vector<std::string> toExport = fittedHists_;
+    if (toExport.empty()) {
+        if (!currentHist_.empty())
+            toExport.push_back(currentHist_);
+        else {
+            AppendLog("No fitted histograms to export  -  load or fit a histogram first.");
+            return;
+        }
     }
 
-    // Data: load the selected histogram's cache → write one row per peak
     const double kSqrt2Pi = 2.5066282746310002;
     int rowCount = 0;
-    {
-        const std::string& hname = exportHist;
+
+    for (const auto& hname : toExport) {
+        // Skip FWHM pseudo-entries  -  they have no peak table
+        if (hname.size() > strlen(kFwhmPrefix) &&
+            hname.substr(0, strlen(kFwhmPrefix)) == kFwhmPrefix) continue;
+
         FitDatabase fdb;
         fdb.Load(CacheFileFor(hname));
+
+        // Isotope label from source metadata (if sent from source tab)
+        std::string isotopeLabel;
+        {
+            auto mit = srcHistMeta_.find(hname);
+            if (mit != srcHistMeta_.end()) isotopeLabel = mit->second.isotope;
+        }
+
+        // BG subtraction description
+        std::string bgTypeStr = fdb.bgSubtracted
+            ? "R-reverse" : "TSpectrum-standard";
+
         for (const auto& kv : fdb.GetEntries()) {
-            if (!kv.first.empty() && kv.first[0] == '_') continue;  // skip internal keys
+            if (!kv.first.empty() && kv.first[0] == '_') continue;
             const FitEntry& e = kv.second;
             FitLayout lay = DetectLayout((int)e.params.size());
             if (!lay.valid()) continue;
@@ -524,52 +596,48 @@ void GammaFitGUI::OnExportCacheCSV()
                 double fwhm    = 2.3548 * sig;
                 double fwhmErr = 2.3548 * serr;
 
-                // Per-Gaussian label/class (falls back to entry-level if not set)
                 std::string peakLbl = e.PeakLabel(i);
                 std::string peakCls = e.PeakClass(i);
 
-                // Nearest DB match for this Gaussian
                 std::string matchIso;
                 double matchDbE = 0.0, matchDist = 0.0;
                 if (dbLoaded_) {
                     double bestD = std::numeric_limits<double>::max();
                     for (const auto& gl : db_.db) {
                         double d = std::fabs(gl.energy - E);
-                        if (d < bestD) {
-                            bestD = d; matchIso = gl.isotope; matchDbE = gl.energy;
-                        }
+                        if (d < bestD) { bestD = d; matchIso = gl.isotope; matchDbE = gl.energy; }
                     }
                     matchDist = (matchDbE > 0) ? E - matchDbE : 0.0;
                 }
 
                 bool fr = true;
-                auto w = [&](const std::string& v) {
-                    if (!fr) csv << ",";
-                    csv << v;
-                    fr = false;
-                };
+                auto w  = [&](const std::string& v) { if (!fr) csv << ","; csv << v; fr = false; };
                 auto wf = [&](double v) { w(Form("%.6g", v)); };
+                auto wi = [&](int    v) { w(std::to_string(v)); };
 
                 for (int c = 0; c < NC; c++) {
                     if (!sel[c]) continue;
                     switch (c) {
-                        case  0: w(hname);   break;
-                        case  1: wf(E);      break;
-                        case  2: wf(Eerr);   break;
-                        case  3: wf(sig);    break;
-                        case  4: wf(serr);   break;
-                        case  5: wf(fwhm);   break;
-                        case  6: wf(fwhmErr);break;
-                        case  7: wf(area);   break;
-                        case  8: wf(areaErr);break;
-                        case  9: w(peakLbl); break;
-                        case 10: w(peakCls); break;
-                        case 11: wf(e.chi2ndf < 1e15 ? e.chi2ndf : -1.0); break;
-                        case 12: wf(bg0);    break;
-                        case 13: wf(bg1);    break;
-                        case 14: w(matchIso);     break;
-                        case 15: wf(matchDbE);    break;
-                        case 16: wf(matchDist);   break;
+                        case  0: w(hname);         break;
+                        case  1: w(isotopeLabel);  break;
+                        case  2: wf(E);            break;
+                        case  3: wf(Eerr);         break;
+                        case  4: wf(sig);          break;
+                        case  5: wf(serr);         break;
+                        case  6: wf(fwhm);         break;
+                        case  7: wf(fwhmErr);      break;
+                        case  8: wf(area);         break;
+                        case  9: wf(areaErr);      break;
+                        case 10: w(peakLbl);       break;
+                        case 11: w(peakCls);       break;
+                        case 12: wf(e.chi2ndf < 1e15 ? e.chi2ndf : -1.0); break;
+                        case 13: wf(bg0);          break;
+                        case 14: wf(bg1);          break;
+                        case 15: w(bgTypeStr);     break;
+                        case 16: wi(fdb.bgIterations); break;
+                        case 17: w(matchIso);      break;
+                        case 18: wf(matchDbE);     break;
+                        case 19: wf(matchDist);    break;
                     }
                 }
                 csv << "\n";
@@ -579,9 +647,9 @@ void GammaFitGUI::OnExportCacheCSV()
     }
 
     csv.close();
-    AppendLog(Form("CSV export: %d rows [%s] -> %s",
-                   rowCount, exportHist.c_str(), outPath.c_str()));
-    SetStatus(Form("Exported %d peaks to CSV", rowCount));
+    AppendLog(Form("CSV export: %d rows, %d histograms -> %s",
+                   rowCount, (int)toExport.size(), outPath.c_str()));
+    SetStatus(Form("Exported %d peaks (%d hists) to CSV", rowCount, (int)toExport.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -590,11 +658,11 @@ void GammaFitGUI::OnExportCacheCSV()
 // Both formats use Fortran sequential unformatted records:
 //   [4-byte record length] [data] [4-byte record length]
 //
-// 1D (.spe): single record — nchans floats (bins 1..N, overflows excluded)
+// 1D (.spe): single record  -  nchans floats (bins 1..N, overflows excluded)
 //
 // 2D (.sqr): two records
-//   Record 1 (header): 3 ints → maxxy, 0 (unused), 0 (type=square)
-//   Record 2 (data):   maxxy×maxxy floats, row-major (matches dump_square_asym.C)
+//   Record 1 (header): 3 ints -> maxxy, 0 (unused), 0 (type=square)
+//   Record 2 (data):   maxxyxmaxxy floats, row-major (matches dump_square_asym.C)
 
 bool GammaFitGUI::ExportGnuScopeFile(TH1* h, const std::string& outPath) const
 {
@@ -610,7 +678,7 @@ bool GammaFitGUI::ExportGnuScopeFile(TH1* h, const std::string& outPath) const
         int  nY   = h2->GetNbinsY();
         int  maxxy = std::max(nX, nY);
 
-        // Record 1 — header (3 ints)
+        // Record 1  -  header (3 ints)
         int hdrLen = static_cast<int>(sizeof(int) * 3);
         int code   = 0;
         writeInt(hdrLen);
@@ -619,7 +687,7 @@ bool GammaFitGUI::ExportGnuScopeFile(TH1* h, const std::string& outPath) const
         writeInt(code);   // type 0 = square
         writeInt(hdrLen);
 
-        // Record 2 — data (maxxy × maxxy floats, zero-padded beyond histogram edges)
+        // Record 2  -  data (maxxy x maxxy floats, zero-padded beyond histogram edges)
         int datLen = static_cast<int>(sizeof(float)) * maxxy * maxxy;
         writeInt(datLen);
         for (int i = 1; i <= maxxy; i++) {
@@ -632,7 +700,7 @@ bool GammaFitGUI::ExportGnuScopeFile(TH1* h, const std::string& outPath) const
         }
         writeInt(datLen);
     } else {
-        // 1D — two records: header (nchans) then data
+        // 1D  -  two records: header (nchans) then data
         int nX     = h->GetNbinsX();
         int datLen = nX * static_cast<int>(sizeof(float));
         // Record 1: channel count (single int)
@@ -675,7 +743,7 @@ bool GammaFitGUI::ExportGnuScopeFit(TH1* h, const std::string& histName,
 
         double xlo = entry.xlo, xhi = entry.xhi;
         if (xlo >= xhi) {
-            // Fall back to ±6σ around the outermost peaks using stored energies
+            // Fall back to +/-6sig around the outermost peaks using stored energies
             std::vector<double> peakE;
             std::istringstream ss(key);
             std::string tok;
@@ -751,20 +819,20 @@ void GammaFitGUI::OnExportGnuScope()
         if (is2D) {
             TH2* h2 = static_cast<TH2*>(h);
             int maxxy = std::max(h2->GetNbinsX(), h2->GetNbinsY());
-            AppendLog(Form("[GnuScope] %s: 2D %dx%d → %dx%d square → %s",
+            AppendLog(Form("[GnuScope] %s: 2D %dx%d -> %dx%d square -> %s",
                            currentHist_.c_str(),
                            h2->GetNbinsX(), h2->GetNbinsY(),
                            maxxy, maxxy, outPath.c_str()));
         } else {
-            AppendLog(Form("[GnuScope] %s: 1D %d channels → %s",
+            AppendLog(Form("[GnuScope] %s: 1D %d channels -> %s",
                            currentHist_.c_str(), h->GetNbinsX(), outPath.c_str()));
-            // Companion fit spectrum — strip extension and add _fit.spe
+            // Companion fit spectrum  -  strip extension and add _fit.spe
             std::string fitPath = outPath;
             if (fitPath.size() >= 4 && fitPath.substr(fitPath.size()-4) == ".spe")
                 fitPath = fitPath.substr(0, fitPath.size()-4);
             fitPath += "_fit.spe";
             if (ExportGnuScopeFit(h, currentHist_, fitPath))
-                AppendLog("[GnuScope] Fit curve → " + fitPath);
+                AppendLog("[GnuScope] Fit curve -> " + fitPath);
         }
         SetStatus("gnuScope export: " + outPath);
     } else {
@@ -813,12 +881,12 @@ void GammaFitGUI::OnExportGnuScopeAll()
         std::string outPath = dir + "/" + safe + (is2D ? ".sqr" : ".spe");
         bool ok = ExportGnuScopeFile(h, outPath);
         if (ok) {
-            AppendLog("[GnuScope] " + hname + " → " + outPath);
+            AppendLog("[GnuScope] " + hname + " -> " + outPath);
             nOk++;
             if (!is2D) {
                 std::string fitPath = dir + "/" + safe + "_fit.spe";
                 if (ExportGnuScopeFit(h, hname, fitPath))
-                    AppendLog("[GnuScope]   fit → " + fitPath);
+                    AppendLog("[GnuScope]   fit -> " + fitPath);
             }
         } else {
             AppendLog("[GnuScope] FAILED: " + hname);
@@ -828,7 +896,7 @@ void GammaFitGUI::OnExportGnuScopeAll()
         gSystem->ProcessEvents();
     }
 
-    AppendLog(Form("[GnuScope] Batch export complete: %d OK, %d failed → %s",
+    AppendLog(Form("[GnuScope] Batch export complete: %d OK, %d failed -> %s",
                    nOk, nErr, dir.c_str()));
     SetStatus(Form("gnuScope: %d exported to %s", nOk, dir.c_str()));
 }

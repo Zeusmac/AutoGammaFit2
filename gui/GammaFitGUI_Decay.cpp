@@ -28,7 +28,7 @@
 // File-scope decay model helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Map model ID → signal type (1=Parent, 2=Daughter, 3=Granddaughter, 4=BGonly)
+// Map model ID -> signal type (1=Parent, 2=Daughter, 3=Granddaughter, 4=BGonly)
 static int DecaySignalType(int modelId) {
     if (modelId == 4) return 4;
     if (modelId == 1) return 1;
@@ -54,13 +54,13 @@ static int DecayBGNpar(int bgType) {
 
 // Factory: build a TF1 for any (modelId, bgType) combination.
 // Parameter layout: [signal params...] [BG params...]
-//   signal params: sig==1 → A, T_P
-//                  sig==2 → A, T_P, T_D
-//                  sig==3 → A, T_P, T_D, T_G
-//                  sig==4 → (none)
-//   BG params:     bgType==1 → BG
-//                  bgType==2 → BG_flat, A_bg, T_bg
-//                  bgType==3 → A_bg, T_bg
+//   signal params: sig==1 -> A, T_P
+//                  sig==2 -> A, T_P, T_D
+//                  sig==3 -> A, T_P, T_D, T_G
+//                  sig==4 -> (none)
+//   BG params:     bgType==1 -> BG
+//                  bgType==2 -> BG_flat, A_bg, T_bg
+//                  bgType==3 -> A_bg, T_bg
 static TF1* BuildDecayTF1(const char* name, int modelId, int bgType,
                            double xlo, double xhi)
 {
@@ -133,7 +133,7 @@ static TF1* BuildDecayTF1(const char* name, int modelId, int bgType,
 }
 
 
-// Shared helper: build T½ row with saved label pointer
+// Shared helper: build T1/2 row with saved label pointer
 static void AddHalfLifeRow(TGCompositeFrame* par, const char* lbl,
                             TGLabel*& lblPtr, TGNumberEntry*& entry,
                             TGCheckButton*& fix, double defVal = 100.0)
@@ -158,8 +158,8 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
     p->AddFrame(decaySubTabs_, new TGLayoutHints(kLHintsExpandX | kLHintsExpandY));
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Sub-tab 1: Cuts — TH2 selection, asymmetric peak cut, peak list, rebin,
-    //            peak counts vs time, decay model + T½ fitter, fit results
+    // Sub-tab 1: Cuts  -  TH2 selection, asymmetric peak cut, peak list, rebin,
+    //            peak counts vs time, decay model + T1/2 fitter, fit results
     // ═══════════════════════════════════════════════════════════════════════════
     {
         TGCompositeFrame* tf = decaySubTabs_->AddTab("Cuts");
@@ -215,14 +215,14 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
             // Asymmetric sigma window ─────────────────────────────────────────
             TGHorizontalFrame* sigRow = new TGHorizontalFrame(grp);
             grp->AddFrame(sigRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
-            sigRow->AddFrame(new TGLabel(sigRow, "Cut Lo σ:"),
+            sigRow->AddFrame(new TGLabel(sigRow, "Cut Lo sig:"),
                              new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
             decaySigLoEntry_ = new TGNumberEntry(sigRow, 1.0, 5, -1,
                                                  TGNumberFormat::kNESRealFour,
                                                  TGNumberFormat::kNEAPositive);
             decaySigLoEntry_->SetWidth(55);
             sigRow->AddFrame(decaySigLoEntry_, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
-            sigRow->AddFrame(new TGLabel(sigRow, "Hi σ:"),
+            sigRow->AddFrame(new TGLabel(sigRow, "Hi sig:"),
                              new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
             decaySigRangeEntry_ = new TGNumberEntry(sigRow, 1.0, 5, -1,
                                                     TGNumberFormat::kNESRealFour,
@@ -322,13 +322,13 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
                                new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
             decayModelCombo_ = new TGComboBox(modelRow, 803);
             decayModelCombo_->AddEntry("Parent + BG",              1);
-            decayModelCombo_->AddEntry("Daughter (β⁻) + BG",       2);
-            decayModelCombo_->AddEntry("Granddaughter (β⁻) + BG",  3);
+            decayModelCombo_->AddEntry("Daughter (beta-) + BG",       2);
+            decayModelCombo_->AddEntry("Granddaughter (beta-) + BG",  3);
             decayModelCombo_->AddEntry("Background only",          4);
-            decayModelCombo_->AddEntry("Daughter (β⁻n) + BG",      5);
-            decayModelCombo_->AddEntry("Daughter (β⁻2n) + BG",     6);
-            decayModelCombo_->AddEntry("Granddaughter (β⁻n)+BG",   7);
-            decayModelCombo_->AddEntry("Granddaughter (β⁻2n)+BG",  8);
+            decayModelCombo_->AddEntry("Daughter (beta-n) + BG",      5);
+            decayModelCombo_->AddEntry("Daughter (beta-2n) + BG",     6);
+            decayModelCombo_->AddEntry("Granddaughter (beta-n)+BG",   7);
+            decayModelCombo_->AddEntry("Granddaughter (beta-2n)+BG",  8);
             decayModelCombo_->Select(1, kFALSE);
             decayModelCombo_->Resize(200, 22);
             modelRow->AddFrame(decayModelCombo_, new TGLayoutHints(kLHintsLeft));
@@ -354,10 +354,10 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
             grp->AddFrame(decayEquationLabel_,
                           new TGLayoutHints(kLHintsExpandX, 6, 2, 2, 4));
 
-            AddHalfLifeRow(grp, "T½ Parent:",    decayThalfPLbl_, decayThalfP_,    decayFixP_);
-            AddHalfLifeRow(grp, "T½ Daughter:",  decayThalfDLbl_, decayThalfD_,    decayFixD_);
-            AddHalfLifeRow(grp, "T½ GDaughter:", decayThalfGLbl_, decayThalfG_,    decayFixG_);
-            AddHalfLifeRow(grp, "T½ Exp BG:",    decayThalfBGLbl_,decayThalfBGExp_,decayFixBGExp_, 1000.0);
+            AddHalfLifeRow(grp, "T1/2 Parent:",    decayThalfPLbl_, decayThalfP_,    decayFixP_);
+            AddHalfLifeRow(grp, "T1/2 Daughter:",  decayThalfDLbl_, decayThalfD_,    decayFixD_);
+            AddHalfLifeRow(grp, "T1/2 GDaughter:", decayThalfGLbl_, decayThalfG_,    decayFixG_);
+            AddHalfLifeRow(grp, "T1/2 Exp BG:",    decayThalfBGLbl_,decayThalfBGExp_,decayFixBGExp_, 1000.0);
             decayThalfBGExp_->SetState(kFALSE);
             if (decayFixBGExp_) decayFixBGExp_->SetEnabled(kFALSE);
 
@@ -366,11 +366,11 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
             TGTextButton* autoBtn = new TGTextButton(autoRow, " Auto Model ");
             autoRow->AddFrame(autoBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
             autoBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecayAutoModel()");
-            autoBtn->SetToolTipText("Auto-select model from classification; seeds T½.");
-            TGTextButton* seedBtn = new TGTextButton(autoRow, " Seed T½ ");
+            autoBtn->SetToolTipText("Auto-select model from classification; seeds T1/2.");
+            TGTextButton* seedBtn = new TGTextButton(autoRow, " Seed T1/2 ");
             autoRow->AddFrame(seedBtn, new TGLayoutHints(kLHintsLeft));
             seedBtn->Connect("Clicked()", "GammaFitGUI", this, "OnDecaySeedHalfLives()");
-            seedBtn->SetToolTipText("Seed T½ from nuclear DB (traverses chain).");
+            seedBtn->SetToolTipText("Seed T1/2 from nuclear DB (traverses chain).");
 
             {
                 TGHorizontalFrame* rr = new TGHorizontalFrame(grp);
@@ -410,7 +410,7 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
     } // end Cuts sub-tab
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Sub-tab 2: Total Decay — sum multiple peaks, Bateman fit, population
+    // Sub-tab 2: Total Decay  -  sum multiple peaks, Bateman fit, population
     // ═══════════════════════════════════════════════════════════════════════════
     {
         TGCompositeFrame* tf = decaySubTabs_->AddTab("Total Decay");
@@ -443,13 +443,13 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
                                new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
             decayTdModelCombo_ = new TGComboBox(modelRow, 810);
             decayTdModelCombo_->AddEntry("Parent + BG",              1);
-            decayTdModelCombo_->AddEntry("Daughter (β⁻) + BG",       2);
-            decayTdModelCombo_->AddEntry("Granddaughter (β⁻) + BG",  3);
+            decayTdModelCombo_->AddEntry("Daughter (beta-) + BG",       2);
+            decayTdModelCombo_->AddEntry("Granddaughter (beta-) + BG",  3);
             decayTdModelCombo_->AddEntry("Background only",          4);
-            decayTdModelCombo_->AddEntry("Daughter (β⁻n) + BG",      5);
-            decayTdModelCombo_->AddEntry("Daughter (β⁻2n) + BG",     6);
-            decayTdModelCombo_->AddEntry("Granddaughter (β⁻n)+BG",   7);
-            decayTdModelCombo_->AddEntry("Granddaughter (β⁻2n)+BG",  8);
+            decayTdModelCombo_->AddEntry("Daughter (beta-n) + BG",      5);
+            decayTdModelCombo_->AddEntry("Daughter (beta-2n) + BG",     6);
+            decayTdModelCombo_->AddEntry("Granddaughter (beta-n)+BG",   7);
+            decayTdModelCombo_->AddEntry("Granddaughter (beta-2n)+BG",  8);
             decayTdModelCombo_->Select(1, kFALSE);
             decayTdModelCombo_->Resize(200, 22);
             modelRow->AddFrame(decayTdModelCombo_, new TGLayoutHints(kLHintsLeft));
@@ -475,10 +475,10 @@ void GammaFitGUI::BuildDecayTab(TGCompositeFrame* p)
             grp->AddFrame(decayTdEquationLbl_,
                           new TGLayoutHints(kLHintsExpandX, 6, 2, 2, 4));
 
-            AddHalfLifeRow(grp, "T½ Parent:",    decayTdPLbl_, decayTdThalfP_,    decayTdFixP_);
-            AddHalfLifeRow(grp, "T½ Daughter:",  decayTdDLbl_, decayTdThalfD_,    decayTdFixD_);
-            AddHalfLifeRow(grp, "T½ GDaughter:", decayTdGLbl_, decayTdThalfG_,    decayTdFixG_);
-            AddHalfLifeRow(grp, "T½ Exp BG:",    decayTdBGLbl_,decayTdThalfBGExp_,decayTdFixBGExp_, 1000.0);
+            AddHalfLifeRow(grp, "T1/2 Parent:",    decayTdPLbl_, decayTdThalfP_,    decayTdFixP_);
+            AddHalfLifeRow(grp, "T1/2 Daughter:",  decayTdDLbl_, decayTdThalfD_,    decayTdFixD_);
+            AddHalfLifeRow(grp, "T1/2 GDaughter:", decayTdGLbl_, decayTdThalfG_,    decayTdFixG_);
+            AddHalfLifeRow(grp, "T1/2 Exp BG:",    decayTdBGLbl_,decayTdThalfBGExp_,decayTdFixBGExp_, 1000.0);
             decayTdThalfBGExp_->SetState(kFALSE);
             if (decayTdFixBGExp_) decayTdFixBGExp_->SetEnabled(kFALSE);
 
@@ -559,44 +559,44 @@ void GammaFitGUI::OnDecayModelChanged(Int_t id)
     static const char* kEq[] = {
         "",
         "f(t) = A*exp(-ln2*t/T_P) + BG",                              // 1 Parent
-        "f(t) = A*lD/(lD-lP)*(e^-lP*t - e^-lD*t) + BG",             // 2 Daughter β⁻
-        "f(t) = A*lP*lD*lG*Sum[e^-li*t/(prod)] + BG",                // 3 GDaughter β⁻
+        "f(t) = A*lD/(lD-lP)*(e^-lP*t - e^-lD*t) + BG",             // 2 Daughter beta-
+        "f(t) = A*lP*lD*lG*Sum[e^-li*t/(prod)] + BG",                // 3 GDaughter beta-
         "f(t) = BG  (constant background)",                            // 4 BG only
-        "f(t) = Daughter Bateman [β⁻n chain] + BG",                   // 5 Daughter β⁻n
-        "f(t) = Daughter Bateman [β⁻2n chain] + BG",                  // 6 Daughter β⁻2n
-        "f(t) = GDaughter Bateman [β⁻n chain] + BG",                  // 7 GDaughter β⁻n
-        "f(t) = GDaughter Bateman [β⁻2n chain] + BG",                 // 8 GDaughter β⁻2n
+        "f(t) = Daughter Bateman [beta-n chain] + BG",                   // 5 Daughter beta-n
+        "f(t) = Daughter Bateman [beta-2n chain] + BG",                  // 6 Daughter beta-2n
+        "f(t) = GDaughter Bateman [beta-n chain] + BG",                  // 7 GDaughter beta-n
+        "f(t) = GDaughter Bateman [beta-2n chain] + BG",                 // 8 GDaughter beta-2n
     };
     if (id >= 1 && id <= 8) {
         decayEquationLabel_->SetText(kEq[id]);
         decayEquationLabel_->Layout();
     }
 
-    // Update T½ row labels to reflect the chain
+    // Update T1/2 row labels to reflect the chain
     if (decayThalfPLbl_ && decayThalfDLbl_ && decayThalfGLbl_) {
         switch (id) {
             case 5:
-                decayThalfPLbl_->SetText("T½ β⁻n product:");
-                decayThalfDLbl_->SetText("T½ Daughter:");
+                decayThalfPLbl_->SetText("T1/2 beta-n product:");
+                decayThalfDLbl_->SetText("T1/2 Daughter:");
                 break;
             case 6:
-                decayThalfPLbl_->SetText("T½ β⁻2n product:");
-                decayThalfDLbl_->SetText("T½ Daughter:");
+                decayThalfPLbl_->SetText("T1/2 beta-2n product:");
+                decayThalfDLbl_->SetText("T1/2 Daughter:");
                 break;
             case 7:
-                decayThalfPLbl_->SetText("T½ Parent:");
-                decayThalfDLbl_->SetText("T½ β⁻n product:");
-                decayThalfGLbl_->SetText("T½ GDaughter:");
+                decayThalfPLbl_->SetText("T1/2 Parent:");
+                decayThalfDLbl_->SetText("T1/2 beta-n product:");
+                decayThalfGLbl_->SetText("T1/2 GDaughter:");
                 break;
             case 8:
-                decayThalfPLbl_->SetText("T½ Parent:");
-                decayThalfDLbl_->SetText("T½ β⁻2n product:");
-                decayThalfGLbl_->SetText("T½ GDaughter:");
+                decayThalfPLbl_->SetText("T1/2 Parent:");
+                decayThalfDLbl_->SetText("T1/2 beta-2n product:");
+                decayThalfGLbl_->SetText("T1/2 GDaughter:");
                 break;
             default:
-                decayThalfPLbl_->SetText("T½ Parent:");
-                decayThalfDLbl_->SetText("T½ Daughter:");
-                decayThalfGLbl_->SetText("T½ GDaughter:");
+                decayThalfPLbl_->SetText("T1/2 Parent:");
+                decayThalfDLbl_->SetText("T1/2 Daughter:");
+                decayThalfGLbl_->SetText("T1/2 GDaughter:");
                 break;
         }
     }
@@ -628,7 +628,7 @@ void GammaFitGUI::OnDecayAutoModel()
         std::string lbl = decayLabelEntry_->GetText();
         if (labelClassMap_.count(lbl)) cls = labelClassMap_.at(lbl);
     }
-    // Map classification string → model ID
+    // Map classification string -> model ID
     static const struct { const char* key; int model; } kMap[] = {
         {"Granddaughter",       3},
         {"GDaughter",           3},
@@ -651,7 +651,7 @@ void GammaFitGUI::OnDecayAutoModel()
         return;
     }
     if (decayModelCombo_) decayModelCombo_->Select(model, kTRUE);
-    AppendLog(Form("[Decay] Auto model: '%s' → model %d", cls.c_str(), model));
+    AppendLog(Form("[Decay] Auto model: '%s' -> model %d", cls.c_str(), model));
     OnDecaySeedHalfLives();
 }
 
@@ -670,7 +670,7 @@ void GammaFitGUI::OnDecaySeedHalfLives()
         // Try exact key
         auto it = nuclearDB_.find(id);
         if (it != nuclearDB_.end() && it->second.halflife_s > 0)
-            return it->second.halflife_s * 1000.0;  // s → ms
+            return it->second.halflife_s * 1000.0;  // s -> ms
         // Try without spaces
         std::string clean = id;
         clean.erase(std::remove(clean.begin(), clean.end(), ' '), clean.end());
@@ -682,7 +682,7 @@ void GammaFitGUI::OnDecaySeedHalfLives()
 
     double T_this = findHl(lbl);
     if (T_this <= 0) {
-        AppendLog(Form("[Decay] '%s' not found in nuclear DB — seed manually", lbl.c_str()));
+        AppendLog(Form("[Decay] '%s' not found in nuclear DB  -  seed manually", lbl.c_str()));
         return;
     }
 
@@ -715,7 +715,7 @@ void GammaFitGUI::OnDecaySeedHalfLives()
         }
         default: break;
     }
-    AppendLog(Form("[Decay] Seeded T½ for '%s' = %.4g ms", lbl.c_str(), T_this));
+    AppendLog(Form("[Decay] Seeded T1/2 for '%s' = %.4g ms", lbl.c_str(), T_this));
 }
 
 void GammaFitGUI::OnLoadDecayCache()
@@ -744,7 +744,7 @@ void GammaFitGUI::OnSaveDecayCache()
     }
     SaveDecayFitCache();
     std::string path = DecayCacheFileFor();
-    AppendLog(Form("[Decay] Saved %d fit(s) → %s",
+    AppendLog(Form("[Decay] Saved %d fit(s) -> %s",
                    (int)decayFitStore_.size(), path.c_str()));
     SetStatus("Decay cache saved: " + decayTh2Name_);
 }
@@ -891,14 +891,14 @@ void GammaFitGUI::OnDecayPeakSelected(Int_t id)
         return;  // done
     }
 
-    // ── No stored fit — reset sigma windows to 1.0 and show gamma preview ──────
+    // ── No stored fit  -  reset sigma windows to 1.0 and show gamma preview ──────
     if (decaySigRangeEntry_) decaySigRangeEntry_->SetNumber(1.0);
     if (decaySigLoEntry_)    decaySigLoEntry_->SetNumber(1.0);
     OnDecayPreviewGammaPeak();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnDecayPreviewGammaPeak — show gamma spectrum zoomed to selected peak with cut
+// OnDecayPreviewGammaPeak  -  show gamma spectrum zoomed to selected peak with cut
 // ─────────────────────────────────────────────────────────────────────────────
 void GammaFitGUI::OnDecayPreviewGammaPeak()
 {
@@ -907,7 +907,7 @@ void GammaFitGUI::OnDecayPreviewGammaPeak()
         AppendLog("[Decay] Select a peak first"); return;
     }
     if (!inputFile_ || decayTh2Name_.empty()) {
-        AppendLog("[Decay] No TH2 loaded — run Refresh first"); return;
+        AppendLog("[Decay] No TH2 loaded  -  run Refresh first"); return;
     }
 
     double E      = decayPeakEs_[peakSel - 1];
@@ -1048,19 +1048,19 @@ void GammaFitGUI::OnFitDecay()
     double eMax = E + NsigHi * sig;
 
     if (axisId == 1) {
-        // Gamma on X → project onto Y axis
+        // Gamma on X -> project onto Y axis
         int b1 = h2->GetXaxis()->FindBin(eMin);
         int b2 = h2->GetXaxis()->FindBin(eMax);
         hDecay = h2->ProjectionY(Form("hDecay_%.1f", E), b1, b2);
     } else {
-        // Gamma on Y → project onto X axis
+        // Gamma on Y -> project onto X axis
         int b1 = h2->GetYaxis()->FindBin(eMin);
         int b2 = h2->GetYaxis()->FindBin(eMax);
         hDecay = h2->ProjectionX(Form("hDecay_%.1f", E), b1, b2);
     }
 
     if (!hDecay || hDecay->GetEntries() == 0) {
-        AppendLog("[Decay] Projection is empty — check TH2 and peak selection");
+        AppendLog("[Decay] Projection is empty  -  check TH2 and peak selection");
         return;
     }
     hDecay->SetDirectory(nullptr);
@@ -1245,14 +1245,14 @@ void GammaFitGUI::OnFitDecay()
     if (sigType != 4) {  // signal-bearing models only
         int    npar = fDecay->GetNpar();
         double A    = fDecay->GetParameter(0);              // amplitude (counts/bin at t=0)
-        double TP   = fDecay->GetParameter(1);              // parent T½ (ms)
+        double TP   = fDecay->GetParameter(1);              // parent T1/2 (ms)
         double BG   = fDecay->GetParameter(nSig);           // flat BG param
         double binW = hDecay->GetBinWidth(1);               // ms per bin
         const double ln2 = 0.6931471805599453;
 
         // ── (1) Counts in fit window ────────────────────────────────────────
         // ∫[xlo,xhi] (f(t) - BG) dt / binW
-        // BG cancels analytically (∂signal/∂BG = 0), so zero BG row/col in cov.
+        // BG cancels analytically (dsignal/dBG = 0), so zero BG row/col in cov.
         double totalInteg   = fDecay->Integral(xlo, xhi);
         double windowCounts = (totalInteg - BG * (xhi - xlo)) / binW;
 
@@ -1272,9 +1272,9 @@ void GammaFitGUI::OnFitDecay()
             }
         }
 
-        // ── (2) Extrapolated total: N₀ = A · τ_P / binW ────────────────────
+        // ── (2) Extrapolated total: N0 = A * tau_P / binW ────────────────────
         // For all models (Parent, Daughter, Granddaughter), integrating the
-        // signal from 0 → ∞ gives A · τ_P regardless of daughter half-lives.
+        // signal from 0 -> inf gives A * tau_P regardless of daughter half-lives.
         // This is the total number of peak counts the full decay would produce.
         double tau       = (TP > 0) ? TP / ln2 : 0.0;
         double totalN0   = (tau > 0 && binW > 0) ? A * tau / binW : -1.0;
@@ -1283,10 +1283,10 @@ void GammaFitGUI::OnFitDecay()
         if (totalN0 > 0 && fitRes.Get() && fitRes->IsValid()) {
             const TMatrixDSym& cov = fitRes->GetCovarianceMatrix();
             if (cov.GetNrows() == npar && A > 0 && TP > 0) {
-                // σ²(N₀) = (τ/bw)²·σA² + (A/(ln2·bw))²·σTP²
-                //         + 2·(τ/bw)·(A/(ln2·bw))·cov(A,TP)
-                double dA  = tau / binW;             // ∂N₀/∂A
-                double dTP = A / (ln2 * binW);       // ∂N₀/∂TP
+                // sig^2(N0) = (tau/bw)^2*sigA^2 + (A/(ln2*bw))^2*sigTP^2
+                //         + 2*(tau/bw)*(A/(ln2*bw))*cov(A,TP)
+                double dA  = tau / binW;             // dN0/dA
+                double dTP = A / (ln2 * binW);       // dN0/dTP
                 double varN = dA*dA*cov(0,0)
                             + dTP*dTP*cov(1,1)
                             + 2.0*dA*dTP*cov(0,1);
@@ -1305,25 +1305,25 @@ void GammaFitGUI::OnFitDecay()
         if (totalN0 > 0) {
             if (totalErr > 0.0)
                 decayResultView_->AddLine(
-                    Form("Total peak counts (0→∞):     %.0f +/- %.0f", totalN0, totalErr));
+                    Form("Total peak counts (0->inf):     %.0f +/- %.0f", totalN0, totalErr));
             else
                 decayResultView_->AddLine(
-                    Form("Total peak counts (0→∞):     %.0f", totalN0));
+                    Form("Total peak counts (0->inf):     %.0f", totalN0));
             decayResultView_->AddLine(
                 Form("  [A=%.4g, T1/2=%.4g ms, tau=%.4g ms, bw=%.4g ms]",
                      A, TP, tau, binW));
         }
     }
 
-    // Informational model note — does NOT write classification to gamma cache
+    // Informational model note  -  does NOT write classification to gamma cache
     if (fitRes.Get() && fitRes->Status() == 0) {
         static const char* kModelCls[] = {
-            "", "Parent", "Daughter(β⁻)", "GDaughter(β⁻)", "Background",
-            "Daughter(β⁻n)", "Daughter(β⁻2n)", "GDaughter(β⁻n)", "GDaughter(β⁻2n)"
+            "", "Parent", "Daughter(beta-)", "GDaughter(beta-)", "Background",
+            "Daughter(beta-n)", "Daughter(beta-2n)", "GDaughter(beta-n)", "GDaughter(beta-2n)"
         };
         if (modelId >= 1 && modelId <= 8)
             decayResultView_->AddLine(
-                Form("  → Model: %s  bgType:%d  (Isotopes tab to set classification)",
+                Form("  -> Model: %s  bgType:%d  (Isotopes tab to set classification)",
                      kModelCls[modelId], bgType));
     }
     decayResultView_->ShowBottom();
@@ -1422,7 +1422,7 @@ void GammaFitGUI::LoadDecayFitCache()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnPreviewDecay — show decay projection without fitting
+// OnPreviewDecay  -  show decay projection without fitting
 // ─────────────────────────────────────────────────────────────────────────────
 
 void GammaFitGUI::OnPreviewDecay()
@@ -1486,7 +1486,7 @@ void GammaFitGUI::OnPreviewDecay()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnDecayApplyLabel — save label/class from Decay tab fields to gamma cache
+// OnDecayApplyLabel  -  save label/class from Decay tab fields to gamma cache
 // ─────────────────────────────────────────────────────────────────────────────
 
 void GammaFitGUI::OnDecayApplyLabel()
@@ -1520,7 +1520,7 @@ void GammaFitGUI::OnDecayApplyLabel()
     fdb.Save(CacheFileFor(cacheName));
     BackupCacheFile(CacheFileFor(cacheName));
     AppendLog("[Decay] Saved label=" + e.label + "  class=" + e.classification +
-              "  → " + key);
+              "  -> " + key);
     OnRefreshDecayPeaks();
 }
 
@@ -1623,7 +1623,7 @@ void GammaFitGUI::OnMakePeakCountVsTime()
 
     if (tCenter.empty()) {
         if (sliceFile) { sliceFile->Close(); delete sliceFile; }
-        AppendLog("[Decay] No successful slice fits — try wider window or larger slice width");
+        AppendLog("[Decay] No successful slice fits  -  try wider window or larger slice width");
         return;
     }
 
@@ -1667,7 +1667,7 @@ void GammaFitGUI::OnDecayRebinReset()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OnDecayScanCaches — populate cache picker with all non-decay .dat files
+// OnDecayScanCaches  -  populate cache picker with all non-decay .dat files
 // ─────────────────────────────────────────────────────────────────────────────
 
 void GammaFitGUI::OnDecayScanCaches()
@@ -1716,7 +1716,7 @@ void GammaFitGUI::OnDecayScanCaches()
     decayCacheCombo_->Layout();
 
     if (names.empty())
-        AppendLog("[Decay] No fit caches found — run AutoFit on a histogram first");
+        AppendLog("[Decay] No fit caches found  -  run AutoFit on a histogram first");
     else
         AppendLog(Form("[Decay] Found %d cache(s)", (int)names.size()));
 }
@@ -1734,10 +1734,10 @@ void GammaFitGUI::OnDecayTdModelChanged(Int_t id)
         "f(t) = A*lD/(lD-lP)*(e^-lP*t - e^-lD*t) + BG",
         "f(t) = A*lP*lD*lG*Sum[e^-li*t/(prod)] + BG",
         "f(t) = BG  (background only)",
-        "f(t) = Daughter Bateman [β⁻n chain] + BG",
-        "f(t) = Daughter Bateman [β⁻2n chain] + BG",
-        "f(t) = GDaughter Bateman [β⁻n chain] + BG",
-        "f(t) = GDaughter Bateman [β⁻2n chain] + BG",
+        "f(t) = Daughter Bateman [beta-n chain] + BG",
+        "f(t) = Daughter Bateman [beta-2n chain] + BG",
+        "f(t) = GDaughter Bateman [beta-n chain] + BG",
+        "f(t) = GDaughter Bateman [beta-2n chain] + BG",
     };
     if (id >= 1 && id <= 8) {
         decayTdEquationLbl_->SetText(kEq[id]);
@@ -1746,27 +1746,27 @@ void GammaFitGUI::OnDecayTdModelChanged(Int_t id)
     if (decayTdPLbl_ && decayTdDLbl_ && decayTdGLbl_) {
         switch (id) {
             case 5:
-                decayTdPLbl_->SetText("T½ β⁻n product:");
-                decayTdDLbl_->SetText("T½ Daughter:");
+                decayTdPLbl_->SetText("T1/2 beta-n product:");
+                decayTdDLbl_->SetText("T1/2 Daughter:");
                 break;
             case 6:
-                decayTdPLbl_->SetText("T½ β⁻2n product:");
-                decayTdDLbl_->SetText("T½ Daughter:");
+                decayTdPLbl_->SetText("T1/2 beta-2n product:");
+                decayTdDLbl_->SetText("T1/2 Daughter:");
                 break;
             case 7:
-                decayTdPLbl_->SetText("T½ Parent:");
-                decayTdDLbl_->SetText("T½ β⁻n product:");
-                decayTdGLbl_->SetText("T½ GDaughter:");
+                decayTdPLbl_->SetText("T1/2 Parent:");
+                decayTdDLbl_->SetText("T1/2 beta-n product:");
+                decayTdGLbl_->SetText("T1/2 GDaughter:");
                 break;
             case 8:
-                decayTdPLbl_->SetText("T½ Parent:");
-                decayTdDLbl_->SetText("T½ β⁻2n product:");
-                decayTdGLbl_->SetText("T½ GDaughter:");
+                decayTdPLbl_->SetText("T1/2 Parent:");
+                decayTdDLbl_->SetText("T1/2 beta-2n product:");
+                decayTdGLbl_->SetText("T1/2 GDaughter:");
                 break;
             default:
-                decayTdPLbl_->SetText("T½ Parent:");
-                decayTdDLbl_->SetText("T½ Daughter:");
-                decayTdGLbl_->SetText("T½ GDaughter:");
+                decayTdPLbl_->SetText("T1/2 Parent:");
+                decayTdDLbl_->SetText("T1/2 Daughter:");
+                decayTdGLbl_->SetText("T1/2 GDaughter:");
                 break;
         }
     }
@@ -1784,7 +1784,7 @@ void GammaFitGUI::OnFitTotalDecay()
 {
     if (!inputFile_) { AppendLog("[TotalDecay] No ROOT file loaded"); return; }
     if (decayTh2Name_.empty()) { AppendLog("[TotalDecay] Run 'Refresh' in Cuts tab first"); return; }
-    if (decayPeakEs_.empty())  { AppendLog("[TotalDecay] No peaks loaded — refresh in Cuts tab"); return; }
+    if (decayPeakEs_.empty())  { AppendLog("[TotalDecay] No peaks loaded  -  refresh in Cuts tab"); return; }
 
     TH2* h2 = (TH2*)inputFile_->Get(decayTh2Name_.c_str());
     if (!h2) { AppendLog("[TotalDecay] TH2 not found"); return; }
@@ -2008,14 +2008,14 @@ void GammaFitGUI::OnFitTotalDecay()
                 decayTdResultView_->AddLine("─────────────────────────────────");
                 if (totalErr > 0)
                     decayTdResultView_->AddLine(
-                        Form("Total peak counts (0→∞):  %.0f +/- %.0f", Ntot, totalErr));
+                        Form("Total peak counts (0->inf):  %.0f +/- %.0f", Ntot, totalErr));
                 else
                     decayTdResultView_->AddLine(
-                        Form("Total peak counts (0→∞):  %.0f", Ntot));
+                        Form("Total peak counts (0->inf):  %.0f", Ntot));
                 decayTdResultView_->AddLine(
-                    Form("  [A=%.4g  T½=%.4g ms  τ=%.4g ms  bw=%.4g ms]",
+                    Form("  [A=%.4g  T1/2=%.4g ms  tau=%.4g ms  bw=%.4g ms]",
                          A, TP2, tau, binW));
-                // Population = total parent decays N = A*τ/bw summed over peaks
+                // Population = total parent decays N = A*tau/bw summed over peaks
                 // (this already IS N for the total projection)
                 decayTdResultView_->AddLine(
                     Form("Population (N_parent decays): %.4g", Ntot));
@@ -2086,7 +2086,7 @@ void GammaFitGUI::SaveTotalDecayFitCache()
     out << r.model << " " << r.bgType << " " << np;
     for (int i = 0; i < np; i++) out << " " << r.params[i] << " " << r.errors[i];
     out << " " << r.chi2ndf << " " << r.status << "\n";
-    AppendLog("[TotalDecay] Cache saved → " + path);
+    AppendLog("[TotalDecay] Cache saved -> " + path);
 }
 
 void GammaFitGUI::LoadTotalDecayFitCache()
@@ -2114,7 +2114,7 @@ void GammaFitGUI::LoadTotalDecayFitCache()
         ss >> decayTdFitResult_.chi2ndf >> decayTdFitResult_.status;
         decayTdFitResult_.histName = decayTh2Name_;
         decayTdFitValid_ = true;
-        // Seed T½ entries in the Total Decay tab
+        // Seed T1/2 entries in the Total Decay tab
         int sig = DecaySignalType(model);
         if (sig >= 1 && np >= 2 && decayTdThalfP_) decayTdThalfP_->SetNumber(decayTdFitResult_.params[1]);
         if (sig >= 2 && np >= 3 && decayTdThalfD_) decayTdThalfD_->SetNumber(decayTdFitResult_.params[2]);

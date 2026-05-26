@@ -50,6 +50,25 @@ void GammaFitGUI::BuildFWHMTab(TGCompositeFrame* p)
             "You can add as many histograms as you like; each gets a distinct color.");
     }
 
+    // Source histogram row (adds from source tab caches)
+    {
+        TGHorizontalFrame* srcRow = new TGHorizontalFrame(hg);
+        hg->AddFrame(srcRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+        srcRow->AddFrame(new TGLabel(srcRow, "Source hist:"),
+                         new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        fwhmSrcCombo_ = new TGComboBox(srcRow, 801);
+        fwhmSrcCombo_->AddEntry("(open source file)", 1);
+        fwhmSrcCombo_->Select(1, kFALSE);
+        fwhmSrcCombo_->Resize(130, 22);
+        srcRow->AddFrame(fwhmSrcCombo_, new TGLayoutHints(kLHintsExpandX, 0, 4, 0, 0));
+        TGTextButton* addSrcBtn = new TGTextButton(srcRow, " Add ");
+        srcRow->AddFrame(addSrcBtn, new TGLayoutHints(kLHintsLeft));
+        addSrcBtn->Connect("Clicked()", "GammaFitGUI", this, "OnLoadFWHMFromSource()");
+        addSrcBtn->SetToolTipText(
+            "Add FWHM points from the selected source histogram's fit cache\n"
+            "to the combined FWHM vs Energy plot.");
+    }
+
     // Loaded-histogram list with Remove / Clear All
     fwhmHistList_ = new TGListBox(hg, -1);
     fwhmHistList_->Resize(290, 58);
@@ -135,7 +154,7 @@ void GammaFitGUI::BuildFWHMTab(TGCompositeFrame* p)
         "  FWHM_stat = 2.344 * sqrt(F * w * E)\n"
         "  F = 0.12  (Ge Fano factor)\n"
         "  w = 2.96 eV  (mean energy per electron-hole pair in Ge)\n"
-        "This is the best resolution physically achievable — limited only by\n"
+        "This is the best resolution physically achievable  -  limited only by\n"
         "charge-carrier counting statistics.  Your actual FWHM exceeds this\n"
         "due to electronic noise (a term) and charge-trapping (c term).");
 
@@ -196,7 +215,7 @@ void GammaFitGUI::BuildFWHMTab(TGCompositeFrame* p)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FWHM tab — load, fit, accept, display helpers
+// FWHM tab  -  load, fit, accept, display helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Color palette and marker styles for per-histogram coloring (up to 8 sources).
@@ -208,7 +227,7 @@ static const int kFWHMMarkers[]    = { 20, 21, 22, 23, 33, 29, 34, 20 };
 static const int kNFWHMPalette     = 8;
 
 // Draw the FWHM plot onto any canvas.  All objects are heap-allocated and the
-// canvas takes ownership via Draw() — do NOT delete them afterwards.
+// canvas takes ownership via Draw()  -  do NOT delete them afterwards.
 // fwhmTF1_ is NEVER drawn directly; fresh TF1 expressions are created here so
 // that fwhmTF1_ stays fully under our control and safe to access later.
 void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine,
@@ -242,7 +261,7 @@ void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine
 
     // ── Build per-source point sets (included) + global excluded/tied buckets ─
     // Excluded and tied points are always gray/orange regardless of source so
-    // the included→excluded toggle is immediately obvious.
+    // the included->excluded toggle is immediately obvious.
     struct SrcPoints { std::vector<double> x, y, ex, ey; };
     std::map<std::string, SrcPoints> srcIncl;
     std::vector<double> xEx, yEx;
@@ -287,7 +306,7 @@ void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine
         frame->GetYaxis()->SetTitleOffset(1.2);
     }
 
-    // ── Included points — one TGraphErrors per source histogram ──────────────
+    // ── Included points  -  one TGraphErrors per source histogram ──────────────
     // Order of drawing follows fwhmLoadedHists_ so colors are stable.
     const std::vector<std::string>& order =
         fwhmLoadedHists_.empty() ? std::vector<std::string>{fwhmHistName_}
@@ -413,7 +432,7 @@ void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine
         }
         leg->Draw();
     } else if (hasTied) {
-        // Single-source with tied points — minimal legend
+        // Single-source with tied points  -  minimal legend
         TLegend* leg = new TLegend(0.12, 0.80, 0.45, 0.91);
         leg->SetBorderSize(1); leg->SetFillStyle(1001); leg->SetTextSize(0.030);
         TGraph* gL1 = new TGraph(1); gL1->SetMarkerStyle(20); gL1->SetMarkerColor(kBlue+1); gL1->SetMarkerSize(0.9);
@@ -471,7 +490,7 @@ void GammaFitGUI::OnLoadFWHM()
 
     FitDatabase fitdb;
     if (!fitdb.Load(CacheFileFor(hname))) {
-        AppendLog("No cache found for " + hname + " — run AutoFit first.");
+        AppendLog("No cache found for " + hname + "  -  run AutoFit first.");
         return;
     }
 
@@ -497,7 +516,7 @@ void GammaFitGUI::OnLoadFWHM()
 
     if (fwhmAllX_.size() == insertStart) {
         AppendLog("No fitted peaks in cache for " + hname +
-                  " — run AutoFit or accept manual fits first.");
+                  "  -  run AutoFit or accept manual fits first.");
         return;
     }
 
@@ -628,13 +647,13 @@ void GammaFitGUI::OnFitFWHM()
     }
 
     // Build a graph from non-excluded points only.
-    // fwhmAllY_ holds FWHM² (keV²); error = 10% of FWHM² (propagated from 5% FWHM).
+    // fwhmAllY_ holds FWHM^2 (keV^2); error = 10% of FWHM^2 (propagated from 5% FWHM).
     std::vector<double> xIn, yIn, exIn, eyIn;
     for (size_t i = 0; i < fwhmAllX_.size(); i++) {
         if (fwhmExcluded_[i]) continue;
-        double y = fwhmAllY_[i];  // FWHM²
+        double y = fwhmAllY_[i];  // FWHM^2
         xIn.push_back(fwhmAllX_[i]); yIn.push_back(y);
-        exIn.push_back(0.0); eyIn.push_back(0.10 * y);  // δ(FWHM²) = 2·FWHM·δFWHM ≈ 0.10·FWHM²
+        exIn.push_back(0.0); eyIn.push_back(0.10 * y);  // d(FWHM^2) = 2*FWHM*dFWHM ~= 0.10*FWHM^2
     }
     if ((int)xIn.size() < 3) {
         AppendLog("Need at least 3 included points to fit (currently " +
@@ -645,9 +664,9 @@ void GammaFitGUI::OnFitFWHM()
     double xhi = *std::max_element(xIn.begin(), xIn.end()) * 1.15;
 
     // Auto-seed from data so the fit starts close to the correct answer.
-    // The dominant term is b*E (charge-carrier statistics): b ≈ FWHM²/E.
+    // The dominant term is b*E (charge-carrier statistics): b ~= FWHM^2/E.
     // Take the median across all included points so outliers don't skew it.
-    // Noise floor: a ≈ FWHM²_lowest - b * E_lowest, clamped ≥ 0.
+    // Noise floor: a ~= FWHM^2_lowest - b * E_lowest, clamped >= 0.
     // Charge-trapping term c starts at 0 (usually tiny for good detectors).
     double aSeed, bSeed, cSeed;
     {
@@ -656,7 +675,7 @@ void GammaFitGUI::OnFitFWHM()
             pts.push_back({xIn[i], yIn[i]});
         std::sort(pts.begin(), pts.end());
 
-        // yIn values are FWHM² — b ≈ FWHM²/E at high energy (dominant term)
+        // yIn values are FWHM^2  -  b ~= FWHM^2/E at high energy (dominant term)
         std::vector<double> bEsts;
         for (const auto& [E, fwhm2] : pts)
             if (E > 10.0) bEsts.push_back(fwhm2 / E);
@@ -665,7 +684,7 @@ void GammaFitGUI::OnFitFWHM()
                               : bEsts[bEsts.size() / 2];
 
         double E0   = pts.front().first;
-        double fw0  = pts.front().second;   // fw0 is FWHM²
+        double fw0  = pts.front().second;   // fw0 is FWHM^2
         aSeed = std::max(1e-4, fw0 - bSeed * E0);
         cSeed = 0.0;
     }
@@ -709,10 +728,10 @@ void GammaFitGUI::OnFitFWHM()
     fwhmChi2Ndf_  = (ndf > 0) ? chi2 / ndf : -1.0;
     fwhmPValue_   = (ndf > 0) ? TMath::Prob(chi2, ndf) : -1.0;
 
-    // Residual RMS: RMS of (data - model) / data  (both in FWHM² space)
+    // Residual RMS: RMS of (data - model) / data  (both in FWHM^2 space)
     double rmsSum = 0.0; int rmsN = 0;
     for (size_t i = 0; i < xIn.size(); i++) {
-        double pred = fwhmTF1_->Eval(xIn[i]);   // FWHM² predicted
+        double pred = fwhmTF1_->Eval(xIn[i]);   // FWHM^2 predicted
         if (pred > 0 && yIn[i] > 0) {
             double pull = (yIn[i] - pred) / yIn[i];
             rmsSum += pull * pull;
