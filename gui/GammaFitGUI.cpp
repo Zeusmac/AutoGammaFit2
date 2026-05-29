@@ -72,6 +72,7 @@ GammaFitGUI::GammaFitGUI(const TGWindow* p, UInt_t w, UInt_t h)
     BuildFitResultsTab(ctrlTab->AddTab("Fit Results"));
     BuildPeakTableTab (ctrlTab->AddTab("Peak Table"));
     BuildNuclearTab   (ctrlTab->AddTab("Nuclear"));
+    BuildMLTab        (ctrlTab->AddTab("ML"));
 
     // ── RIGHT: canvas + log ───────────────────────────────────────────────────
     TGVerticalFrame* right = new TGVerticalFrame(main, w - 206, h - 25);
@@ -623,7 +624,7 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
     p->AddFrame(bgGrpAuto, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
 
     bgSubtractChk_ = new TGCheckButton(bgGrpAuto, "Enable TSpectrum background removal");
-    bgSubtractChk_->SetState(kButtonDown);
+    bgSubtractChk_->SetState(kButtonUp);
     bgGrpAuto->AddFrame(bgSubtractChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 2, 2));
     bgSubtractChk_->SetToolTipText(
         "Subtract the estimated background from the spectrum before fitting.\n"
@@ -711,6 +712,68 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
             "Minimum peak height as a fraction of the tallest peak (0.001-0.99).\n"
             "Lower = finds weaker peaks. Default 0.02 = peaks >= 2% of max.");
     }
+
+    // ── ML Peak Finder ────────────────────────────────────────────────────────
+    TGGroupFrame* mlGrp = new TGGroupFrame(p, "ML Peak Finder");
+    p->AddFrame(mlGrp, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+
+    useMLChk_ = new TGCheckButton(mlGrp, "Use ML peak finder");
+    mlGrp->AddFrame(useMLChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 2, 2));
+    useMLChk_->SetToolTipText(
+        "Replace TSpectrum background estimation and peak detection with\n"
+        "trained ML models (ml/bg_model.onnx, ml/peak_model.onnx).\n"
+        "Requires USE_ONNX=1 build and trained model files.");
+    {
+        TGHorizontalFrame* thrRow = new TGHorizontalFrame(mlGrp);
+        mlGrp->AddFrame(thrRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+        thrRow->AddFrame(new TGLabel(thrRow, "Peak threshold:"),
+                         new TGLayoutHints(kLHintsCenterY, 0, 6, 0, 0));
+        mlThreshEntry_ = new TGNumberEntry(thrRow, 0.5, 5, -1,
+            TGNumberFormat::kNESRealTwo,
+            TGNumberFormat::kNEAPositive,
+            TGNumberFormat::kNELLimitMinMax, 0.01, 0.99);
+        thrRow->AddFrame(mlThreshEntry_, new TGLayoutHints(kLHintsLeft));
+        mlThreshEntry_->GetNumberEntry()->SetToolTipText(
+            "Minimum ML peak probability (0.01–0.99). Lower = more peaks found.");
+    }
+    useMLSigmaChk_ = new TGCheckButton(mlGrp, "ML sigma constraint (±8%)");
+    mlGrp->AddFrame(useMLSigmaChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 2));
+    useMLSigmaChk_->SetToolTipText(
+        "Predict each peak's sigma from ml/sigma_model.onnx and constrain\n"
+        "MIGRAD to ±8% around the prediction.  Breaks the A-sigma correlation,\n"
+        "reducing area uncertainty.  Requires a trained sigma_model.onnx.\n"
+        "Can be used with or without 'Use ML peak finder'.");
+
+    mlReloadBtn_ = new TGTextButton(mlGrp, " Reload ML Models ");
+    mlGrp->AddFrame(mlReloadBtn_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 2));
+    mlReloadBtn_->Connect("Clicked()", "GammaFitGUI", this, "OnMLReloadModels()");
+    mlReloadBtn_->SetToolTipText(
+        "Clear cached model instances so the next AutoFit re-reads the .onnx files from disk.");
+
+    showMLBgSubChk_ = new TGCheckButton(mlGrp, "Show ML BG-subtracted");
+    mlGrp->AddFrame(showMLBgSubChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 2, 4));
+    showMLBgSubChk_->SetToolTipText(
+        "Display the ML background-subtracted histogram.\n"
+        "Runs the BG MLP (ml/bg_model.onnx) and subtracts the result.\n"
+        "Requires USE_ONNX=1 build and a trained bg model.");
+    showMLBgSubChk_->Connect("Clicked()", "GammaFitGUI", this, "OnToggleShowMLBgSub()");
+
+    // ── ML Training Approval ──────────────────────────────────────────────────
+    TGGroupFrame* mlApprGrp = new TGGroupFrame(p, "ML Training");
+    p->AddFrame(mlApprGrp, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 2));
+
+    mlTrainingApprovedChk_ = new TGCheckButton(mlApprGrp, "Approved for ML training");
+    mlApprGrp->AddFrame(mlTrainingApprovedChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 2, 2));
+    mlTrainingApprovedChk_->SetToolTipText(
+        "Mark the currently loaded histogram as approved for ML training.\n"
+        "Its name and file path are appended to ml/approved_spectra.txt.\n"
+        "Only approve spectra where all visible features are in the fit cache.");
+    mlTrainingApprovedChk_->Connect("Clicked()", "GammaFitGUI", this,
+                                    "OnMLTrainingApprovalToggled()");
+
+    mlTrainingCountLbl_ = new TGLabel(mlApprGrp, "0 spectra approved");
+    mlApprGrp->AddFrame(mlTrainingCountLbl_,
+                        new TGLayoutHints(kLHintsLeft, 2, 2, 0, 4));
 
     // ── Rebin Histogram ───────────────────────────────────────────────────────
     TGGroupFrame* rbg = new TGGroupFrame(p, "Rebin Histogram");
@@ -1178,7 +1241,7 @@ void GammaFitGUI::BuildSourceTab(TGCompositeFrame* tab)
         TGHorizontalFrame* row = new TGHorizontalFrame(fog);
         fog->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
         srcBgSubChk_ = new TGCheckButton(row, "BG subtract");
-        srcBgSubChk_->SetState(kButtonDown);
+        srcBgSubChk_->SetState(kButtonUp);
         row->AddFrame(srcBgSubChk_, new TGLayoutHints(kLHintsCenterY, 0, 8, 0, 0));
         srcBgSubChk_->SetToolTipText("Subtract TSpectrum background before fitting");
         row->AddFrame(new TGLabel(row, "Iterations:"),
@@ -2593,6 +2656,14 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
         "Adds T_i (amplitude) and beta_i (slope) per peak.");
     mExpoTailChk_->Connect("Toggled(Bool_t)", "GammaFitGUI", this, "UpdateFitEquation()");
 
+    mMLSigmaChk_ = new TGCheckButton(statsGrp, "ML sigma constraint  (±8%, requires sigma_model.onnx)");
+    statsGrp->AddFrame(mMLSigmaChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 0));
+    mMLSigmaChk_->SetToolTipText(
+        "Predict each peak's sigma from ml/sigma_model.onnx and constrain\n"
+        "MIGRAD to ±8% around the prediction.  Breaks the A-sigma correlation,\n"
+        "reducing area uncertainty.  Requires USE_ONNX=1 and a trained sigma_model.onnx.\n"
+        "Train it from the ML tab: Generate synthetic → Train σ model.");
+
     mTieWidthsChk_ = new TGCheckButton(statsGrp, "Tie widths to resolution model");
     statsGrp->AddFrame(mTieWidthsChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 2));
     mTieWidthsChk_->SetToolTipText(
@@ -2948,7 +3019,9 @@ void GammaFitGUI::OnHistogramSelected(Int_t id)
         if (!rawHist_) { AppendLog("Source: cannot load " + hname); return; }
         currentHist_ = hname;
         schematicDrawn_ = false;
-        DrawOnCanvas(rawHist_);
+        SafeDeleteHist(viewHist_);
+        if (showMLBgSub_) viewHist_ = MakeMLBgSubHist(rawHist_);
+        if (viewHist_) RedrawView(); else DrawOnCanvas(rawHist_);
         SetStatus("Selected [SRC]: " + hname);
         return;
     }
@@ -2981,7 +3054,10 @@ void GammaFitGUI::OnHistogramSelected(Int_t id)
         autoParentEntry_->SetText(pit != histParent_.end() ? pit->second.c_str() : "");
     }
 
-    DrawOnCanvas(rawHist_);
+    RefreshMLApprovalState();
+    SafeDeleteHist(viewHist_);
+    if (showMLBgSub_) viewHist_ = MakeMLBgSubHist(rawHist_);
+    if (viewHist_) RedrawView(); else DrawOnCanvas(rawHist_);
     SetStatus("Selected: " + currentHist_);
 }
 
@@ -3141,10 +3217,15 @@ void GammaFitGUI::OnDebugAllOff()
 
 std::string GammaFitGUI::CacheDirFor() const
 {
+    return CacheDirFor(inputPath_);
+}
+
+std::string GammaFitGUI::CacheDirFor(const std::string& filePath) const
+{
     std::string base = launchDir_.empty() ? std::string(kCacheDir)
                                           : launchDir_ + "/" + kCacheDir;
-    if (inputPath_.empty()) return base;
-    std::string fname = inputPath_;
+    if (filePath.empty()) return base;
+    std::string fname = filePath;
     auto slash = fname.find_last_of("/\\");
     if (slash != std::string::npos)
         fname = fname.substr(slash + 1);
@@ -3160,15 +3241,26 @@ std::string GammaFitGUI::ArchiveDirFor() const
 
 void GammaFitGUI::EnsureCacheDir() const
 {
+    EnsureCacheDirFor(inputPath_);
+}
+
+void GammaFitGUI::EnsureCacheDirFor(const std::string& filePath) const
+{
     std::string base = launchDir_.empty() ? std::string(kCacheDir)
                                           : launchDir_ + "/" + kCacheDir;
     ::mkdir(base.c_str(), 0755);
-    ::mkdir(CacheDirFor().c_str(), 0755);
+    ::mkdir(CacheDirFor(filePath).c_str(), 0755);
 }
 
 std::string GammaFitGUI::CacheFileFor(const std::string& hname) const
 {
-    return CacheDirFor() + "/fit_cache_" + hname + ".dat";
+    return CacheFileFor(hname, inputPath_);
+}
+
+std::string GammaFitGUI::CacheFileFor(const std::string& hname,
+                                       const std::string& filePath) const
+{
+    return CacheDirFor(filePath) + "/fit_cache_" + hname + ".dat";
 }
 
 void GammaFitGUI::BackupCacheFile(const std::string& srcPath) {
@@ -3369,12 +3461,13 @@ void GammaFitGUI::RunFitOnHistogram(const std::string& hname,
     }
 
     SyncDebugToggles();
-    EnsureCacheDir();
+    if (overrideFile) EnsureCacheDirFor(srcRootPath_);
+    else              EnsureCacheDir();
 
     bool useSeeds = useSeedsChk_->IsOn();
 
     FitDatabase fitdb;
-    fitdb.Load(CacheFileFor(hname));
+    fitdb.Load(CacheFileFor(hname, srcPath));
 
     // A cache built against either the main file or the source file is valid —
     // source histograms opened from the Manual Fit tab have srcPath == inputPath_
@@ -3387,13 +3480,12 @@ void GammaFitGUI::RunFitOnHistogram(const std::string& hname,
     // Apply cached resolution model so grouping + seeding use up-to-date sig(E)
     {
         auto it = fitdb.GetEntries().find(kResolutionKey);
-        if (it != fitdb.GetEntries().end() && it->second.params.size() == 3) {
+        if (it != fitdb.GetEntries().end() && it->second.params.size() >= 2) {
             res_.a = it->second.params[0];
             res_.b = it->second.params[1];
-            res_.c = it->second.params[2];
+            res_.c = 0.0;
             AppendLog("Resolution model from cache: a=" + Fmt(res_.a, 4) +
-                      "  b=" + Fmt(res_.b, 4) +
-                      "  c=" + Fmt(res_.c, 8));
+                      "  b=" + Fmt(res_.b, 4));
             SyncResParFields();  // update display fields if combo is on Auto
         }
     }
@@ -3431,6 +3523,9 @@ void GammaFitGUI::RunFitOnHistogram(const std::string& hname,
         bgOpts.useLogLikelihood = srcLogLikChk_        ? srcLogLikChk_->IsOn() : true;
         bgOpts.useImprove       = srcImprovChk_        ? srcImprovChk_->IsOn() : false;
         bgOpts.snMinRatio       = srcSnThreshEntry_    ? srcSnThreshEntry_->GetNumber() : 0.0;
+        bgOpts.useML            = useMLChk_            ? useMLChk_->IsOn()    : false;
+        bgOpts.mlPeakThresh     = mlThreshEntry_       ? (float)mlThreshEntry_->GetNumber() : 0.5f;
+        bgOpts.useMLSigma       = useMLSigmaChk_       ? useMLSigmaChk_->IsOn() : false;
         AppendLog("Running Source AutoFit: " + hname +
                   (forcedSeeds.empty() ? "" :
                    "  [" + std::to_string(forcedSeeds.size()) + " seeds]") +
@@ -3443,6 +3538,9 @@ void GammaFitGUI::RunFitOnHistogram(const std::string& hname,
         bgOpts.useLogLikelihood = autoLogLikChk_ ? autoLogLikChk_->IsOn() : true;
         bgOpts.useImprove       = autoImprovChk_ ? autoImprovChk_->IsOn() : false;
         bgOpts.snMinRatio       = snThreshEntry_  ? snThreshEntry_->GetNumber() : 0.0;
+        bgOpts.useML            = useMLChk_       ? useMLChk_->IsOn()    : false;
+        bgOpts.mlPeakThresh     = mlThreshEntry_  ? (float)mlThreshEntry_->GetNumber() : 0.5f;
+        bgOpts.useMLSigma       = useMLSigmaChk_  ? useMLSigmaChk_->IsOn() : false;
         AppendLog("Running AutoFit: " + hname +
                   (useSeeds ? "  [seeds on]" : "  [fresh start]") +
                   "  sigma=" + Fmt(bgOpts.tspecSigma, 1) +
@@ -3456,8 +3554,8 @@ void GammaFitGUI::RunFitOnHistogram(const std::string& hname,
     fitdb.bgSubtracted = bgOpts.subtractBg;
     fitdb.bgIterations = bgOpts.iterations;
     fitdb.rootFile     = srcPath;
-    fitdb.Save(CacheFileFor(hname));
-    BackupCacheFile(CacheFileFor(hname));
+    fitdb.Save(CacheFileFor(hname, srcPath));
+    BackupCacheFile(CacheFileFor(hname, srcPath));
     fout->Close();
     delete fout;
 
@@ -4104,6 +4202,7 @@ void GammaFitGUI::OnManualFit()
     bool useQuadBG    = mBgQuadChk_       && mBgQuadChk_->IsDown();
     bool useCompStep  = mComptonStepChk_  && mComptonStepChk_->IsDown();
     bool useExpoTail  = mExpoTailChk_     && mExpoTailChk_->IsDown();
+    bool useMLSigma   = mMLSigmaChk_      && mMLSigmaChk_->IsDown();
     bool useTieWidths = mTieWidthsChk_    && mTieWidthsChk_->IsDown();
     bool useSameSigma = mTieSameSigmaChk_ && mTieSameSigmaChk_->IsDown() && n > 1;
 
@@ -4185,8 +4284,19 @@ void GammaFitGUI::OnManualFit()
             manualTF1_->SetParameter(3*i+2, sigModel);
             manualTF1_->FixParameter(3*i+2, sigModel);
         } else {
-            manualTF1_->SetParameter(3*i+2,   sig);
-            manualTF1_->SetParLimits(3*i+2,   sigModel * sigLo, sigModel * sigHi);
+            double sigSeed = sig;
+            double sLo     = sigModel * sigLo;
+            double sHi     = sigModel * sigHi;
+            if (useMLSigma) {
+                double sigML = PeakFitter::GetMLSigmaWidth(fitHist, E);
+                if (!std::isnan(sigML) && sigML > 0.0) {
+                    sigSeed = sigML;
+                    sLo     = sigML * 0.92;
+                    sHi     = sigML * 1.08;
+                }
+            }
+            manualTF1_->SetParameter(3*i+2,   sigSeed);
+            manualTF1_->SetParLimits(3*i+2,   sLo, sHi);
         }
     }
     manualTF1_->SetParName(3*n,   "bg0");
@@ -5070,6 +5180,44 @@ TH1* GammaFitGUI::MakeBgSubHist(TH1* raw, bool doSubtract, int iterations)
         if (bkg) h->Add(bkg, -1);
     }
     return h;
+}
+
+TH1* GammaFitGUI::MakeMLBgSubHist(TH1* raw)
+{
+    if (!raw) return nullptr;
+    std::string path = "ml/bg_model.onnx";
+    TH1* bgCurve = PeakFitter::GetMLBackground(raw, path);
+    if (!bgCurve) return nullptr;
+    TH1* h = (TH1*)raw->Clone(Form("%s_mlbgsub_gui", raw->GetName()));
+    h->SetDirectory(nullptr);
+    if (!h->GetSumw2N()) h->Sumw2();
+    h->Add(bgCurve, -1.0);
+    delete bgCurve;
+    for (int b = 1; b <= h->GetNbinsX(); b++)
+        if (h->GetBinContent(b) < 0.0) h->SetBinContent(b, 0.0);
+    return h;
+}
+
+void GammaFitGUI::OnToggleShowMLBgSub()
+{
+    showMLBgSub_ = showMLBgSubChk_ && showMLBgSubChk_->IsOn();
+    if (!rawHist_) return;
+    SafeDeleteHist(viewHist_);
+    if (showMLBgSub_) {
+        viewHist_ = MakeMLBgSubHist(rawHist_);
+        if (!viewHist_) {
+            AppendLog("ML BG subtraction: model not available "
+                      "(need USE_ONNX=1 build + trained ml/bg_model.onnx).");
+            if (showMLBgSubChk_) showMLBgSubChk_->SetState(kButtonUp);
+            showMLBgSub_ = false;
+        }
+    }
+    if (!residualsOn_) {
+        TCanvas* c = canvas_->GetCanvas();
+        double ux1 = c->GetUxmin(), ux2 = c->GetUxmax();
+        if (ux1 < ux2) { viewXmin_ = ux1; viewXmax_ = ux2; }
+    }
+    RedrawView();
 }
 
 TH1* GammaFitGUI::GetTSpectrumBg(TH1* raw, int iterations)
@@ -8108,7 +8256,7 @@ void GammaFitGUI::ExtractPeaksFromCache(const std::string& hname)
     srcPeakCountsErr_.clear();
 
     FitDatabase fitdb;
-    if (!fitdb.Load(CacheFileFor(hname))) return;
+    if (!fitdb.Load(CacheFileFor(hname, srcRootPath_))) return;
 
     for (const auto& [key, entry] : fitdb.GetEntries()) {
         if (key.size() >= 2 && key[0] == '_' && key[1] == '_') continue;
@@ -10264,13 +10412,13 @@ void GammaFitGUI::OnSrcPreviewTh2FromList()
 
 std::string GammaFitGUI::SourceAnalysisFileFor(const std::string& hname) const
 {
-    return CacheDirFor() + "/fit_cache_" + hname + "_source.root";
+    return CacheDirFor(srcRootPath_) + "/fit_cache_" + hname + "_source.root";
 }
 
 void GammaFitGUI::SaveSourceAnalysis()
 {
     if (srcHist_.empty()) return;
-    EnsureCacheDir();
+    EnsureCacheDirFor(srcRootPath_);
     std::string fname = SourceAnalysisFileFor(srcHist_);
     TFile* fout = TFile::Open(fname.c_str(), "RECREATE");
     if (!fout || fout->IsZombie()) {

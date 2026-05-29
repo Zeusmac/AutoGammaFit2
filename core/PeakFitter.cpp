@@ -13,10 +13,204 @@
 #include "TFitResult.h"
 #include "RootFileManager.h"
 
+#ifdef HAS_ONNX
+#include "MLInference.h"
+#include <memory>
+
+// File-scoped model instances loaded lazily on first useML call.
+static std::unique_ptr<OrtMLModel> s_bgModel;
+static std::unique_ptr<OrtMLModel> s_peakModel;
+static std::unique_ptr<OrtMLModel> s_centroidModel;
+static std::unique_ptr<OrtMLModel> s_sigmaModel;
+static std::string                  s_bgModelPath;
+static std::string                  s_peakModelPath;
+static std::string                  s_centroidModelPath;
+static std::string                  s_sigmaModelPath;
+
+void PeakFitter::ReloadMLModels()
+{
+    s_bgModel.reset();
+    s_peakModel.reset();
+    s_centroidModel.reset();
+    s_sigmaModel.reset();
+    s_bgModelPath.clear();
+    s_peakModelPath.clear();
+    s_centroidModelPath.clear();
+    s_sigmaModelPath.clear();
+}
+
+TH1* PeakFitter::GetMLBackground(TH1* raw, const std::string& modelPath)
+{
+    if (!raw) return nullptr;
+    if (!s_bgModel || s_bgModelPath != modelPath) {
+        try {
+            s_bgModel     = std::make_unique<OrtMLModel>(modelPath);
+            s_bgModelPath = modelPath;
+        } catch (const std::exception& ex) {
+            Debug::Log(Debug::PEAKFITTER,
+                std::string("GetMLBackground: model load failed: ") + ex.what());
+            return nullptr;
+        }
+    }
+    const int nBins = raw->GetNbinsX();
+    std::vector<float> rawV(nBins, 0.0f);
+    float rawMax = 0.0f;
+    for (int b = 1; b <= nBins; ++b) {
+        float v  = static_cast<float>(std::max(0.0, raw->GetBinContent(b)));
+        rawV[b-1] = v;
+        rawMax    = std::max(rawMax, v);
+    }
+    if (rawMax == 0.0f) rawMax = 1.0f;
+    for (float& v : rawV) v /= rawMax;
+
+    TH1* bg = static_cast<TH1*>(raw->Clone(Form("%s_mlbg_gui", raw->GetName())));
+    bg->SetDirectory(nullptr);
+    bg->Reset();
+    constexpr int BG_WIN  = 101;
+    constexpr int BG_HALF = BG_WIN / 2;
+    std::vector<float> win(BG_WIN, 0.0f);
+    for (int b = 0; b < nBins; ++b) {
+        for (int k = 0; k < BG_WIN; ++k) {
+            int idx = b - BG_HALF + k;
+            win[k]  = (idx >= 0 && idx < nBins) ? rawV[idx] : 0.0f;
+        }
+        float bgEst = s_bgModel->RunScalar(win) * rawMax;
+        bg->SetBinContent(b + 1, std::max(0.0f, bgEst));
+    }
+    return bg;
+}
+TH1* PeakFitter::GetMLPeakProbabilities(TH1* bgSub, const std::string& modelPath)
+{
+    if (!bgSub) return nullptr;
+    if (!s_peakModel || s_peakModelPath != modelPath) {
+        try {
+            s_peakModel     = std::make_unique<OrtMLModel>(modelPath);
+            s_peakModelPath = modelPath;
+        } catch (const std::exception& ex) {
+            Debug::Log(Debug::PEAKFITTER,
+                std::string("GetMLPeakProbabilities: model load failed: ") + ex.what());
+            return nullptr;
+        }
+    }
+    const int nBins = bgSub->GetNbinsX();
+    std::vector<float> sub(nBins, 0.0f);
+    float subMax = 0.0f;
+    for (int b = 1; b <= nBins; ++b) {
+        float v  = static_cast<float>(std::max(0.0, bgSub->GetBinContent(b)));
+        sub[b-1] = v;
+        subMax   = std::max(subMax, v);
+    }
+    if (subMax == 0.0f) subMax = 1.0f;
+    for (float& v : sub) v /= subMax;
+
+    TH1* prob = static_cast<TH1*>(bgSub->Clone(
+                    Form("%s_mlpkprob_gui", bgSub->GetName())));
+    prob->SetDirectory(nullptr);
+    prob->Reset();
+    constexpr int PK_WIN  = 51;
+    constexpr int PK_HALF = PK_WIN / 2;
+    std::vector<float> win(PK_WIN, 0.0f);
+    for (int b = 0; b < nBins; ++b) {
+        for (int k = 0; k < PK_WIN; ++k) {
+            int idx = b - PK_HALF + k;
+            win[k]  = (idx >= 0 && idx < nBins) ? sub[idx] : 0.0f;
+        }
+        prob->SetBinContent(b + 1, s_peakModel->RunScalar(win));
+    }
+    return prob;
+}
+double PeakFitter::GetMLCentroidOffset(TH1* h, double E, double sig,
+                                        const std::string& modelPath)
+{
+    if (!h) return std::numeric_limits<double>::quiet_NaN();
+    if (!s_centroidModel || s_centroidModelPath != modelPath) {
+        try {
+            s_centroidModel     = std::make_unique<OrtMLModel>(modelPath);
+            s_centroidModelPath = modelPath;
+        } catch (const std::exception& ex) {
+            Debug::Log(Debug::PEAKFITTER,
+                std::string("GetMLCentroidOffset: model load failed: ") + ex.what());
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    const int nBins = h->GetNbinsX();
+    int peakBin = h->FindBin(E);
+
+    constexpr int CEN_WIN  = 51;
+    constexpr int CEN_HALF = CEN_WIN / 2;
+
+    // Extract normalised 51-bin window centred on the peak bin
+    std::vector<float> win(CEN_WIN, 0.0f);
+    float winMax = 0.0f;
+    for (int k = 0; k < CEN_WIN; ++k) {
+        int idx = peakBin - CEN_HALF + k;
+        float v = (idx >= 1 && idx <= nBins)
+                  ? static_cast<float>(std::max(0.0, h->GetBinContent(idx)))
+                  : 0.0f;
+        win[k]  = v;
+        winMax  = std::max(winMax, v);
+    }
+    if (winMax == 0.0f) return std::numeric_limits<double>::quiet_NaN();
+    for (float& v : win) v /= winMax;
+
+    // Model outputs a value in [-0.5, 0.5] bins; convert to keV
+    float offsetBins = s_centroidModel->RunScalar(win);
+    double bw = h->GetBinWidth(peakBin);
+    return static_cast<double>(offsetBins) * bw;
+}
+
+double PeakFitter::GetMLSigmaWidth(TH1* h, double E, const std::string& modelPath)
+{
+    if (!h) return std::numeric_limits<double>::quiet_NaN();
+    if (!s_sigmaModel || s_sigmaModelPath != modelPath) {
+        try {
+            s_sigmaModel     = std::make_unique<OrtMLModel>(modelPath);
+            s_sigmaModelPath = modelPath;
+        } catch (const std::exception& ex) {
+            Debug::Log(Debug::PEAKFITTER,
+                std::string("GetMLSigmaWidth: model load failed: ") + ex.what());
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    const int nBins  = h->GetNbinsX();
+    int peakBin = h->FindBin(E);
+
+    constexpr int CEN_WIN  = 51;
+    constexpr int CEN_HALF = CEN_WIN / 2;
+
+    std::vector<float> win(CEN_WIN, 0.0f);
+    float winMax = 0.0f;
+    for (int k = 0; k < CEN_WIN; ++k) {
+        int idx = peakBin - CEN_HALF + k;
+        float v = (idx >= 1 && idx <= nBins)
+                  ? static_cast<float>(std::max(0.0, h->GetBinContent(idx)))
+                  : 0.0f;
+        win[k]  = v;
+        winMax  = std::max(winMax, v);
+    }
+    if (winMax == 0.0f) return std::numeric_limits<double>::quiet_NaN();
+    for (float& v : win) v /= winMax;
+
+    float sigmaBins = s_sigmaModel->RunScalar(win);   // sigma in bins (Softplus → positive)
+    double bw = h->GetBinWidth(peakBin);
+    return static_cast<double>(sigmaBins) * bw;        // sigma in keV
+}
+
+#else
+void PeakFitter::ReloadMLModels() {}   // no-op when ONNX not compiled in
+TH1* PeakFitter::GetMLBackground(TH1*, const std::string&)               { return nullptr; }
+TH1* PeakFitter::GetMLPeakProbabilities(TH1*, const std::string&)         { return nullptr; }
+double PeakFitter::GetMLCentroidOffset(TH1*, double, double, const std::string&)
+    { return std::numeric_limits<double>::quiet_NaN(); }
+double PeakFitter::GetMLSigmaWidth(TH1*, double, const std::string&)
+    { return std::numeric_limits<double>::quiet_NaN(); }
+#endif
 
 #include <fstream>
 #include <algorithm>
+#include <limits>
 #include <set>
+#include "TMatrixDSym.h"
 
 using namespace std;
 
@@ -78,29 +272,155 @@ void PeakFitter::FitHistogram(TH1* h,
     // -------------------------------------------------
     // Background subtraction + peak finding
     // -------------------------------------------------
-    TSpectrum spectrum(1000);
-
-    // Background subtraction is independent of peak search
-    if (bg.subtractBg) {
-        TH1* bkg = spectrum.Background(h_work, bg.iterations);
-        h_work->Add(bkg, -1);
-    }
-
-    // Peak positions: either from TSpectrum or caller-supplied forced seeds
     std::vector<double> peaks;
-    if (forcedSeeds.empty()) {
-        int nPeaks = spectrum.Search(h_work, bg.tspecSigma, "", bg.tspecThresh);
+
+    // TSpectrum path — original behaviour, also used as fallback when HAS_ONNX
+    // is not compiled in or model files are missing.
+    auto runTSpectrum = [&]() {
+        TSpectrum spectrum(1000);
+        if (bg.subtractBg) {
+            TH1* bkg = spectrum.Background(h_work, bg.iterations);
+            h_work->Add(bkg, -1);
+        }
+        if (forcedSeeds.empty()) {
+            int nPeaks = spectrum.Search(h_work, bg.tspecSigma, "", bg.tspecThresh);
+            Debug::Log(Debug::PEAKFITTER,
+                "TSpectrum found " + std::to_string(nPeaks) + " peaks in " + hname +
+                "  sigma=" + std::to_string(bg.tspecSigma) +
+                "  thresh=" + std::to_string(bg.tspecThresh));
+            peaks.assign(spectrum.GetPositionX(), spectrum.GetPositionX() + nPeaks);
+        } else {
+            peaks = forcedSeeds;
+            Debug::Log(Debug::PEAKFITTER,
+                "Source mode: using " + std::to_string(peaks.size()) +
+                " forced seed energies in " + hname);
+        }
+    };
+
+    TH1* bkgML = nullptr;  // ML background histogram; kept alive for net area (Method 4)
+    bool mlUsed = false;
+    if (bg.useML) {
+#ifdef HAS_ONNX
+        // ── Lazy-load BG model ────────────────────────────────────────────
+        bool modelsOk = true;
+        if (!s_bgModel || s_bgModelPath != bg.mlBgModelPath) {
+            try {
+                s_bgModel     = std::make_unique<OrtMLModel>(bg.mlBgModelPath);
+                s_bgModelPath = bg.mlBgModelPath;
+            } catch (const std::exception& ex) {
+                Debug::Log(Debug::PEAKFITTER,
+                    std::string("ML BG model load failed (") +
+                    bg.mlBgModelPath + "): " + ex.what());
+                modelsOk = false;
+            }
+        }
+        // ── Lazy-load peak model ──────────────────────────────────────────
+        if (modelsOk && (!s_peakModel || s_peakModelPath != bg.mlPeakModelPath)) {
+            try {
+                s_peakModel     = std::make_unique<OrtMLModel>(bg.mlPeakModelPath);
+                s_peakModelPath = bg.mlPeakModelPath;
+            } catch (const std::exception& ex) {
+                Debug::Log(Debug::PEAKFITTER,
+                    std::string("ML peak model load failed (") +
+                    bg.mlPeakModelPath + "): " + ex.what());
+                modelsOk = false;
+            }
+        }
+
+        if (modelsOk) {
+            const int nBins = h_work->GetNbinsX();
+
+            // ── 1. Normalize raw spectrum to [0,1] ────────────────────────
+            std::vector<float> raw(nBins, 0.0f);
+            float rawMax = 0.0f;
+            for (int b = 1; b <= nBins; ++b) {
+                float v = static_cast<float>(std::max(0.0, h_work->GetBinContent(b)));
+                raw[b - 1] = v;
+                rawMax     = std::max(rawMax, v);
+            }
+            if (rawMax == 0.0f) rawMax = 1.0f;
+            for (float& v : raw) v /= rawMax;
+
+            // ── 2. Slide BG MLP — 101-bin window, zero-pad at edges ───────
+            constexpr int BG_WIN  = 101;
+            constexpr int BG_HALF = BG_WIN / 2;
+            bkgML = static_cast<TH1*>(h_work->Clone(
+                        Form("%s_bkg_ml", hname.c_str())));
+            bkgML->SetDirectory(nullptr);
+            bkgML->Reset();
+            std::vector<float> win(BG_WIN, 0.0f);
+            for (int b = 0; b < nBins; ++b) {
+                for (int k = 0; k < BG_WIN; ++k) {
+                    int idx = b - BG_HALF + k;
+                    win[k]  = (idx >= 0 && idx < nBins) ? raw[idx] : 0.0f;
+                }
+                float bgEst = s_bgModel->RunScalar(win) * rawMax;
+                bkgML->SetBinContent(b + 1, std::max(0.0f, bgEst));
+            }
+
+            // ── 3. Subtract background, floor negatives ───────────────────
+            h_work->Add(bkgML, -1.0);
+            // bkgML kept alive — deleted at function end for net area (Method 4)
+            for (int b = 1; b <= nBins; ++b)
+                if (h_work->GetBinContent(b) < 0.0) h_work->SetBinContent(b, 0.0);
+
+            if (!forcedSeeds.empty()) {
+                peaks  = forcedSeeds;
+                mlUsed = true;
+                Debug::Log(Debug::PEAKFITTER,
+                    "ML BG done; using " + std::to_string(peaks.size()) +
+                    " forced seed energies in " + hname);
+            } else {
+                // ── 4. Normalize BG-subtracted spectrum ───────────────────
+                std::vector<float> sub(nBins, 0.0f);
+                float subMax = 0.0f;
+                for (int b = 1; b <= nBins; ++b) {
+                    float v  = static_cast<float>(std::max(0.0, h_work->GetBinContent(b)));
+                    sub[b-1] = v;
+                    subMax   = std::max(subMax, v);
+                }
+                if (subMax == 0.0f) subMax = 1.0f;
+                for (float& v : sub) v /= subMax;
+
+                // ── 5. Slide peak MLP — 51-bin window → probability array ─
+                constexpr int PK_WIN  = 51;
+                constexpr int PK_HALF = PK_WIN / 2;
+                std::vector<float> prob(nBins, 0.0f);
+                std::vector<float> pkw(PK_WIN, 0.0f);
+                for (int b = 0; b < nBins; ++b) {
+                    for (int k = 0; k < PK_WIN; ++k) {
+                        int idx = b - PK_HALF + k;
+                        pkw[k]  = (idx >= 0 && idx < nBins) ? sub[idx] : 0.0f;
+                    }
+                    prob[b] = s_peakModel->RunScalar(pkw);
+                }
+
+                // ── 6. Non-maximum suppression ─────────────────────────────
+                const float thresh = bg.mlPeakThresh;
+                for (int b = 0; b < nBins; ++b) {
+                    if (prob[b] < thresh) continue;
+                    bool isMax = true;
+                    for (int k = -PK_HALF; k <= PK_HALF && isMax; ++k) {
+                        int idx = b + k;
+                        if (idx >= 0 && idx < nBins && idx != b && prob[idx] > prob[b])
+                            isMax = false;
+                    }
+                    if (isMax)
+                        peaks.push_back(h_work->GetBinCenter(b + 1));
+                }
+                mlUsed = true;
+                Debug::Log(Debug::PEAKFITTER,
+                    "ML found " + std::to_string(peaks.size()) +
+                    " peaks in " + hname);
+            }
+        }
+#else
         Debug::Log(Debug::PEAKFITTER,
-            "TSpectrum found " + std::to_string(nPeaks) + " peaks in " + hname +
-            "  sigma=" + std::to_string(bg.tspecSigma) +
-            "  thresh=" + std::to_string(bg.tspecThresh));
-        peaks.assign(spectrum.GetPositionX(), spectrum.GetPositionX() + nPeaks);
-    } else {
-        peaks = forcedSeeds;
-        Debug::Log(Debug::PEAKFITTER,
-            "Source mode: using " + std::to_string(peaks.size()) +
-            " forced seed energies in " + hname);
+            "ML mode requested but HAS_ONNX not compiled in; falling back to TSpectrum");
+#endif
     }
+
+    if (!mlUsed) runTSpectrum();
 
     h_work->SetTitle(hname.c_str());
     h_work->GetXaxis()->SetTitle("Energy (keV)");
@@ -208,6 +528,13 @@ void PeakFitter::FitHistogram(TH1* h,
         fitCfg.useLogLikelihood = bg.useLogLikelihood;
         fitCfg.useImprove       = bg.useImprove;
 
+        if (bg.useMLSigma) {
+            for (const auto& E : group.energies) {
+                double sigML = GetMLSigmaWidth(h_work, E, bg.mlSigmaModelPath);
+                fitCfg.mlSigmaHints.push_back(sigML);
+            }
+        }
+
         TF1* model =
             AdaptiveFitter::FitGroup(
                 h_work,
@@ -264,8 +591,11 @@ void PeakFitter::FitHistogram(TH1* h,
 
         // -------------------------------------------------
         // Background parameters
+        // DG model (7 params) has bg at [5],[6]; all other models (step, tail,
+        // standard) have bg at [3*nUsed], [3*nUsed+1].
         // -------------------------------------------------
-        int bgOffset = 3 * nUsed;
+        bool isDG    = (model->GetNpar() == 7);
+        int bgOffset = isDG ? 5 : 3 * nUsed;
 
         double bg0 = model->GetParameter(bgOffset);
         double bg1 = model->GetParameter(bgOffset + 1);
@@ -312,33 +642,175 @@ void PeakFitter::FitHistogram(TH1* h,
             // -------------------------------------------------
             double FWHM = 2.355 * sig;
 
-            double counts =
-                A * sig *
-                std::sqrt(2 * TMath::Pi());
+            // Gaussian amplitude A is in counts/bin; integral over energy axis
+            // is A*sigma*sqrt(2pi) keV, so divide by bin width (keV/bin) to get counts.
+            double bw = h_work->GetBinWidth(h_work->FindBin(E));
+            if (bw <= 0.0) bw = 1.0;
 
-            double counts_err = 0;
+            double counts = A * sig * std::sqrt(2.0 * TMath::Pi()) / bw;
 
+            // Full error propagation including A-sigma covariance from MIGRAD.
+            // Cov(A,sigma) is typically negative (amplitude and width anticorrelate),
+            // which slightly reduces the area uncertainty vs. ignoring the term.
+            double counts_err = 0.0;
             if (A > 0 && sig > 0) {
-
-                counts_err =
-                    counts *
-                    std::sqrt(
-                        std::pow(Aerr / A, 2) +
-                        std::pow(sigerr / sig, 2));
+                double relA   = Aerr   / A;
+                double relSig = sigerr / sig;
+                double cov_Asig = 0.0;
+                if (fitResult.Get() && fitResult->IsValid())
+                    cov_Asig = fitResult->GetCovarianceMatrix()(p0, p0 + 2);
+                double varRel = relA * relA + relSig * relSig
+                                + 2.0 * cov_Asig / (A * sig);
+                if (varRel > 0.0)
+                    counts_err = counts * std::sqrt(varRel);
             }
 
             // -------------------------------------------------
             // SNR estimate
             // -------------------------------------------------
             double bkgCounts =
-                std::abs(
-                    bg0 * (5 * sig) +
-                    bg1 * E * (5 * sig));
+                std::abs((bg0 + bg1 * E) * (5.0 * sig)) / bw;
 
             double SNR =
                 (bkgCounts > 0)
                 ? counts / std::sqrt(bkgCounts)
                 : 0;
+
+            // -------------------------------------------------
+            // Net peak area (model-independent sum method)
+            // When ML BG available use raw h - bkgML; else h_work - polynomial.
+            // Statistical uncertainty from raw histogram h (full Poisson counts).
+            // -------------------------------------------------
+            double netArea    = 0.0;
+            double netAreaErr = 0.0;
+            {
+                double xLo = E - 3.0 * sig;
+                double xHi = E + 3.0 * sig;
+                int bLo = h_work->FindBin(xLo + 0.5 * bw);
+                int bHi = h_work->FindBin(xHi - 0.5 * bw);
+                bLo = std::max(bLo, 1);
+                bHi = std::min(bHi, h_work->GetNbinsX());
+                double rawVar = 0.0;
+                for (int b = bLo; b <= bHi; b++) {
+                    double x = h_work->GetBinCenter(b);
+                    if (bkgML)
+                        netArea += h->GetBinContent(b) - bkgML->GetBinContent(b);
+                    else
+                        netArea += h_work->GetBinContent(b) - (bg0 + bg1 * x);
+                    rawVar += std::max(h->GetBinContent(b), 0.0);
+                }
+                netAreaErr = (rawVar > 0.0) ? std::sqrt(rawVar) : 0.0;
+            }
+
+            // Flag if Gaussian integral and net area disagree by >5 %.
+            // Possible causes: non-Gaussian tail, bad background, unresolved doublet.
+            double areaDiscrepancy = (counts > 0.0)
+                ? std::abs(netArea - counts) / counts : 0.0;
+            bool   areaWarning = (areaDiscrepancy > 0.05);
+
+            // -------------------------------------------------
+            // Total area via TF1::Integral (Method 1)
+            // Integrates the full model (Gaussian + step + tail) over ±5σ and
+            // subtracts the polynomial BG contribution.  For singlets exact;
+            // for multi-peak groups a small tail from neighbours may be included.
+            // -------------------------------------------------
+            double totalCounts = 0.0, totalCounts_err = 0.0;
+            {
+                double xlo5 = E - 5.0 * sig, xhi5 = E + 5.0 * sig;
+                double bgI = (bg0 * (xhi5 - xlo5)
+                              + 0.5 * bg1 * (xhi5*xhi5 - xlo5*xlo5)) / bw;
+                totalCounts = model->Integral(xlo5, xhi5) / bw - bgI;
+                if (fitResult.Get() && fitResult->IsValid()) {
+                    TMatrixDSym cov = fitResult->GetCovarianceMatrix();
+                    totalCounts_err = std::abs(
+                        model->IntegralError(xlo5, xhi5,
+                                             nullptr,
+                                             cov.GetMatrixArray())) / bw;
+                }
+            }
+
+            // -------------------------------------------------
+            // COM centroid cross-check (Method 2)
+            // Barycenter over ±2σ window on BG-subtracted h_work.
+            // -------------------------------------------------
+            double xCOM    = E;
+            bool   comValid = false;
+            if (SNR >= 3.0) {
+                double sumW = 0.0, sumXW = 0.0;
+                int bLo2 = std::max(h_work->FindBin(E - 2.0*sig), 1);
+                int bHi2 = std::min(h_work->FindBin(E + 2.0*sig), h_work->GetNbinsX());
+                for (int b = bLo2; b <= bHi2; b++) {
+                    double net = h_work->GetBinContent(b);
+                    if (net > 0.0) {
+                        sumXW += h_work->GetBinCenter(b) * net;
+                        sumW  += net;
+                    }
+                }
+                if (sumW > 0.0) { xCOM = sumXW / sumW; comValid = true; }
+            }
+            bool comShift = comValid && (std::fabs(xCOM - E) > 2.0);
+
+            // -------------------------------------------------
+            // Data FWHM via half-maximum crossing (Method 3, singlets only)
+            // -------------------------------------------------
+            double dataFWHM      = 0.0;
+            bool   dataFWHMValid = false;
+            if (nUsed == 1 && SNR >= 3.0) {
+                int    peakBin = h_work->FindBin(E);
+                double peakH   = h_work->GetBinContent(peakBin);
+                double halfH   = peakH * 0.5;
+                if (halfH > 0.0) {
+                    double xLeft = h_work->GetBinCenter(std::max(peakBin - 1, 1));
+                    for (int b = peakBin - 1; b >= 1; b--) {
+                        if (h_work->GetBinContent(b) <= halfH) {
+                            double y1 = h_work->GetBinContent(b);
+                            double y2 = h_work->GetBinContent(b + 1);
+                            double x1 = h_work->GetBinCenter(b);
+                            double x2 = h_work->GetBinCenter(b + 1);
+                            double d  = y2 - y1;
+                            xLeft = (std::fabs(d) > 0.0)
+                                ? x1 + (halfH - y1) / d * (x2 - x1)
+                                : (x1 + x2) * 0.5;
+                            break;
+                        }
+                    }
+                    double xRight = h_work->GetBinCenter(
+                                        std::min(peakBin + 1, h_work->GetNbinsX()));
+                    for (int b = peakBin + 1; b <= h_work->GetNbinsX(); b++) {
+                        if (h_work->GetBinContent(b) <= halfH) {
+                            double y1 = h_work->GetBinContent(b - 1);
+                            double y2 = h_work->GetBinContent(b);
+                            double x1 = h_work->GetBinCenter(b - 1);
+                            double x2 = h_work->GetBinCenter(b);
+                            double d  = y2 - y1;
+                            xRight = (std::fabs(d) > 0.0)
+                                ? x1 + (halfH - y1) / d * (x2 - x1)
+                                : (x1 + x2) * 0.5;
+                            break;
+                        }
+                    }
+                    dataFWHM      = xRight - xLeft;
+                    dataFWHMValid = (dataFWHM > 0.1 * sig);
+                }
+            }
+            bool dataFWHMMismatch = dataFWHMValid
+                && (FWHM > 0.0) && (std::fabs(dataFWHM - FWHM) / FWHM > 0.10);
+
+            // -------------------------------------------------
+            // ML centroid refinement (Method 5, singlets only)
+            // -------------------------------------------------
+            double mlCentroid    = E;
+            bool   mlCentValid   = false;
+#ifdef HAS_ONNX
+            if (nUsed == 1 && bg.useML && SNR >= 3.0) {
+                double offset = GetMLCentroidOffset(h_work, E, sig,
+                                                    bg.mlCentroidModelPath);
+                if (std::isfinite(offset)) {
+                    mlCentroid = E + offset;
+                    mlCentValid = true;
+                }
+            }
+#endif
 
             // -------------------------------------------------
             // Matching — each DB line claimed by at most one peak
@@ -364,6 +836,9 @@ void PeakFitter::FitHistogram(TH1* h,
             Debug::Log(Debug::PEAKFITTER,
                 "  counts=" + std::to_string(counts) +
                 " ± " + std::to_string(counts_err) +
+                "  net=" + std::to_string(netArea) +
+                " ± " + std::to_string(netAreaErr) +
+                (areaWarning ? "  [AREA_MISMATCH]" : "") +
                 "  SNR=" + std::to_string(SNR) +
                 "  FWHM=" + std::to_string(2.355*sig) +
                 "  nMatches=" + std::to_string(matches.size()) +
@@ -408,6 +883,18 @@ void PeakFitter::FitHistogram(TH1* h,
                 << E << " ± "
                 << Eerr << " keV\n";
 
+            if (comValid)
+                out << "COM Centroid   : "
+                    << xCOM << " keV"
+                    << (comShift
+                        ? Form("  [SHIFT %.2f keV]", xCOM - E)
+                        : "")
+                    << "\n";
+
+            if (mlCentValid)
+                out << "ML Centroid    : "
+                    << mlCentroid << " keV\n";
+
             out << "Sigma          : "
                 << sig << " ± "
                 << sigerr << "\n";
@@ -415,9 +902,33 @@ void PeakFitter::FitHistogram(TH1* h,
             out << "FWHM           : "
                 << FWHM << "\n";
 
+            if (dataFWHMValid)
+                out << "Data FWHM      : "
+                    << dataFWHM << " keV"
+                    << (dataFWHMMismatch
+                        ? Form("  [MISMATCH %.1f%%]",
+                               std::fabs(dataFWHM - FWHM) / FWHM * 100.0)
+                        : "")
+                    << "\n";
+
             out << "Peak Counts    : "
                 << counts << " ± "
                 << counts_err << "\n";
+
+            out << "Total Counts   : "
+                << totalCounts << " ± "
+                << totalCounts_err
+                << (nUsed > 1 ? "  [MULTI-PEAK: approx]" : "")
+                << "\n";
+
+            out << "Net Area       : "
+                << netArea << " ± "
+                << netAreaErr
+                << (bkgML ? "  [ML-BG]" : "")
+                << (areaWarning
+                    ? Form("  [MISMATCH %.1f%%]", areaDiscrepancy * 100.0)
+                    : "")
+                << "\n";
 
             out << "SNR            : "
                 << SNR << "\n";
@@ -427,6 +938,27 @@ void PeakFitter::FitHistogram(TH1* h,
 
             out << "BG Slope       : "
                 << bg1 << "\n";
+
+            // Step and tail parameters (present only in enhanced models).
+            if (!isDG) {
+                int npar   = model->GetNpar();
+                int nStep  = (npar - 3*nUsed - 2);       // total extra params
+                // step only: nStep == nUsed; tail only: nStep == 2*nUsed; both: 3*nUsed
+                bool hasStep = (npar == 4*nUsed + 2 || npar == 6*nUsed + 2);
+                bool hasTail = (npar == 5*nUsed + 2 || npar == 6*nUsed + 2);
+                (void)nStep;
+                if (hasStep) {
+                    int sIdx = 3*nUsed + 2 + i;
+                    out << "Step Height    : " << model->GetParameter(sIdx) << "\n";
+                }
+                if (hasTail) {
+                    int nS   = hasStep ? nUsed : 0;
+                    int tIdx = 3*nUsed + 2 + nS + i;
+                    int bIdx = 3*nUsed + 2 + nS + nUsed + i;
+                    out << "Tail Amplitude : " << model->GetParameter(tIdx) << "\n";
+                    out << "Tail Slope     : " << model->GetParameter(bIdx) << "\n";
+                }
+            }
 
             // -------------------------------------------------
             // Matches
@@ -552,6 +1084,6 @@ void PeakFitter::FitHistogram(TH1* h,
 
 
 
-    out.close();   
-   
+    if (bkgML) { delete bkgML; bkgML = nullptr; }
+    out.close();
 }

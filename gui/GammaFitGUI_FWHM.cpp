@@ -364,19 +364,17 @@ void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine
     if (fwhmTF1_) {
         double a  = fwhmTF1_->GetParameter(0);
         double b  = fwhmTF1_->GetParameter(1);
-        double cv = fwhmTF1_->GetParameter(2);
 
         TF1* modelDraw = nullptr;
         if (showResolution) {
             modelDraw = new TF1("fwhm_draw",
-                Form("100.0*sqrt(%.10g+%.10g*x+%.10g*x*x)/x", a, b, cv), 1.0, xhi);
+                Form("100.0*sqrt(%.10g+%.10g*x)/x", a, b), 1.0, xhi);
         } else if (showSigma) {
             modelDraw = new TF1("fwhm_draw",
-                Form("sqrt((%.10g+%.10g*x+%.10g*x*x)/%.10g)",
-                     a, b, cv, kSig * kSig), 0.0, xhi);
+                Form("sqrt((%.10g+%.10g*x)/%.10g)", a, b, kSig * kSig), 0.0, xhi);
         } else {
             modelDraw = new TF1("fwhm_draw",
-                Form("%.10g+%.10g*x+%.10g*x*x", a, b, cv), 0.0, xhi);
+                Form("%.10g+%.10g*x", a, b), 0.0, xhi);
         }
         modelDraw->SetLineColor(kRed); modelDraw->SetLineWidth(2);
         modelDraw->Draw("same");
@@ -386,14 +384,13 @@ void GammaFitGUI::DrawFWHMToCanvas(TCanvas* c, bool showSigma, bool showStatLine
         pt->SetFillColor(0); pt->SetFillStyle(1001); pt->SetBorderSize(1);
         pt->SetTextSize(0.024); pt->SetTextAlign(12);
         if (showResolution)
-            pt->AddText("R(%) = 100 #frac{#sqrt{a + bE + cE^{2}}}{E}");
+            pt->AddText("R(%) = 100 #frac{#sqrt{a + bE}}{E}");
         else if (showSigma)
-            pt->AddText("#sigma = #frac{#sqrt{a + bE + cE^{2}}}{2.355}");
+            pt->AddText("#sigma = #frac{#sqrt{a + bE}}{2.355}");
         else
-            pt->AddText("FWHM^{2} = a + bE + cE^{2}");
+            pt->AddText("FWHM^{2} = a + bE  (Fano)");
         pt->AddText(Form("a = %.4g keV^{2}", a));
         pt->AddText(Form("b = %.4g keV",     b));
-        pt->AddText(Form("c = %.4g",          cv));
         if (fwhmChi2Ndf_ >= 0)
             pt->AddText(Form("#chi^{2}/ndf = %.2f  (ndf = %d)", fwhmChi2Ndf_, fwhmNdf_));
         if (fwhmPValue_ >= 0)
@@ -543,15 +540,13 @@ void GammaFitGUI::OnLoadFWHM()
         delete fwhmTF1_; fwhmTF1_ = nullptr;
         fwhmChi2Ndf_ = -1.0; fwhmPValue_ = -1.0; fwhmResidRMS_ = -1.0; fwhmNdf_ = 0;
         auto rit = fitdb.GetEntries().find(kResolutionKey);
-        if (rit != fitdb.GetEntries().end() && rit->second.params.size() == 3) {
+        if (rit != fitdb.GetEntries().end() && rit->second.params.size() >= 2) {
             mFwhmA_->SetNumber(rit->second.params[0]);
             mFwhmB_->SetNumber(rit->second.params[1]);
-            mFwhmC_->SetNumber(rit->second.params[2]);
+            mFwhmC_->SetNumber(0.0);
             double xhi = *std::max_element(fwhmAllX_.begin(), fwhmAllX_.end()) * 1.15;
-            fwhmTF1_ = new TF1("fwhm_model", "[0]+[1]*x+[2]*x*x", 0.0, xhi);
-            fwhmTF1_->SetParameters(rit->second.params[0],
-                                     rit->second.params[1],
-                                     rit->second.params[2]);
+            fwhmTF1_ = new TF1("fwhm_model", "[0]+[1]*x", 0.0, xhi);
+            fwhmTF1_->SetParameters(rit->second.params[0], rit->second.params[1]);
             double cachedChi2 = rit->second.chi2ndf;
             if (cachedChi2 > 0 && cachedChi2 < 1e10) fwhmChi2Ndf_ = cachedChi2;
         }
@@ -668,7 +663,7 @@ void GammaFitGUI::OnFitFWHM()
     // Take the median across all included points so outliers don't skew it.
     // Noise floor: a ~= FWHM^2_lowest - b * E_lowest, clamped >= 0.
     // Charge-trapping term c starts at 0 (usually tiny for good detectors).
-    double aSeed, bSeed, cSeed;
+    double aSeed, bSeed;
     {
         std::vector<std::pair<double,double>> pts;
         for (size_t i = 0; i < xIn.size(); i++)
@@ -686,7 +681,6 @@ void GammaFitGUI::OnFitFWHM()
         double E0   = pts.front().first;
         double fw0  = pts.front().second;   // fw0 is FWHM^2
         aSeed = std::max(1e-4, fw0 - bSeed * E0);
-        cSeed = 0.0;
     }
 
     // Fit on a temporary graph owned here (not drawn to canvas)
@@ -698,29 +692,21 @@ void GammaFitGUI::OnFitFWHM()
     double aHi = mFwhmAhi_ ? mFwhmAhi_->GetNumber() : 1000.0;
     double bLo = mFwhmBlo_ ? mFwhmBlo_->GetNumber() : 0.0;
     double bHi = mFwhmBhi_ ? mFwhmBhi_->GetNumber() : 10.0;
-    double cLo = mFwhmClo_ ? mFwhmClo_->GetNumber() : 0.0;
-    double cHi = mFwhmChi_ ? mFwhmChi_->GetNumber() : 0.1;
     if (aLo >= aHi) { AppendLog("Invalid a bounds (lo >= hi)."); return; }
     if (bLo >= bHi) { AppendLog("Invalid b bounds (lo >= hi)."); return; }
 
     delete fwhmTF1_;
-    fwhmTF1_ = new TF1("fwhm_model", "[0]+[1]*x+[2]*x*x", 0.0, xhi);
+    fwhmTF1_ = new TF1("fwhm_model", "[0]+[1]*x", 0.0, xhi);
     fwhmTF1_->SetParameter(0, std::max(aSeed, aLo));
     fwhmTF1_->SetParameter(1, std::max(bSeed, bLo));
-    fwhmTF1_->SetParameter(2, cSeed);
     fwhmTF1_->SetParLimits(0, aLo, aHi);
     fwhmTF1_->SetParLimits(1, bLo, bHi);
-    if (cLo < cHi)
-        fwhmTF1_->SetParLimits(2, cLo, cHi);
-    else
-        fwhmTF1_->FixParameter(2, cLo);
 
     grFit.Fit(fwhmTF1_, "R Q B");
 
     double a = fwhmTF1_->GetParameter(0);
     double b = fwhmTF1_->GetParameter(1);
-    double c = fwhmTF1_->GetParameter(2);
-    mFwhmA_->SetNumber(a); mFwhmB_->SetNumber(b); mFwhmC_->SetNumber(c);
+    mFwhmA_->SetNumber(a); mFwhmB_->SetNumber(b); mFwhmC_->SetNumber(0.0);
 
     double chi2    = fwhmTF1_->GetChisquare();
     int    ndf     = fwhmTF1_->GetNDF();
@@ -731,7 +717,7 @@ void GammaFitGUI::OnFitFWHM()
     // Residual RMS: RMS of (data - model) / data  (both in FWHM^2 space)
     double rmsSum = 0.0; int rmsN = 0;
     for (size_t i = 0; i < xIn.size(); i++) {
-        double pred = fwhmTF1_->Eval(xIn[i]);   // FWHM^2 predicted
+        double pred = fwhmTF1_->Eval(xIn[i]);  // FWHM² predicted
         if (pred > 0 && yIn[i] > 0) {
             double pull = (yIn[i] - pred) / yIn[i];
             rmsSum += pull * pull;
@@ -740,8 +726,8 @@ void GammaFitGUI::OnFitFWHM()
     }
     fwhmResidRMS_ = (rmsN > 0) ? std::sqrt(rmsSum / rmsN) : -1.0;
 
-    std::string result = Form("a=%.4g  b=%.4g  c=%.4g  chi2/ndf=%.2f  p=%.3f",
-                               a, b, c, fwhmChi2Ndf_, fwhmPValue_);
+    std::string result = Form("a=%.4g  b=%.4g  chi2/ndf=%.2f  p=%.3f",
+                               a, b, fwhmChi2Ndf_, fwhmPValue_);
     fwhmResultLbl_->SetText(result.c_str());
     AppendLog("FWHM fit (" + std::to_string(xIn.size()) + " pts): " + result);
     SetStatus("FWHM fit done  chi2/ndf=" + Fmt(fwhmChi2Ndf_, 2));
@@ -762,7 +748,7 @@ void GammaFitGUI::OnAcceptFWHM()
 
     double a = fwhmTF1_->GetParameter(0);
     double b = fwhmTF1_->GetParameter(1);
-    double c = fwhmTF1_->GetParameter(2);
+    double c = 0.0;
 
     double chi2ndf = std::numeric_limits<double>::max();
     int ndf = fwhmTF1_->GetNDF();
@@ -821,7 +807,7 @@ void GammaFitGUI::OnAcceptFWHM()
     std::string saved = (targets.size() == 1) ? targets[0]
                       : std::to_string(targets.size()) + " histograms";
     AppendLog("Resolution model saved to " + saved + ":  a=" + Fmt(a, 5) +
-              "  b=" + Fmt(b, 5) + "  c=" + Fmt(c, 8) +
+              "  b=" + Fmt(b, 5) +
               "  excluded=" + std::to_string(nExcl) + " pts");
     SetStatus("FWHM model saved: " + saved);
 }

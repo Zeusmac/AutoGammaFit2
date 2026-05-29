@@ -9,15 +9,16 @@ class ResolutionModel {
 public:
     double a = 0.5;
     double b = 0.02;
-    double c = 1e-8;
+    double c = 0.0;  // kept for cache compat; not used in FWHM (Fano model has no E² term)
 
     // optional smoothing factor
     double alpha = 0.2;
 
-    // Model: FWHM^2 = a + b*E + c*E^2  (standard quadrature detector model)
+    // Fano model: FWHM² = η² + F·ε·E  →  FWHM(E) = sqrt(a + b·E)
+    // a = electronic noise², b = Fano × charge-creation energy (~0.002 for HPGe)
     double FWHM(double E) const {
-        double fwhm_sq = a + b * E + c * E * E;
-        return (fwhm_sq > 0) ? std::sqrt(fwhm_sq) : 0.0;
+        double fwhm_sq = a + b * E;
+        return (fwhm_sq > 0.0) ? std::sqrt(fwhm_sq) : 0.0;
     }
 
     double Sigma(double E) const {
@@ -27,24 +28,19 @@ public:
     // -----------------------------
     // AUTO UPDATE FROM FITS (Quadrature Based)
     // -----------------------------
-    void UpdateFromQuadratureFit(double a_new, double b_new, double c_new) {
+    void UpdateFromQuadratureFit(double a_new, double b_new) {
         Debug::Log(Debug::RESMODEL,
-            "Update: old a=" + std::to_string(a) +
-            "  b=" + std::to_string(b) +
-            "  c=" + std::to_string(c));
+            "Update: old a=" + std::to_string(a) + "  b=" + std::to_string(b));
         Debug::Log(Debug::RESMODEL,
-            "        raw a=" + std::to_string(a_new) +
-            "  b=" + std::to_string(b_new) +
-            "  c=" + std::to_string(c_new));
+            "        raw a=" + std::to_string(a_new) + "  b=" + std::to_string(b_new));
 
-        a = (1 - alpha) * a + alpha * a_new;
-        b = (1 - alpha) * b + alpha * b_new;
-        c = (1 - alpha) * c + alpha * c_new;
+        a = (1.0 - alpha) * a + alpha * a_new;
+        b = (1.0 - alpha) * b + alpha * b_new;
+        c = 0.0;
 
         Debug::Log(Debug::RESMODEL,
             "     smooth a=" + std::to_string(a) +
             "  b=" + std::to_string(b) +
-            "  c=" + std::to_string(c) +
             "  alpha=" + std::to_string(alpha));
     }
 };

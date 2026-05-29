@@ -317,6 +317,37 @@ public:
     void OnEffClearStepPoints();     // clear all manual step points
     void OnEffSaveManual();          // save manually-entered params to eff_curves/
 
+    // ── ML peak finder (AutoFit tab checkbox) ────────────────────────────────
+    void OnMLTrainingApprovalToggled();  // append / remove from ml/approved_spectra.txt
+    void OnMLReloadModels();             // clear cached OrtMLModel instances
+    void RefreshMLApprovalState();       // sync checkbox + count label to file
+    void OnToggleShowMLBgSub();          // show/hide ML background-subtracted view
+    // ── ML Inspect sub-tab slots ─────────────────────────────────────────────
+    void OnMLInspectBgOverlay();         // draw raw + ML BG curve on main canvas
+    void OnMLInspectBgSub();             // draw ML BG-subtracted on main canvas
+    void OnMLInspectPeakProb();          // pop up peak-probability histogram
+    void OnMLInspectAllSteps();          // 4-pad TCanvas: all inference steps
+    void OnMLInspectCompare();           // overlay TSpectrum vs ML BG
+    void OnMLPlotBgCurves();             // parse train_bg.log → TGraph popup
+    void OnMLPlotPeakCurves();           // parse train_peak.log → TGraph popup
+    void OnMLPreviewSynSpectrum();       // generate random synthetic spectrum
+
+    // ── ML tab slots ──────────────────────────────────────────────────────────
+    void OnMLTabRefreshApproved();   // re-read approved_spectra.txt → listbox
+    void OnMLTabRemoveApproved();    // remove selected entry from listbox + file
+    void OnMLTabClearApproved();     // remove ALL entries
+    void OnMLTabAddCurrent();        // add currentHist_ to approved list
+    void OnMLRefreshDataStatus();    // refresh synthetic/combined dataset labels
+    void OnMLRefreshModelStatus();   // refresh model file status labels + log
+    void OnMLUpdateRAMEstimate();    // recalculate RAM estimate from spinners
+    void OnMLGenSynthetic();         // launch generate_spectra.py in background
+    void OnMLLoadReal();             // launch load_real_spectra.py in background
+    void OnMLTrainBg();              // launch train_bg.py in background
+    void OnMLTrainPeak();            // launch train_peak.py in background
+    void OnMLTrainSigma();           // launch train_sigma.py in background
+    void OnMLRefreshLog();           // reload selected log file into log view
+    void OnMLLogComboChanged(Int_t); // switch which log is shown
+
     // ── Recent files ─────────────────────────────────────────────────────────
     void OnOpenRecent();
 
@@ -625,6 +656,30 @@ private:
     TGListBox*     effManualStepList_ = nullptr;  // display of manual step points
     std::vector<std::pair<double,double>> effManualPoints_;  // pending step data
 
+    // ML peak finder widgets (AutoFit tab → "ML Peak Finder" group)
+    TGCheckButton* useMLChk_              = nullptr;  // "Use ML peak finder"
+    TGCheckButton* useMLSigmaChk_         = nullptr;  // "ML sigma constraint"
+    TGNumberEntry* mlThreshEntry_         = nullptr;  // peak probability threshold
+    TGTextButton*  mlReloadBtn_           = nullptr;  // "Reload ML Models"
+    TGCheckButton* showMLBgSubChk_        = nullptr;  // "Show ML BG-subtracted"
+    bool           showMLBgSub_           = false;
+    // ML Training Approval widgets (AutoFit tab)
+    TGCheckButton* mlTrainingApprovedChk_ = nullptr;  // "Approved for ML training"
+    TGLabel*       mlTrainingCountLbl_    = nullptr;  // "N spectra approved"
+
+    // ML tab widgets
+    TGListBox*  mlApprovedList_    = nullptr;  // approved spectra (Training Data sub-tab)
+    TGLabel*    mlApprovedCntLbl_  = nullptr;  // "N spectra approved"
+    TGLabel*       mlSynDataLbl_      = nullptr;  // data/synthetic.npz status
+    TGLabel*       mlCombDataLbl_     = nullptr;  // data/combined.npz status
+    TGLabel*       mlBgModelLbl_      = nullptr;  // ml/bg_model.onnx status
+    TGLabel*       mlPeakModelLbl_    = nullptr;  // ml/peak_model.onnx status
+    TGTextView*    mlTrainLogView_    = nullptr;  // training log display
+    TGComboBox*    mlLogCombo_        = nullptr;  // select bg / peak log
+    TGNumberEntry* mlNSpectraEntry_   = nullptr;  // generate: number of spectra
+    TGNumberEntry* mlWinPerSpecEntry_ = nullptr;  // generate: windows per spectrum
+    TGLabel*       mlRAMEstLbl_       = nullptr;  // live RAM estimate label
+
     // Channel->keV calibration parameters (E = a + b*ch + c*ch^2)
     TGNumberEntry* calibA_            = nullptr;
     TGNumberEntry* calibB_            = nullptr;
@@ -847,6 +902,7 @@ private:
     TGCheckButton*       mBgQuadChk_      = nullptr;  // quadratic background term
     TGCheckButton*       mComptonStepChk_ = nullptr;  // Compton step (Erfc term per peak)
     TGCheckButton*       mExpoTailChk_    = nullptr;  // low-energy exponential tail (HYPERMET)
+    TGCheckButton*       mMLSigmaChk_     = nullptr;  // ML sigma constraint ±8%
     TGCheckButton*       mTieWidthsChk_    = nullptr;  // tie sigma to resolution model
     TGCheckButton*       mTieSameSigmaChk_ = nullptr;  // force same sigma for all Gaussians
     TGComboBox*          mResModelCombo_  = nullptr;  // "Auto" | "Custom"
@@ -1252,6 +1308,7 @@ private:
     void BuildFitResultsTab (TGCompositeFrame* parent);
     void BuildPeakTableTab  (TGCompositeFrame* parent);
     void BuildNuclearTab    (TGCompositeFrame* parent);
+    void BuildMLTab         (TGCompositeFrame* parent);
     void PopulateHistWidgets();
     std::string NucCacheDirPath() const;
     std::string GenerateLevelSchemePlotlyHTML(const std::string& isoID) const;
@@ -1270,9 +1327,12 @@ private:
                            TFile* overrideFile = nullptr,
                            const std::vector<double>& forcedSeeds = {});
     std::string CacheDirFor() const;
+    std::string CacheDirFor(const std::string& filePath) const;
     std::string ArchiveDirFor() const;
     void        EnsureCacheDir() const;
+    void        EnsureCacheDirFor(const std::string& filePath) const;
     std::string CacheFileFor(const std::string& hname) const;
+    std::string CacheFileFor(const std::string& hname, const std::string& filePath) const;
     std::string DecayCacheFileFor() const;
     void        SaveDecayFitCache();
     void        LoadDecayFitCache();
@@ -1283,6 +1343,7 @@ private:
     // Fit Results helpers
     void ShowFitResult(const std::string& hname);
     TH1* MakeBgSubHist(TH1* raw, bool doSubtract = false, int iterations = 14);
+    TH1* MakeMLBgSubHist(TH1* raw);
     TH1* GetTSpectrumBg(TH1* raw, int iterations = 14);
     void SyncResParFields();   // push res_.a/b/c to display fields (Auto mode only)
     ResolutionModel GetTieResModel() const;  // effective model for Tie widths

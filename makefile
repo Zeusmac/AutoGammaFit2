@@ -9,7 +9,22 @@ INCLUDES := \
     -I./database \
     -I./io \
     -I./analysis_modules \
-    -I./gui
+    -I./gui \
+    -I./ml
+
+# ── Optional ONNX Runtime (ML peak finder) ───────────────────────────────────
+# Set USE_ONNX=1 on the make command line after installing the runtime:
+#   make USE_ONNX=1 gui
+# ONNXRT_DIR defaults to ~/onnxruntime (unpack the prebuilt tgz there).
+USE_ONNX   ?= 0
+ONNXRT_DIR ?= $(HOME)/onnxruntime
+ifeq ($(USE_ONNX),1)
+  INCLUDES     += -I$(ONNXRT_DIR)/include -DHAS_ONNX
+  LDFLAGS      += -L$(ONNXRT_DIR)/lib -lonnxruntime \
+                  -Wl,-rpath,$(ONNXRT_DIR)/lib
+  GUI_ROOTLIBS += -L$(ONNXRT_DIR)/lib -lonnxruntime \
+                  -Wl,-rpath,$(ONNXRT_DIR)/lib
+endif
 
 # =========================
 # ROOT CONFIG

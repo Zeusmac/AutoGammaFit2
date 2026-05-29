@@ -35,8 +35,21 @@
     - [12.13 Decay Chain Mathematics](#1213-decay-chain-mathematics)
     - [**12.14 Complete Fit Statistics Reference**](#1214-complete-fit-statistics-reference)
 13. [Algorithms](#13-algorithms)
+    - [13.1 AutoFit Pipeline](#131-autofit-pipeline)
+    - [13.2 MIGRAD Minimisation](#132-migrad-minimisation)
+    - [13.3 Chi² vs Log-likelihood](#133-chi-vs-log-likelihood)
+    - [13.4 Background Anchor Algorithm](#134-background-anchor-algorithm)
+    - [13.5 AIC Model Selection](#135-aic-model-selection)
+    - [13.6 ML Background Estimation MLP](#136-ml-background-estimation-mlp)
+    - [13.7 ML Peak Detection MLP and NMS](#137-ml-peak-detection-mlp-and-nms)
+    - [13.8 ML Sigma Width MLP](#138-ml-sigma-width-mlp)
 14. [Cache System](#14-cache-system)
-15. [References](#15-references)
+15. [ML Tab](#15-ml-tab)
+    - [15.1 Architecture Sub-tab](#151-architecture-sub-tab)
+    - [15.2 Training Data Sub-tab](#152-training-data-sub-tab)
+    - [15.3 Train Sub-tab](#153-train-sub-tab)
+    - [15.4 Data Privacy](#154-data-privacy)
+16. [References](#16-references)
 
 ---
 
@@ -228,6 +241,80 @@ across sessions.
   the complementary axis. Creates a virtual 1D histogram in the session.
 - **Background Histogram Subtraction**: `result = source − scale × background`.
   Sumw2() is applied so errors propagate as σ_result² = σ_source² + scale²·σ_bg².
+
+### 3.9 ML Peak Finder
+
+An alternative to TSpectrum that uses two small trained neural networks to perform
+background estimation and peak detection. When enabled, TSpectrum is bypassed
+entirely for both the background subtraction and the peak search steps.
+
+**Requires:** `make USE_ONNX=1 gui` (links ONNX Runtime) and trained model files
+`ml/bg_model.onnx` and `ml/peak_model.onnx` in the working directory. Without
+these, AutoFit silently falls back to TSpectrum. See [Section 15](#15-ml-tab) for
+the full training workflow.
+
+| Control | Description |
+|---------|-------------|
+| **Use ML peak finder** | Replaces TSpectrum BG + Search with the ML pipeline. Default off. |
+| **Peak threshold** | Minimum peak-probability output from the detector MLP (0.01–0.99). Lower finds more peaks; higher is more selective. Default 0.5. |
+| **Reload ML Models** | Clears the in-memory model cache so the next AutoFit re-reads the `.onnx` files from disk. Use after retraining. |
+| **ML sigma constraint (±8%)** | Requires `ml/sigma_model.onnx`. When enabled, MIGRAD constrains each peak's sigma to within ±8% of the SigmaNet prediction, breaking the amplitude–sigma parameter correlation and reducing area uncertainty. Falls back to standard resolution-model bounds if the `.onnx` file is absent or a prediction is NaN. See §13.8. |
+
+**How it works** (full derivation in §13.6–13.7):
+
+1. A 101-bin sliding window of normalised raw counts is fed to the **background MLP**
+   (101→64→32→1) to estimate the smooth Compton continuum at each bin.
+2. The estimated background is subtracted; negative bins are floored to zero.
+3. A 51-bin sliding window of the normalised BG-subtracted spectrum is fed to the
+   **peak detector MLP** (51→32→16→1→Sigmoid) to compute a peak probability at
+   each bin.
+4. Non-maximum suppression (§13.7) converts the probability array into discrete
+   peak positions, which are passed to the standard AdaptiveFitter pipeline unchanged.
+
+**When to use ML mode:**
+- Spectra with complex non-linear Compton continua that confuse TSpectrum
+- When TSpectrum's iterative background overestimates in dense peak regions
+- After the models have been trained on spectra representative of your detector
+
+**When to use TSpectrum (default):**
+- No trained models available yet
+- Sparse spectra with few peaks and a smooth background (TSpectrum is excellent here)
+- When you need deterministic, reproducible behaviour with no Python dependency
+
+*Reference: ONNX Runtime [[ref-20]](#ref-20); PyTorch [[ref-21]](#ref-21); general MLP architecture
+[[ref-22]](#ref-22); NMS in peak detection — adapted from computer vision practice [[ref-23]](#ref-23);
+amplitude–sigma correlation in Gaussian fitting — [[ref-26]](#ref-26); SigmaNet architecture — §13.8*
+
+### 3.10 ML Training Approval
+
+Used to curate the list of real spectra included in ML training data. Only spectra
+where every visible feature is correctly described by the fit cache should be approved.
+
+**Approved for ML training** checkbox — when checked, the current histogram name and
+ROOT file path are appended to `ml/approved_spectra.txt`. When unchecked, the entry
+is removed. The checkbox auto-updates whenever a different histogram is selected.
+
+**N spectra approved** label — live count of lines in `ml/approved_spectra.txt`.
+
+**What makes a good training spectrum:**
+- All visible gamma lines are in the fit cache (`fit_caches/*.dat`) with
+  chi²/ndf ∈ [0.8, 2.5] and at most 1–2 `needsRefit` flags.
+- The background is smooth and representative of your detector (flat, linear,
+  or exponential Compton continuum).
+- No unexplained bumps or broad features not accounted for in the cache.
+
+**What to avoid:**
+- Spectra with visible peaks NOT in the fit cache — the ML learns those peaks are
+  background, which will cause it to smooth over real lines during inference.
+- Chi²/ndf > 5 anywhere in the cache — unreliable parameter values corrupt the
+  background truth labels.
+- Heavily pile-up-distorted spectra.
+
+The `load_real_spectra.py` script auto-skips spectra where more than 20% of cache
+entries have `needsRefit=1` or where any entry has chi²/ndf > 5, and prints a
+reason for each skip.
+
+*See also: [Section 15.2 Training Data Sub-tab](#152-training-data-sub-tab)*
 
 ### 3.8 Debug Sections
 
@@ -460,6 +547,19 @@ comparison work correctly.
 | MINOS errors (E) | Compute asymmetric (profile-likelihood) parameter uncertainties. More accurate than symmetric MIGRAD errors near parameter boundaries. Significantly slower. |
 | Show fit components | Overlay the background (green dashed) and individual Gaussian components (blue dashed) on the spectrum, in addition to the total fit (red). |
 | Show isotope matches | Display the matched isotope name from the database above each peak energy label. Uncheck to show energies only. |
+| ML sigma constraint | Requires `ml/sigma_model.onnx`. Constrains the sigma of each clicked peak to within ±8% of the SigmaNet ML prediction before running MIGRAD. Falls back to standard resolution-model bounds if the model file is absent or the prediction is NaN. See §13.8 for the network architecture and training procedure. |
+
+**When to use ML sigma constraint:**
+- Doublets or triplets where the amplitude–sigma correlation inflates area uncertainties
+- Any peak where you want to enforce the sigma predicted by the ML model trained on your detector
+- When MIGRAD returns anomalously large sigma uncertainty (`σ(sigma) / sigma > ~30%`)
+
+**When NOT to use:**
+- The sigma model has not been trained on spectra from your detector (predictions will be wrong)
+- Peaks that are genuinely anomalously wide (e.g. Doppler-broadened 511 keV, recoil-broadened lines)
+- When the free sigma is a cross-check on the resolution model calibration
+
+*Reference: parameter correlation in chi² fitting — [[ref-26]](#ref-26); SigmaNet training — §13.8; Softplus activation — [[ref-25]](#ref-25)*
 
 ### 4.7 Fit Parameter Bounds
 
@@ -1950,6 +2050,194 @@ at least 0.05 to be favoured.
 
 ---
 
+### 13.6 ML Background Estimation MLP
+
+When **Use ML peak finder** is enabled, the TSpectrum background estimator is
+replaced by a small multilayer perceptron (MLP) that estimates the smooth
+underlying background independently of peak content.
+
+**Input normalisation.**  For each spectrum of N bins let M = max(counts).  The
+normalised array is:
+```
+x[b] = counts[b] / M      (M = 1 if spectrum is empty)
+```
+
+**Sliding-window inference.**  A window of W_bg = 101 bins is centred on each
+bin b.  Bins outside [0, N−1] are zero-padded.  The window vector
+`w ∈ ℝ¹⁰¹` is fed to the network:
+```
+Layer 1 :  z₁ = ReLU( W₁ w  + b₁ )      W₁ ∈ ℝ⁶⁴ˣ¹⁰¹
+Layer 2 :  z₂ = ReLU( W₂ z₁ + b₂ )      W₂ ∈ ℝ³²ˣ⁶⁴
+Output  :  ŷ  =        W₃ z₂ + b₃        W₃ ∈ ℝ¹ˣ³²
+```
+The scalar output ŷ is the predicted normalised background at bin b.
+De-normalised: `bg[b] = ŷ · M`.
+
+**Training objective.**  MSELoss on (ŷ, y_bg/M) where the label y_bg is the
+analytic background used to generate the synthetic spectrum (or the
+residual-subtracted background for real approved spectra).  Optimised with
+Adam (lr = 1×10⁻³), ReduceLROnPlateau, early stopping on validation MSE.
+
+**Background subtraction.**  After inference the background-subtracted
+histogram is formed:
+```
+h_sub[b] = max( counts[b] − bg[b],  0 )
+```
+The floor prevents negative bins from biasing the downstream peak detector.
+
+*Reference: [[ref-21]](#ref-21); [[ref-22]](#ref-22)*
+
+---
+
+### 13.7 ML Peak Detection MLP and NMS
+
+**Input.**  The background-subtracted spectrum h_sub is re-normalised:
+```
+x_sub[b] = h_sub[b] / max(h_sub)
+```
+A window of W_pk = 51 bins is centred on each bin b (zero-padded at edges).
+
+**Network.**
+```
+Layer 1 :  z₁ = ReLU( W₁ w  + b₁ )      W₁ ∈ ℝ³²ˣ⁵¹
+Layer 2 :  z₂ = ReLU( W₂ z₁ + b₂ )      W₂ ∈ ℝ¹⁶ˣ³²
+Output  :  p  = σ( W₃ z₂ + b₃ )          W₃ ∈ ℝ¹ˣ¹⁶
+```
+`σ` is the logistic sigmoid, so p[b] ∈ (0,1) is the probability that bin b
+is a peak centre.
+
+**Class-imbalance weighting.**  Typically 1–5 % of bins contain peaks.
+Training uses a weighted binary cross-entropy loss:
+```
+L = − [ α · y · log p  +  (1−y) · log(1−p) ]     α = 20
+```
+Without the weight α the network converges to predicting "no peak"
+everywhere, achieving trivially low loss.
+
+**Non-maximum suppression (NMS).**  After the full probability array p[0…N−1]
+is computed:
+
+1. Threshold: keep only bins with `p[b] > θ` (default θ = 0.5, adjustable
+   in the ML Peak Finder group).
+2. Local-maximum filter: within each contiguous run of above-threshold bins,
+   retain only the bin with the highest p value.
+3. Merge: if two retained peaks are separated by less than one `σ(E)` (the
+   detector resolution at that energy), keep only the higher-probability one.
+4. The surviving bin centres are appended to the `peaks` vector fed to the
+   existing `AdaptiveFitter` pipeline — identical in type to the vector
+   returned by TSpectrum.
+
+*Reference: [[ref-21]](#ref-21); [[ref-22]](#ref-22); [[ref-23]](#ref-23)*
+
+---
+
+### 13.8 ML Sigma Width MLP
+
+#### Motivation: the amplitude–sigma correlation
+
+In a Gaussian peak fit the amplitude A and width σ are anti-correlated: a slightly
+wider peak with a proportionally smaller amplitude fits the data almost as well as
+the nominal solution.  In the MIGRAD covariance matrix this appears as a large
+off-diagonal element `cov(A, σ)`, which inflates the uncertainty on the fitted
+area `N_peak = A · σ · √(2π)`:
+
+```
+Var(N_peak) / N_peak² ≈ [Var(A)/A²] + [Var(σ)/σ²] + 2·cov(A,σ)/(A·σ)
+```
+
+The cross-term `2·cov(A,σ)/(A·σ)` is typically negative (the anti-correlation
+reduces variance) but the amplified marginal uncertainties can dominate for weak
+peaks or doublets.  Constraining σ to a narrow band breaks this degeneracy: MIGRAD
+can only move σ within ±8%, so the covariance is suppressed and the area uncertainty
+shrinks.
+
+*Reference: [[ref-26]](#ref-26) — correlation of fit parameters in chi² minimisation;
+[James & Roos (1975)](#ref-1) — MINUIT covariance matrix interpretation*
+
+#### SigmaNet architecture
+
+A 51-bin sliding window (same normalisation as the peak detector MLP) is extracted
+around each candidate peak centre and fed to **SigmaNet**:
+
+```
+Input   :  w ∈ ℝ⁵¹   (normalised BG-subtracted counts in ±25 bins around peak)
+Layer 1 :  z₁ = ReLU( W₁ w  + b₁ )    W₁ ∈ ℝ³²ˣ⁵¹
+Layer 2 :  z₂ = ReLU( W₂ z₁ + b₂ )    W₂ ∈ ℝ¹⁶ˣ³²
+Output  :  σ̂  = Softplus( W₃ z₂ + b₃ ) W₃ ∈ ℝ¹ˣ¹⁶
+```
+
+The **Softplus** activation `f(x) = ln(1 + eˣ)` is used instead of ReLU at the
+output so that the predicted sigma is always strictly positive, even for pathological
+windows:
+
+```
+Softplus(x) ≈ x       for x >> 0   (linear for large positive input)
+Softplus(x) ≈ eˣ      for x << 0   (exponential — never reaches zero)
+```
+
+*Reference: Softplus and smooth positive activations — [[ref-25]](#ref-25);
+[Goodfellow et al. (2016)](#ref-22), Sec. 6.3*
+
+The output σ̂ is in **bins**; it is multiplied by the bin width (keV/bin) at
+inference time to give the predicted sigma in keV.
+
+#### Training objective
+
+SigmaNet is trained with the **Smooth L1 (Huber) loss** with `β = 0.5`:
+
+```
+          ½ (ŷ − y)²/β        if |ŷ − y| < β
+L(ŷ, y) =
+          |ŷ − y| − β/2       otherwise
+```
+
+The quadratic region (`< β`) gives the same gradient as MSE for well-predicted
+peaks; the linear region (`> β`) de-weights outlier peaks (e.g. doublets where the
+true per-peak sigma is ambiguous).  MSELoss amplifies these outliers quadratically,
+causing the network to overfit them at the cost of typical peaks.
+
+*Reference: Huber loss / SmoothL1 — [[ref-24]](#ref-24); PyTorch `nn.SmoothL1Loss` — [[ref-21]](#ref-21)*
+
+Optimiser: Adam (lr = 1×10⁻³), ReduceLROnPlateau (patience = 5), 40 epochs.
+The model is exported to `ml/sigma_model.onnx` (opset 17) by `train/train_sigma.py`.
+
+#### Training data
+
+The sigma labels are extracted from the same 51-bin windows used for centroid
+regression (see `extract_centroid_windows` in `train/generate_spectra.py`):
+
+- **Window**: 51-bin region centred on the true peak position, normalised by the
+  maximum of the BG-subtracted spectrum.
+- **Label**: `σ_true / bin_width` (sigma in bins) — the exact sigma used to
+  generate the synthetic Gaussian.
+
+One window per Gaussian peak per synthetic spectrum is generated.  Because each
+spectrum has on average 5 peaks, this produces ~5 × N_spectra training examples,
+which is much less than the bg/peak windows (100 × N_spectra).  Train with at
+least 2000 spectra (default 5000) to get good coverage of the sigma range.
+
+#### Inference and bounds application
+
+At fit time, for each peak centre E in a group:
+
+1. Extract the 51-bin normalised window from the BG-subtracted working histogram.
+2. Run SigmaNet to get `σ̂_bins`; convert to keV: `σ̂_keV = σ̂_bins × bw`.
+3. Pass `σ̂_keV` to `AdaptiveFitterConfig::mlSigmaHints[i]`.
+4. AdaptiveFitter sets MIGRAD bounds:
+   ```
+   σ_lo = σ̂ · (1 − 0.08)     σ_hi = σ̂ · (1 + 0.08)     seed = σ̂
+   ```
+5. If `σ̂` is NaN or ≤ 0 (model absent or failed), falls back to the standard
+   resolution-model bounds (`sigmaLoFrac × σ_model` to `sigmaHiFrac × σ_model`).
+
+The ±8% band is intentionally narrow: it is wide enough to absorb calibration
+drift and normalisation differences between training and data, but tight enough
+to effectively break the A–σ degeneracy.
+
+*Reference: [[ref-20]](#ref-20) (ONNX Runtime inference); [[ref-21]](#ref-21) (PyTorch export)*
+
+---
+
 ## 14. Cache System
 
 Fit results are stored as plain-text cache files in `fit_caches/<rootfile>/`:
@@ -2027,7 +2315,179 @@ editor if needed.
 
 ---
 
-## 15. References
+## 15. ML Tab
+
+The **ML** tab provides a self-contained interface for inspecting the ML
+peak-finder architecture, managing training data, and launching training
+without leaving the application.
+
+### 15.1 Architecture Sub-tab
+
+A scrollable reference panel showing the design of both networks and the
+complete data pipeline.  Five sections are displayed:
+
+| Section | Contents |
+|---------|----------|
+| Background Estimation MLP | Layer dimensions, window size (101 bins), normalisation formula, MSELoss |
+| Peak Detector MLP | Layer dimensions, window size (51 bins), sigmoid output, weighted BCELoss (α=20) |
+| Non-Maximum Suppression | Three-step NMS algorithm (threshold → local-max → merge) |
+| Synthetic Training Data | Background shapes (flat/linear/exponential), peak count distribution, FWHM model, Poisson noise |
+| Real-Spectrum BG Truth | Background reconstruction formula, 3σ exclusion zone, auto-skip rules |
+
+No controls are present in this sub-tab — it is read-only documentation.
+
+---
+
+### 15.2 Training Data Sub-tab
+
+Manages which spectra are approved for ML training and tracks the state of
+the generated dataset files.
+
+**Approved spectra list** (`ml/approved_spectra.txt`)
+
+The list box shows all currently approved spectra (histogram name and source
+file path).  Four buttons act on the list:
+
+| Button | Action |
+|--------|--------|
+| Add current | Appends the histogram loaded in the main canvas to the approved list (same as the checkbox in §3.10) |
+| Remove sel. | Removes the selected entry from the list and from `approved_spectra.txt` |
+| Clear all | Removes every entry from `approved_spectra.txt` after confirmation |
+| Refresh | Re-reads `approved_spectra.txt` and updates the list box |
+
+A label below the list shows the total approved count.
+
+**Dataset status**
+
+Two status labels report the file size and modification date of:
+- `data/synthetic.npz` — windows generated by `train/generate_spectra.py`
+- `data/combined.npz` — windows from both synthetic and real spectra
+
+**Generation parameters**
+
+Two spinners control how much data the `generate_spectra.py` script produces:
+
+| Control | Range | Default | Description |
+|---------|-------|---------|-------------|
+| **Spectra** | 100–200 000 | 5 000 | Number of synthetic spectra to generate. Each spectrum independently randomises background shape, peak positions, amplitudes, and Poisson noise. |
+| **Windows/spectrum** | 10–2 000 | 100 | Random background and peak windows sampled per spectrum. Higher values produce more training examples per spectrum but use more RAM and time. |
+
+A **RAM estimate** label below the spinners shows the projected peak memory
+footprint and the current available system RAM:
+
+```
+Estimated RAM: bg_X ≈ NNN MB  peak_X ≈ NNN MB  total ≈ NNN MB
+Available: NNN MB
+```
+
+The estimate is: `N_spectra × W_per_spec × (101 + 51) floats × 4 bytes × 1.2 overhead`.
+The label updates automatically when either spinner changes.  Warnings are shown
+when the estimate exceeds 40% (yellow) or 80% (red) of available RAM.
+
+**Dataset generation buttons**
+
+| Button | Script launched | Output |
+|--------|----------------|--------|
+| Generate synthetic | `train/generate_spectra.py --n-spectra N --windows-per-spectrum W` | `data/synthetic.npz` |
+| Load real spectra | `train/load_real_spectra.py` | appends to `data/combined.npz` |
+| Refresh | Re-reads file sizes and dates | — |
+
+Clicking **Generate synthetic** passes the current spinner values to the script,
+immediately switches the log viewer to `gen.log`, and shows the first progress
+line within a few seconds.  Scripts run asynchronously in the background; the
+log refreshes manually via **Refresh log** in the Train sub-tab.
+
+**Memory guidance**
+
+| Spectra | Windows/spectrum | bg_X | peak_X | Total |
+|--------:|----------------:|-----:|-------:|------:|
+| 1 000 | 100 | 40 MB | 20 MB | ~73 MB |
+| 5 000 | 100 | 202 MB | 102 MB | ~365 MB |
+| 20 000 | 100 | 808 MB | 408 MB | ~1.5 GB |
+| 20 000 | 400 | 3.2 GB | 1.6 GB | ~5.8 GB |
+
+The previous default (20 000 spectra × all-bins) required ~50 GB and was killed by
+the OOM kernel on most systems; the new sampling approach keeps memory predictable
+regardless of spectrum length.
+
+---
+
+### 15.3 Train Sub-tab
+
+Controls for training the models and viewing training logs.
+
+**Model status**
+
+Three labels show the file size and modification date of `ml/bg_model.onnx`,
+`ml/peak_model.onnx`, and `ml/sigma_model.onnx`.  Use **Refresh status** to update.
+**Reload models** calls `PeakFitter::ReloadMLModels()` to force the C++ inference
+engine to re-read all `.onnx` files from disk (useful after retraining without
+restarting the application).
+
+**Training buttons**
+
+| Button | Script | Output | Log |
+|--------|--------|--------|-----|
+| Train BG model | `train/train_bg.py` | `ml/bg_model.onnx` | `ml/train_bg.log` |
+| Train Peak model | `train/train_peak.py` | `ml/peak_model.onnx` | `ml/train_peak.log` |
+| Train σ model | `train/train_sigma.py` | `ml/sigma_model.onnx` | `ml/train_sigma.log` |
+
+All scripts run asynchronously.  Clicking a train button immediately switches the
+log viewer to the corresponding log file and shows the first epoch output within a
+few seconds.  Expected training time depends on dataset size and hardware; 5k
+synthetic spectra typically completes in under 2 minutes on a modern CPU.
+
+**Recommended training order**
+
+1. **Generate synthetic** (Training Data sub-tab) — creates `data/synthetic.npz`
+   with BG windows, peak-probability labels, centroid labels, *and* sigma labels.
+   All three training scripts read from this single file.
+2. **Train BG model** — trains on `X_bg / y_bg` keys.
+3. **Train Peak model** — trains on `X_peak / y_peak` keys.
+4. **Train σ model** — trains on `X_sigma / y_sigma` keys.
+5. **Reload models** — force-reloads all three `.onnx` files without restarting.
+
+**Log viewer**
+
+The combo box selects which log to display:
+- `train_bg.log` — background model training progress (MSE loss per epoch)
+- `train_peak.log` — peak model training progress (BCE loss, F1 score per epoch)
+- `generate_spectra.log` — synthetic data generation output
+- `load_real_spectra.log` — real-spectrum loader output
+- `train_sigma.log` — sigma model training progress (Huber loss per epoch)
+
+Click **Refresh log** to reload the selected file.  The most recent content
+appears at the bottom.
+
+**Interpreting training output**
+
+| Model | Key metric | Target |
+|-------|-----------|--------|
+| BG | Final MSE (normalised) | < 0.01 |
+| Peak | BCE loss | < 0.10 |
+| Peak | F1 score | > 0.80 |
+| σ (sigma) | Huber loss (bins) | < 0.05 |
+
+If the BG model loss plateaus above 0.05, the training dataset may be too
+small — generate more synthetic spectra (§15.2).  If peak model F1 is low,
+check that approved spectra have complete fit caches with no unlabelled peaks
+(§3.10).  If sigma model Huber loss is high, increase the number of spectra
+(each spectrum contributes ~5 sigma windows on average, so 5000 spectra gives
+~25 000 training examples — adequate for most detectors).
+
+---
+
+### 15.4 Data Privacy
+
+**All ML processing is local.**  Training data, trained models, and log files
+never leave your machine.  The training scripts (`train/*.py`) make no
+network calls.  The C++ inference engine (ONNX Runtime) reads model files
+from disk and performs all computation in-process.  No spectrum data, fit
+results, or model weights are transmitted to any external service.
+
+---
+
+## 16. References
 
 <a id="ref-1"></a>
 1. **MIGRAD minimisation and MINOS errors:**
@@ -2141,3 +2601,65 @@ editor if needed.
     Tabulates half-lives, decay modes, excitation energies, and spin-parities
     for all known nuclides. Used by the nuclear database loader for T½ seeding
     in the Decay tab.
+
+<a id="ref-20"></a>
+20. **ONNX Runtime — cross-platform ML inference engine:**
+    Microsoft Corporation, *ONNX Runtime*, version 1.18+.
+    Available at: [https://onnxruntime.ai](https://onnxruntime.ai) (2018–present).
+    C++ API header: `onnxruntime_cxx_api.h`.
+
+<a id="ref-21"></a>
+21. **PyTorch automatic differentiation framework:**
+    A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan et al.,
+    "PyTorch: An Imperative Style, High-Performance Deep Learning Library,"
+    *Advances in Neural Information Processing Systems* **32** (NeurIPS 2019).
+    Available at: [https://pytorch.org](https://pytorch.org).
+
+<a id="ref-22"></a>
+22. **Deep learning — MLP architecture, BCE loss, optimisation:**
+    I. Goodfellow, Y. Bengio & A. Courville, *Deep Learning*,
+    MIT Press, Cambridge MA, 2016.
+    Available at: [https://www.deeplearningbook.org](https://www.deeplearningbook.org).
+    Chapter 6 covers MLP architecture; Chapter 8 covers Adam and learning-rate
+    schedules; Chapter 7 covers regularisation and early stopping.
+
+<a id="ref-23"></a>
+23. **Non-maximum suppression for peak detection:**
+    Technique adapted from object detection in computer vision:
+    A. Neubeck & L. Van Gool, "Efficient Non-Maximum Suppression,"
+    *18th International Conference on Pattern Recognition (ICPR)*, IEEE, 2006,
+    pp. 850–855.
+    Applied here to 1-D probability arrays from the peak-detector MLP;
+    the merge criterion uses the detector energy resolution σ(E) rather than
+    an IoU threshold.
+
+<a id="ref-24"></a>
+24. **Huber loss (Smooth L1):**
+    P.J. Huber, "Robust Estimation of a Location Parameter,"
+    *Annals of Mathematical Statistics* **35** (1964) 73–101.
+    PyTorch implementation: `torch.nn.SmoothL1Loss(beta=δ)`, which is equivalent
+    to Huber loss with threshold δ: quadratic for |ŷ − y| < δ, linear otherwise.
+    Used to train SigmaNet (§13.8) because it de-weights outlier peaks (e.g.
+    unresolved doublets) without discarding them entirely, unlike MSELoss.
+
+<a id="ref-25"></a>
+25. **Softplus activation:**
+    C. Dugas, Y. Bengio, F. Bélisle, C. Nadeau & R. Garcia, "Incorporating
+    Second-Order Functional Knowledge for Better Option Pricing,"
+    *Advances in Neural Information Processing Systems* **13** (NIPS 2001) 472–478.
+    Softplus(x) = ln(1 + eˣ) is a smooth approximation to ReLU that is always
+    strictly positive, used as the SigmaNet output activation to guarantee
+    σ̂ > 0 regardless of the input window.
+
+<a id="ref-26"></a>
+26. **Parameter correlations in chi-squared minimisation:**
+    F. James, *Statistical Methods in Experimental Physics*, 2nd ed.,
+    World Scientific, 2006. Chapter 10 (§10.2–10.3) derives the covariance
+    matrix from the inverse Hessian of the log-likelihood and explains how
+    anti-correlated parameters (such as Gaussian amplitude A and width σ) lead
+    to inflated marginal uncertainties on derived quantities such as the peak
+    area N = A·σ·√(2π).  Constraining one parameter to a narrow band
+    suppresses the off-diagonal covariance element and reduces the area
+    uncertainty accordingly.
+    Also: [Bevington & Robinson (2003)](#ref-7), Sec. 6.4 — propagation of
+    correlated uncertainties.

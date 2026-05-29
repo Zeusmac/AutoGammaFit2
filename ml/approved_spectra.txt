@@ -1,0 +1,5 @@
+# AutoGammaFit2 — ML training approved spectra
+# Format: one entry per line:
+#   <histogram_name>  <root_file_path>
+# Lines starting with # are comments.
+# Managed by GUI: Source tab → "Approved for ML training" checkbox.

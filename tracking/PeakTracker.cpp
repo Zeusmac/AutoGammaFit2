@@ -141,26 +141,22 @@ void PeakTracker::FitResolutionModel(ResolutionModel& model, TFile* fout, const 
     g->SetName(("FWHMvsEnergy_" + tag).c_str());
 
     // ---- Fit with physical lower bounds so the curve can't invert ----
-    auto f = new TF1(("FWHM_fit" + tag).c_str(), "sqrt([0] + [1]*x + [2]*x*x)", 0, 3000);
-    f->SetParameters(1.0, 0.005, 1e-6);
+    auto f = new TF1(("FWHM_fit" + tag).c_str(), "sqrt([0] + [1]*x)", 0, 3000);
+    f->SetParameters(1.0, 0.002);
     f->SetParLimits(0, 1e-4, 1000.0);
     f->SetParLimits(1, 0.0,  10.0);
-    f->SetParLimits(2, 0.0,  0.1);
 
     g->Fit(f, "R Q B");
 
     double a = f->GetParameter(0);
     double b = f->GetParameter(1);
-    double c = f->GetParameter(2);
 
     Debug::Log(Debug::TRACKER,
-        "FitRes result: a=" + std::to_string(a) +
-        "  b=" + std::to_string(b) +
-        "  c=" + std::to_string(c));
+        "FitRes result: a=" + std::to_string(a) + "  b=" + std::to_string(b));
 
     // ---- Save to ROOT file ----
     RootFileManager::SaveGraph(fout, g);
     RootFileManager::SaveObject(fout, f, "FWHM_fit_par");
 
-    model.UpdateFromQuadratureFit(a, b, c);
+    model.UpdateFromQuadratureFit(a, b);
 }
