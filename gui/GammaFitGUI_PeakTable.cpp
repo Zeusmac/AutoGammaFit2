@@ -1012,7 +1012,9 @@ void GammaFitGUI::OnPTSaveEffCache() {
     out.close();
 
     // Add to in-memory list and combo
-    EfficiencyCache ec{ name, a, b, c, d };
+    EfficiencyCache ec;
+    ec.name = name; ec.type = EfficiencyCache::kLog4;
+    ec.a = a; ec.b = b; ec.c = c; ec.d = d;
     ptEffCaches_.push_back(ec);
     if (ptEffCombo_) {
         ptEffCombo_->AddEntry(name.c_str(), (int)ptEffCaches_.size() + 1);

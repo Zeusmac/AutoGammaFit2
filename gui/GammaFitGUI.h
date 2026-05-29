@@ -98,10 +98,22 @@ struct PeakTableRow {
     bool        needsRefit     = false;
 };
 
-// Named efficiency fit: ln(eff) = a - b*ln(E) + c*ln(E)^2 - d/E^2
+// Named efficiency fit / curve.
+// type kLog4:      ln(eff) = a - b*ln(E) + c*ln(E)^2 - d/E^2  (legacy 4-param model)
+// type kG3LogPoly: eff = exp(sum(g3[i]*lnE^i, i=0..8))  (log-log polynomial, 9 params)
+// type kStep:      piecewise-linear interpolation on (E, eff) pairs
 struct EfficiencyCache {
+    enum Type { kLog4 = 0, kG3LogPoly = 1, kStep = 2 };
     std::string name;
+    Type type = kLog4;
+    // kLog4 fields (kept for backward compat with PeakTable)
     double a = 0.0, b = 0.0, c = 0.0, d = 0.0;
+    // kG3LogPoly: 9 coefficients, g3[0]+g3[1]*lnE+...+g3[8]*lnE^8 in exponent
+    std::vector<double> g3params;
+    // kStep: sorted (E_keV, efficiency) pairs
+    std::vector<std::pair<double,double>> points;
+
+    double eval(double E_keV) const;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -231,16 +243,34 @@ public:
     void OnLoadDecayCache();
     void OnSaveDecayCache();
     void OnDecayScanCaches();
+    void OnDecayCutChanged();
+    void OnDecayErrBarsToggled();
+    void OnDecayCacheBrowserSelected(Int_t id);
+    void PopulateCacheBrowser();
+    void OnAddExtraDecayCut();
+    void OnRemoveExtraDecayCut();
+    void OnClearExtraDecayCuts();
     // ── Total Decay sub-tab ───────────────────────────────────────────────────
     void OnDecayTdModelChanged(Int_t id);
     void OnDecayTdBGTypeChanged(Int_t id);
     void OnFitTotalDecay();
+    void OnFitRK4Decay();
+    void OnRK4SelectAll();
+    void OnRK4SelectNone();
+    void OnRK4SeedFromCuts();
+    void OnRK4ScanHistograms();
+    void OnChiScanDecay();
+    void OnChiScanTotalDecay();
+    void OnChiScanRK4();
+    void UpdateCutsEquation();
+    void UpdateTotalDecayEquation();
 
     // ── Histogram classification ──────────────────────────────────────────────
     void OnHistClassSet();
 
     // ── Custom projections ────────────────────────────────────────────────────
     void OnAddCustomProjection();
+    void OnCustProjRangeChanged();
 
     // ── Background histogram subtraction ─────────────────────────────────────
     void OnSubtractHistogram();
@@ -252,6 +282,7 @@ public:
 
     // ── Peak label display ────────────────────────────────────────────────────
     void OnToggleIsoLabels();
+    void OnTogglePeakFWHMArea();
 
     // ── gnuScope export ───────────────────────────────────────────────────────
     void OnExportGnuScope();
@@ -271,6 +302,20 @@ public:
 
     // ── Efficiency correction ─────────────────────────────────────────────────
     void OnApplyEfficiency();
+
+    // ── Efficiency curve cache (Efficiency sub-tab) ───────────────────────────
+    void OnEffFitCurve();            // fit G3 log-poly to source efficiency points
+    void OnEffSaveCurve();           // save current fit/points to eff_curves/<name>.eff
+    void OnEffScanCurves();          // scan eff_curves/ and populate listbox
+    void OnEffCurveSelected(Int_t id);  // load selected curve into display
+    void OnEffPlotCurve();           // draw selected curve on canvas
+    void OnEffDeleteCurve();         // delete selected curve file
+    void OnEffApplyToHist();         // divide selected histogram by efficiency
+    // manual entry
+    void OnEffAddStepPoint();        // add (E, eff) row to the manual step list
+    void OnEffRemoveStepPoint();     // remove selected row from the manual step list
+    void OnEffClearStepPoints();     // clear all manual step points
+    void OnEffSaveManual();          // save manually-entered params to eff_curves/
 
     // ── Recent files ─────────────────────────────────────────────────────────
     void OnOpenRecent();
@@ -453,6 +498,7 @@ public:
     void SetStatus(const std::string& msg);
     void OnSavePlot();
     void OnClearHistCache();
+    void OnSaveHistCache();
     void OnArchiveHistCache();
     void OnRestoreArchivedCache();
     void OnApplyCanvasAnnotations();
@@ -538,6 +584,7 @@ private:
     TGNumberEntry* custProjLo_        = nullptr;
     TGNumberEntry* custProjHi_        = nullptr;
     TGTextEntry*   custProjName_      = nullptr;
+    TGLabel*       custProjBinInfoLabel_ = nullptr;  // live cut-bin / proj-range readout
 
     // Background subtraction widgets
     TGComboBox*    bgSubSrcCombo_     = nullptr;
@@ -556,6 +603,27 @@ private:
     TGNumberEntry* effB_              = nullptr;
     TGNumberEntry* effC_              = nullptr;
     TGNumberEntry* effD_              = nullptr;
+
+    // Efficiency curve cache (Source → Efficiency sub-tab)
+    TGListBox*     effCurveList_      = nullptr;  // saved curves
+    TGTextEntry*   effCurveName_      = nullptr;  // name for new curve
+    TGComboBox*    effCurveType_      = nullptr;  // kLog4/kG3LogPoly/kStep
+    TGLabel*       effCurveFitLbl_    = nullptr;  // chi2/ndf of last fit
+    std::vector<EfficiencyCache> effCurves_;      // in-memory loaded curves
+    int            effCurveSelected_  = -1;       // index into effCurves_
+    // last-fitted G3 params (9) and step points for pending save
+    std::vector<double>                  effPendingG3_;
+    std::vector<std::pair<double,double>> effPendingPoints_;
+    // Manual entry widgets
+    TGNumberEntry* effManualA_        = nullptr;  // Log4 a
+    TGNumberEntry* effManualB_        = nullptr;  // Log4 b
+    TGNumberEntry* effManualC_        = nullptr;  // Log4 c
+    TGNumberEntry* effManualD_        = nullptr;  // Log4 d
+    TGTextEntry*   effManualG3Entry_  = nullptr;  // G3: 9 space-separated values
+    TGNumberEntry* effManualStepE_    = nullptr;  // Step: E (keV) to add
+    TGNumberEntry* effManualStepV_    = nullptr;  // Step: eff value to add
+    TGListBox*     effManualStepList_ = nullptr;  // display of manual step points
+    std::vector<std::pair<double,double>> effManualPoints_;  // pending step data
 
     // Channel->keV calibration parameters (E = a + b*ch + c*ch^2)
     TGNumberEntry* calibA_            = nullptr;
@@ -772,10 +840,13 @@ private:
     TGCheckButton*       mShowCacheFitsChk_ = nullptr;  // toggle cached fit overlay
     TGTextButton*        markRefitBtn_       = nullptr;  // mark/unmark current peak for refit
     TGCheckButton*       mShowCompChk_     = nullptr;  // show BG + individual Gaussian components
-    TGCheckButton*       showIsoLabelsChk_ = nullptr;  // toggle isotope name above peak labels
-    bool                 showIsoLabels_    = false;
+    TGCheckButton*       showIsoLabelsChk_     = nullptr;
+    bool                 showIsoLabels_        = false;
+    TGCheckButton*       showPeakFWHMAreaChk_  = nullptr;  // toggle FWHM+area on peak labels
+    bool                 showPeakFWHMArea_     = false;
     TGCheckButton*       mBgQuadChk_      = nullptr;  // quadratic background term
     TGCheckButton*       mComptonStepChk_ = nullptr;  // Compton step (Erfc term per peak)
+    TGCheckButton*       mExpoTailChk_    = nullptr;  // low-energy exponential tail (HYPERMET)
     TGCheckButton*       mTieWidthsChk_    = nullptr;  // tie sigma to resolution model
     TGCheckButton*       mTieSameSigmaChk_ = nullptr;  // force same sigma for all Gaussians
     TGComboBox*          mResModelCombo_  = nullptr;  // "Auto" | "Custom"
@@ -969,6 +1040,7 @@ private:
     TGComboBox*    decayGammaAxisCombo_ = nullptr;  // 1=X is gamma, 2=Y is gamma
     TGNumberEntry* decaySigLoEntry_     = nullptr;  // Lo-side sigma window (below centroid)
     TGNumberEntry* decaySigRangeEntry_  = nullptr;  // Hi-side sigma window (above centroid)
+    TGLabel*       decayBinInfoLabel_   = nullptr;  // live readout of cut edges in keV + bins
     TGListBox*     decayPeakList_       = nullptr;  // fitted peaks from gamma projection
     TGComboBox*    decayModelCombo_     = nullptr;
     TGComboBox*    decayBGTypeCombo_    = nullptr;  // 1=Flat, 2=Flat+Exp, 3=Exp only
@@ -985,6 +1057,15 @@ private:
     TGLabel*       decayThalfBGLbl_     = nullptr;
     TGNumberEntry* decayThalfBGExp_     = nullptr;  // T1/2 of exponential BG component (ms)
     TGCheckButton* decayFixBGExp_       = nullptr;
+    // Per-parameter bounds (lo/hi) for each T1/2 — used to call SetParLimits
+    TGNumberEntry* decayThalfPLo_      = nullptr;
+    TGNumberEntry* decayThalfPHi_      = nullptr;
+    TGNumberEntry* decayThalfDLo_      = nullptr;
+    TGNumberEntry* decayThalfDHi_      = nullptr;
+    TGNumberEntry* decayThalfGLo_      = nullptr;
+    TGNumberEntry* decayThalfGHi_      = nullptr;
+    TGNumberEntry* decayThalfBGExpLo_  = nullptr;
+    TGNumberEntry* decayThalfBGExpHi_  = nullptr;
     TGTextView*    decayResultView_     = nullptr;
     TGTextEntry*   decayLabelEntry_     = nullptr;
     TGComboBox*    decayLabelClassCombo_= nullptr;
@@ -994,6 +1075,18 @@ private:
     TGCheckButton* decayFitFullRange_   = nullptr;
     TGNumberEntry* decayRebinEntry_     = nullptr;
     TGLabel*       decayEquationLabel_  = nullptr;
+    TGComboBox*    decayFitMethod_      = nullptr;
+    TGCheckButton* decayShowResid_      = nullptr;
+    TGCheckButton* decayErrBars_        = nullptr;
+    TGNumberEntry* decayLegX_           = nullptr;
+    TGNumberEntry* decayLegY_           = nullptr;
+    TGListBox*     decayCacheBrowserList_ = nullptr;
+    std::vector<double> decayCacheBrowserEs_; // parallel to list entries
+    // Extra gamma-cut additions (summed into decay histogram)
+    TGNumberEntry* decayExtraCutLo_     = nullptr;
+    TGNumberEntry* decayExtraCutHi_     = nullptr;
+    TGListBox*     decayExtraCutList_   = nullptr;
+    std::vector<std::pair<double,double>> extraDecayCuts_;
 
     // Decay fit result  -  stored per peak energy for the active TH2
     struct DecayFitResult {
@@ -1003,8 +1096,14 @@ private:
         int    rebin  = 1;  // time-axis rebin factor used for the fit
         std::vector<double> params;
         std::vector<double> errors;
+        std::vector<double> paramLo;   // lower bounds passed to SetParLimits
+        std::vector<double> paramHi;   // upper bounds passed to SetParLimits
         double chi2ndf = -1.0;
         int    status  = -1;
+        int    fitMethod = 2;     // 1=Chi2 2=Likelihood 3=Chi2+MINOS 4=Likelihood+MINOS
+        double fitLo   = 0.0;    // fit range low edge (ms)
+        double fitHi   = 0.0;    // fit range high edge (ms)
+        bool   fullRange = true; // true = fit full histogram range
         // provenance / annotation
         std::string histName;        // which TH2 this came from
         double      eMin   = 0.0;   // exact gamma energy cut low edge
@@ -1013,6 +1112,7 @@ private:
         double      NsigLo = -1.0;  // Lo-side sigma window (-1 = same as Nsig)
         std::string label;
         std::string classification;
+        std::vector<std::pair<double,double>> extraCuts; // additional gamma-energy cuts summed in
     };
 
     // Decay state
@@ -1050,6 +1150,76 @@ private:
     TGTextView*    decayTdResultView_   = nullptr;
     DecayFitResult decayTdFitResult_;
     bool           decayTdFitValid_     = false;
+    TGNumberEntry* decayTdRebinEntry_   = nullptr;
+    TGCheckButton* decayTdShowResid_    = nullptr;
+    TGCheckButton* decayTdErrBars_      = nullptr;
+    TGComboBox*    decayTdFitMethod_    = nullptr;
+    TGNumberEntry* decayTdLegX_         = nullptr;
+    TGNumberEntry* decayTdLegY_         = nullptr;
+
+    // ── RK4 Full Chain sub-tab ────────────────────────────────────────────────
+    TGCheckButton* rkSumAll_      = nullptr;
+    TGLabel*       rkPLbl_        = nullptr;
+    TGNumberEntry* rkThalfP_      = nullptr;
+    TGCheckButton* rkFixP_        = nullptr;
+    TGLabel*       rkDLbl_        = nullptr;
+    TGNumberEntry* rkThalfD_      = nullptr;
+    TGCheckButton* rkFixD_        = nullptr;
+    TGLabel*       rkBnLbl_       = nullptr;
+    TGNumberEntry* rkThalfBn_     = nullptr;
+    TGCheckButton* rkFixBn_       = nullptr;
+    TGLabel*       rkGdLbl_       = nullptr;
+    TGNumberEntry* rkThalfGd_     = nullptr;
+    TGCheckButton* rkFixGd_       = nullptr;
+    TGNumberEntry* rkEffP_        = nullptr;
+    TGCheckButton* rkFixEffP_     = nullptr;
+    TGNumberEntry* rkEffD_        = nullptr;
+    TGCheckButton* rkFixEffD_     = nullptr;
+    TGNumberEntry* rkEffBn_       = nullptr;
+    TGCheckButton* rkFixEffBn_    = nullptr;
+    TGNumberEntry* rkEffGd_       = nullptr;
+    TGCheckButton* rkFixEffGd_    = nullptr;
+    TGNumberEntry* rkPn_          = nullptr;
+    TGCheckButton* rkFixPn_       = nullptr;
+    TGNumberEntry* rkN0_          = nullptr;
+    TGCheckButton* rkFixN0_       = nullptr;
+    TGNumberEntry* rkBg_          = nullptr;
+    TGCheckButton* rkFixBg_       = nullptr;
+    TGNumberEntry* rkNsteps_      = nullptr;
+    TGListBox*     rkPeakList_    = nullptr;
+    TGComboBox*    rkChainModel_  = nullptr;
+    TGNumberEntry* rkLegX_        = nullptr;
+    TGNumberEntry* rkLegY_        = nullptr;
+    TGCheckButton* rkUse1DHist_   = nullptr;  // use direct 1D histogram instead of TH2 projection
+    TGComboBox*    rkHistCombo_   = nullptr;  // available 1D histograms
+    std::vector<std::string> rkHistSpecs_;    // "filePath::histName" parallel to rkHistCombo_ entries
+    TGNumberEntry* rkRebinEntry_  = nullptr;
+    TGCheckButton* rkShowResid_   = nullptr;
+    TGCheckButton* rkErrBars_     = nullptr;
+    TGComboBox*    rkFitMethod_   = nullptr;
+    TGNumberEntry* rkFitLo_       = nullptr;
+    TGNumberEntry* rkFitHi_       = nullptr;
+    TGCheckButton* rkFitFull_     = nullptr;
+    TGTextView*    rkResultView_  = nullptr;
+
+    // ── Chi² scan popup buttons ───────────────────────────────────────────────
+    TGTextButton*  decayChiScanBtn_   = nullptr;
+    TGTextButton*  decayTdChiScanBtn_ = nullptr;
+    TGTextButton*  rkChiScanBtn_      = nullptr;
+
+    // ── Stored last-fit state for chi² scan ───────────────────────────────────
+    TH1*   lastDecayCutsHist_  = nullptr;
+    TF1*   lastDecayCutsTF1_   = nullptr;
+    double lastDecayCutsXlo_   = 0.0;
+    double lastDecayCutsXhi_   = 0.0;
+    TH1*   lastDecayTdHist_    = nullptr;
+    TF1*   lastDecayTdTF1_     = nullptr;
+    double lastDecayTdXlo_     = 0.0;
+    double lastDecayTdXhi_     = 0.0;
+    TH1*   lastRK4Hist_        = nullptr;
+    TF1*   lastRK4TF1_         = nullptr;
+    double lastRK4Xlo_         = 0.0;
+    double lastRK4Xhi_         = 0.0;
 
     // ── Peak navigation ───────────────────────────────────────────────────────
     std::vector<std::string> peakNavKeys_;
@@ -1093,6 +1263,7 @@ private:
     void SyncDebugToggles();
     void DrawOnCanvas(TH1* h, TF1* fit = nullptr);
     void DrawWithResiduals(TH1* h, TF1* fit, double xlo, double xhi);
+    void DrawDecayResiduals(TH1* h, TF1* fit, double xlo, double xhi);
     void DrawFitComponents(TCanvas* c, TF1* f);
     void RedrawCurrent();
     void RunFitOnHistogram(const std::string& hname,
@@ -1197,6 +1368,8 @@ private:
     void        DispatchShortcut(const std::string& id);
     std::string ShortcutsFilePath() const;
     static std::string KeybindingText(UInt_t keysym, UInt_t modifier);
+
+    void SafeDeleteHist(TH1*& h);  // remove from canvas primitives then delete
 
     // Returns histogram for hname from inputFile_; creates projection if needed.
     // Sets owned=true when caller must delete the returned pointer.

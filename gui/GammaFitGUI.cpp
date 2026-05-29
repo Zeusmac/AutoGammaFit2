@@ -96,6 +96,11 @@ GammaFitGUI::GammaFitGUI(const TGWindow* p, UInt_t w, UInt_t h)
         clearCacheBtn->Connect("Clicked()", "GammaFitGUI", this, "OnClearHistCache()");
         clearCacheBtn->SetToolTipText("Delete the live cache for the current histogram (archive is preserved)");
 
+        TGTextButton* saveCacheBtn = new TGTextButton(btnRow, "  Save Cache  ");
+        btnRow->AddFrame(saveCacheBtn, new TGLayoutHints(kLHintsRight, 2, 2, 1, 1));
+        saveCacheBtn->Connect("Clicked()", "GammaFitGUI", this, "OnSaveHistCache()");
+        saveCacheBtn->SetToolTipText("Re-save the current cache file to disk now");
+
         TGTextButton* restoreArchBtn = new TGTextButton(btnRow, "  Restore Archive  ");
         btnRow->AddFrame(restoreArchBtn, new TGLayoutHints(kLHintsRight, 2, 2, 1, 1));
         restoreArchBtn->Connect("Clicked()", "GammaFitGUI", this, "OnRestoreArchivedCache()");
@@ -781,6 +786,11 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
     clearCacheAutoFit->Connect("Clicked()", "GammaFitGUI", this, "OnClearHistCache()");
     clearCacheAutoFit->SetToolTipText("Delete the live cache for the selected histogram (archive is preserved)");
 
+    TGTextButton* saveCacheAutoFit = new TGTextButton(rg, "Save Cache  (selected)");
+    rg->AddFrame(saveCacheAutoFit, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+    saveCacheAutoFit->Connect("Clicked()", "GammaFitGUI", this, "OnSaveHistCache()");
+    saveCacheAutoFit->SetToolTipText("Re-save the current cache file to disk now");
+
     TGTextButton* archiveCacheAutoFit = new TGTextButton(rg, "Archive Cache  (selected)");
     rg->AddFrame(archiveCacheAutoFit, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
     archiveCacheAutoFit->Connect("Clicked()", "GammaFitGUI", this, "OnArchiveHistCache()");
@@ -852,6 +862,7 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
         custProjTh2Combo_ = new TGComboBox(r1, 910);
         custProjTh2Combo_->Resize(200, 22);
         r1->AddFrame(custProjTh2Combo_, new TGLayoutHints(kLHintsExpandX));
+        custProjTh2Combo_->Connect("Selected(Int_t)", "GammaFitGUI", this, "OnCustProjRangeChanged()");
     }
     {
         TGHorizontalFrame* r2 = new TGHorizontalFrame(cpg);
@@ -864,6 +875,7 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
         custProjAxisCombo_->Select(1, kFALSE);
         custProjAxisCombo_->Resize(170, 22);
         r2->AddFrame(custProjAxisCombo_, new TGLayoutHints(kLHintsLeft));
+        custProjAxisCombo_->Connect("Selected(Int_t)", "GammaFitGUI", this, "OnCustProjRangeChanged()");
     }
     {
         TGHorizontalFrame* r3 = new TGHorizontalFrame(cpg);
@@ -873,10 +885,20 @@ void GammaFitGUI::BuildAutoFitTab(TGCompositeFrame* tab)
         custProjLo_ = new TGNumberEntry(r3, 0.0, 7, -1, TGNumberFormat::kNESRealThree);
         custProjLo_->SetWidth(75);
         r3->AddFrame(custProjLo_, new TGLayoutHints(kLHintsLeft, 0, 2, 0, 0));
+        custProjLo_->Connect("ValueSet(Long_t)",     "GammaFitGUI", this, "OnCustProjRangeChanged()");
+        custProjLo_->Connect("ValueChanged(Long_t)", "GammaFitGUI", this, "OnCustProjRangeChanged()");
         r3->AddFrame(new TGLabel(r3, "to"), new TGLayoutHints(kLHintsCenterY, 2, 2, 0, 0));
         custProjHi_ = new TGNumberEntry(r3, 100.0, 7, -1, TGNumberFormat::kNESRealThree);
         custProjHi_->SetWidth(75);
         r3->AddFrame(custProjHi_, new TGLayoutHints(kLHintsLeft, 2, 0, 0, 0));
+        custProjHi_->Connect("ValueSet(Long_t)",     "GammaFitGUI", this, "OnCustProjRangeChanged()");
+        custProjHi_->Connect("ValueChanged(Long_t)", "GammaFitGUI", this, "OnCustProjRangeChanged()");
+    }
+    {
+        // Live readout: cut-axis bin range + projected-axis range
+        custProjBinInfoLabel_ = new TGLabel(cpg, "");
+        cpg->AddFrame(custProjBinInfoLabel_,
+                      new TGLayoutHints(kLHintsExpandX, 4, 2, 0, 1));
     }
     {
         TGHorizontalFrame* r4 = new TGHorizontalFrame(cpg);
@@ -1803,7 +1825,205 @@ void GammaFitGUI::BuildSourceTab(TGCompositeFrame* tab)
     fwhmBtn->Connect("Clicked()", "GammaFitGUI", this, "OnShowSourceFWHM()");
     fwhmBtn->SetToolTipText("Load FWHM data from cache and draw FWHM vs Energy on the shared canvas");
 
-    
+    // ── Efficiency Curve Cache ─────────────────────────────────────────────────
+    TGGroupFrame* eccg = new TGGroupFrame(p, "Efficiency Curve Cache");
+    p->AddFrame(eccg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
+
+    // Type selector
+    {
+        TGHorizontalFrame* row = new TGHorizontalFrame(eccg);
+        eccg->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 2));
+        row->AddFrame(new TGLabel(row, "Model:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        effCurveType_ = new TGComboBox(row, 980);
+        effCurveType_->AddEntry("Log4  ln(eff)=a-b*lnE+c*lnE^2-d/E^2", 1);
+        effCurveType_->AddEntry("G3 log-poly  (8-degree in lnE, always +)", 2);
+        effCurveType_->AddEntry("Step (use source points directly)", 3);
+        effCurveType_->Select(2, kFALSE);
+        effCurveType_->Resize(200, 22);
+        row->AddFrame(effCurveType_, new TGLayoutHints(kLHintsExpandX));
+    }
+
+    // Fit / collect buttons
+    {
+        TGHorizontalFrame* row = new TGHorizontalFrame(eccg);
+        eccg->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
+
+        TGTextButton* fitBtn = new TGTextButton(row, "Fit to Source Data");
+        row->AddFrame(fitBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        fitBtn->Connect("Clicked()", "GammaFitGUI", this, "OnEffFitCurve()");
+        fitBtn->SetToolTipText(
+            "Collect efficiency data points from the current source analysis\n"
+            "and fit the selected model.\n"
+            "For 'Step': stores the raw points for interpolation (no fit).\n"
+            "You must have source peaks assigned before fitting.");
+
+        TGTextButton* plotBtn = new TGTextButton(row, "Plot Selected");
+        row->AddFrame(plotBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        plotBtn->Connect("Clicked()", "GammaFitGUI", this, "OnEffPlotCurve()");
+        plotBtn->SetToolTipText("Draw the selected efficiency curve on the canvas");
+
+        TGTextButton* applyBtn = new TGTextButton(row, "Apply to Hist");
+        row->AddFrame(applyBtn, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
+        applyBtn->Connect("Clicked()", "GammaFitGUI", this, "OnEffApplyToHist()");
+        applyBtn->SetToolTipText(
+            "Divide each bin of the currently selected histogram by eff(E).\n"
+            "Creates a new histogram named '<hist>_effcorr'.\n"
+            "Uses the efficiency curve currently selected in the list.");
+    }
+
+    // Fit result label
+    effCurveFitLbl_ = new TGLabel(eccg, "  (no fit yet)");
+    eccg->AddFrame(effCurveFitLbl_, new TGLayoutHints(kLHintsLeft, 4, 4, 0, 2));
+
+    // ── Manual Entry ──────────────────────────────────────────────────────────
+    {
+        TGLabel* sepLbl = new TGLabel(eccg, "─── Manual Entry (select model type above) ───");
+        eccg->AddFrame(sepLbl, new TGLayoutHints(kLHintsLeft, 4, 4, 6, 2));
+    }
+
+    // Log4: a, b, c, d
+    {
+        TGLabel* lbl = new TGLabel(eccg, "Log4 params:");
+        eccg->AddFrame(lbl, new TGLayoutHints(kLHintsLeft, 4, 4, 0, 0));
+
+        TGHorizontalFrame* r1 = new TGHorizontalFrame(eccg);
+        eccg->AddFrame(r1, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 1));
+        r1->AddFrame(new TGLabel(r1, "a:"), new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+        effManualA_ = new TGNumberEntry(r1, 0.0, 8, -1,
+            TGNumberFormat::kNESRealFour, TGNumberFormat::kNEAAnyNumber);
+        effManualA_->SetWidth(72); r1->AddFrame(effManualA_, new TGLayoutHints(kLHintsLeft));
+        r1->AddFrame(new TGLabel(r1, "  b:"), new TGLayoutHints(kLHintsCenterY, 4, 2, 0, 0));
+        effManualB_ = new TGNumberEntry(r1, 0.0, 8, -1,
+            TGNumberFormat::kNESRealFour, TGNumberFormat::kNEAAnyNumber);
+        effManualB_->SetWidth(72); r1->AddFrame(effManualB_, new TGLayoutHints(kLHintsLeft));
+        r1->AddFrame(new TGLabel(r1, "  c:"), new TGLayoutHints(kLHintsCenterY, 4, 2, 0, 0));
+        effManualC_ = new TGNumberEntry(r1, 0.0, 8, -1,
+            TGNumberFormat::kNESRealFour, TGNumberFormat::kNEAAnyNumber);
+        effManualC_->SetWidth(72); r1->AddFrame(effManualC_, new TGLayoutHints(kLHintsLeft));
+        r1->AddFrame(new TGLabel(r1, "  d:"), new TGLayoutHints(kLHintsCenterY, 4, 2, 0, 0));
+        effManualD_ = new TGNumberEntry(r1, 0.0, 8, -1,
+            TGNumberFormat::kNESRealFour, TGNumberFormat::kNEAAnyNumber);
+        effManualD_->SetWidth(72); r1->AddFrame(effManualD_, new TGLayoutHints(kLHintsLeft));
+    }
+
+    // G3: 9 space-separated coefficients
+    {
+        TGLabel* lbl = new TGLabel(eccg, "G3 params g0..g8 (space-separated):");
+        eccg->AddFrame(lbl, new TGLayoutHints(kLHintsLeft, 4, 4, 4, 0));
+        effManualG3Entry_ = new TGTextEntry(eccg, "");
+        effManualG3Entry_->Resize(280, 22);
+        effManualG3Entry_->SetToolTipText(
+            "Enter 9 space-separated coefficients for the G3 log-poly model.\n"
+            "eff(E) = exp(g0 + g1*lnE + g2*lnE^2 + ... + g8*lnE^8)\n"
+            "Example: 0.0  -3.5  0.2  -0.01  0.0  0.0  0.0  0.0  0.0");
+        eccg->AddFrame(effManualG3Entry_, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 2));
+    }
+
+    // Step: add (E, eff) pairs
+    {
+        TGLabel* lbl = new TGLabel(eccg, "Step points  (E keV, efficiency):");
+        eccg->AddFrame(lbl, new TGLayoutHints(kLHintsLeft, 4, 4, 4, 0));
+
+        TGHorizontalFrame* addRow = new TGHorizontalFrame(eccg);
+        eccg->AddFrame(addRow, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+        addRow->AddFrame(new TGLabel(addRow, "E:"),
+                         new TGLayoutHints(kLHintsCenterY, 0, 2, 0, 0));
+        effManualStepE_ = new TGNumberEntry(addRow, 0.0, 7, -1,
+            TGNumberFormat::kNESReal, TGNumberFormat::kNEANonNegative,
+            TGNumberFormat::kNELLimitMin, 0.0);
+        effManualStepE_->SetWidth(70);
+        addRow->AddFrame(effManualStepE_, new TGLayoutHints(kLHintsLeft));
+        addRow->AddFrame(new TGLabel(addRow, "  eff:"),
+                         new TGLayoutHints(kLHintsCenterY, 4, 2, 0, 0));
+        effManualStepV_ = new TGNumberEntry(addRow, 0.0, 9, -1,
+            TGNumberFormat::kNESRealFour, TGNumberFormat::kNEANonNegative,
+            TGNumberFormat::kNELLimitMin, 0.0);
+        effManualStepV_->SetWidth(80);
+        addRow->AddFrame(effManualStepV_, new TGLayoutHints(kLHintsLeft));
+        TGTextButton* addPtBtn = new TGTextButton(addRow, " Add ");
+        addRow->AddFrame(addPtBtn, new TGLayoutHints(kLHintsLeft, 4, 0, 0, 0));
+        addPtBtn->Connect("Clicked()", "GammaFitGUI", this, "OnEffAddStepPoint()");
+
+        effManualStepList_ = new TGListBox(eccg, 982);
+        effManualStepList_->Resize(280, 70);
+        eccg->AddFrame(effManualStepList_, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 2));
+
+        TGHorizontalFrame* ptBtns = new TGHorizontalFrame(eccg);
+        eccg->AddFrame(ptBtns, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+        TGTextButton* remBtn = new TGTextButton(ptBtns, "Remove Selected");
+        ptBtns->AddFrame(remBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        remBtn->Connect("Clicked()", "GammaFitGUI", this, "OnEffRemoveStepPoint()");
+        TGTextButton* clrBtn = new TGTextButton(ptBtns, "Clear All");
+        ptBtns->AddFrame(clrBtn, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
+        clrBtn->Connect("Clicked()", "GammaFitGUI", this, "OnEffClearStepPoints()");
+    }
+
+    // Save manual entry row
+    {
+        TGHorizontalFrame* row = new TGHorizontalFrame(eccg);
+        eccg->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 6));
+        row->AddFrame(new TGLabel(row, "Name:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        // reuse effCurveName_ defined below — defer binding; use a separate label
+        // (effCurveName_ is created once in the "Save Fit" row below and shared)
+        TGTextButton* saveManBtn = new TGTextButton(row, "Save Manual Entry");
+        row->AddFrame(saveManBtn, new TGLayoutHints(kLHintsRight, 4, 0, 0, 0));
+        saveManBtn->Connect("Clicked()", "GammaFitGUI", this, "OnEffSaveManual()");
+        saveManBtn->SetToolTipText(
+            "Save the manually-entered parameters to eff_curves/<name>.eff.\n"
+            "Uses the Name field below.\n"
+            "For Log4: reads the a/b/c/d fields above.\n"
+            "For G3: reads the g0..g8 text field.\n"
+            "For Step: saves the point list above.");
+    }
+
+    // Saved curves listbox
+    {
+        TGLabel* lbl = new TGLabel(eccg, "Saved curves (eff_curves/):");
+        eccg->AddFrame(lbl, new TGLayoutHints(kLHintsLeft, 4, 4, 2, 0));
+        effCurveList_ = new TGListBox(eccg, 981);
+        effCurveList_->Resize(280, 80);
+        eccg->AddFrame(effCurveList_, new TGLayoutHints(kLHintsExpandX, 4, 4, 0, 2));
+        effCurveList_->Connect("Selected(Int_t)", "GammaFitGUI", this,
+                               "OnEffCurveSelected(Int_t)");
+    }
+
+    // Scan / Delete buttons
+    {
+        TGHorizontalFrame* row = new TGHorizontalFrame(eccg);
+        eccg->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 0, 2));
+
+        TGTextButton* scanBtn = new TGTextButton(row, "Scan eff_curves/");
+        row->AddFrame(scanBtn, new TGLayoutHints(kLHintsLeft, 0, 4, 0, 0));
+        scanBtn->Connect("Clicked()", "GammaFitGUI", this, "OnEffScanCurves()");
+        scanBtn->SetToolTipText("Reload the list of saved efficiency curves from eff_curves/");
+
+        TGTextButton* delBtn = new TGTextButton(row, "Delete Selected");
+        row->AddFrame(delBtn, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
+        delBtn->Connect("Clicked()", "GammaFitGUI", this, "OnEffDeleteCurve()");
+        delBtn->SetToolTipText("Delete the selected curve file from disk");
+    }
+
+    // Name entry + Save button
+    {
+        TGHorizontalFrame* row = new TGHorizontalFrame(eccg);
+        eccg->AddFrame(row, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 4));
+        row->AddFrame(new TGLabel(row, "Name:"),
+                      new TGLayoutHints(kLHintsCenterY, 0, 4, 0, 0));
+        effCurveName_ = new TGTextEntry(row, "");
+        effCurveName_->Resize(120, 22);
+        effCurveName_->SetToolTipText("Name for this curve (used as filename in eff_curves/)");
+        row->AddFrame(effCurveName_, new TGLayoutHints(kLHintsExpandX, 0, 4, 0, 0));
+
+        TGTextButton* saveBtn = new TGTextButton(row, "Save Fit");
+        row->AddFrame(saveBtn, new TGLayoutHints(kLHintsLeft, 0, 0, 0, 0));
+        saveBtn->Connect("Clicked()", "GammaFitGUI", this, "OnEffSaveCurve()");
+        saveBtn->SetToolTipText(
+            "Save the last fitted curve (or step points) to eff_curves/<name>.eff.\n"
+            "Run 'Fit to Source Data' first.");
+    }
+
     // ── Linear Energy Calibration ─────────────────────────────────────────────
     TGGroupFrame* calibg = new TGGroupFrame(p, "Linear Energy Calibration  (build from points)");
     p->AddFrame(calibg, new TGLayoutHints(kLHintsExpandX, 4, 4, 2, 2));
@@ -2312,7 +2532,7 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
     {
         TGGroupFrame* eqGrp = new TGGroupFrame(statsGrp, "Fit Equation");
         statsGrp->AddFrame(eqGrp, new TGLayoutHints(kLHintsExpandX, 2, 2, 4, 2));
-        fitEqView_ = new TGTextView(eqGrp, 285, 44);
+        fitEqView_ = new TGTextView(eqGrp, 285, 66);
         eqGrp->AddFrame(fitEqView_, new TGLayoutHints(kLHintsExpandX, 2, 2, 2, 2));
     }
 
@@ -2363,6 +2583,15 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
         "Models photons scattered into the continuum below the full-energy peak.\n"
         "Ref: Helmer & McCullagh, Nucl. Instrum. Methods 168 (1979) 593.");
     mComptonStepChk_->Connect("Toggled(Bool_t)", "GammaFitGUI", this, "UpdateFitEquation()");
+
+    mExpoTailChk_ = new TGCheckButton(statsGrp, "Exponential tail  (HYPERMET)");
+    statsGrp->AddFrame(mExpoTailChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 0));
+    mExpoTailChk_->SetToolTipText(
+        "Add a low-energy exponential tail for each peak (HYPERMET model).\n"
+        "T/2 * exp((x-E)/beta + s^2/(2*beta^2)) * erfc((x-E)/(s*sqrt2) + s/(beta*sqrt2))\n"
+        "Models charge-carrier trapping near detector contacts/defects.\n"
+        "Adds T_i (amplitude) and beta_i (slope) per peak.");
+    mExpoTailChk_->Connect("Toggled(Bool_t)", "GammaFitGUI", this, "UpdateFitEquation()");
 
     mTieWidthsChk_ = new TGCheckButton(statsGrp, "Tie widths to resolution model");
     statsGrp->AddFrame(mTieWidthsChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 2));
@@ -2457,11 +2686,20 @@ void GammaFitGUI::BuildManualFitTab(TGCompositeFrame* p)
 
     showIsoLabelsChk_ = new TGCheckButton(lblGrp, "Show isotope matches on peaks");
     showIsoLabelsChk_->SetState(kButtonUp);
-    lblGrp->AddFrame(showIsoLabelsChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 2, 4));
+    lblGrp->AddFrame(showIsoLabelsChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 2, 2));
     showIsoLabelsChk_->SetToolTipText(
         "Show the matched isotope name above each peak energy label.\n"
         "Uncheck to display energy values only.");
     showIsoLabelsChk_->Connect("Clicked()", "GammaFitGUI", this, "OnToggleIsoLabels()");
+
+    showPeakFWHMAreaChk_ = new TGCheckButton(lblGrp, "Show FWHM and area on peaks");
+    showPeakFWHMAreaChk_->SetState(kButtonUp);
+    lblGrp->AddFrame(showPeakFWHMAreaChk_, new TGLayoutHints(kLHintsLeft, 2, 2, 0, 4));
+    showPeakFWHMAreaChk_->SetToolTipText(
+        "Overlay FWHM and net area (with uncertainties in NNDC format) on each peak label.\n"
+        "FWHM = 2.3548*sigma,  Area = A*sigma*sqrt(2*pi).\n"
+        "Errors propagated from fit parameter uncertainties.");
+    showPeakFWHMAreaChk_->Connect("Clicked()", "GammaFitGUI", this, "OnTogglePeakFWHMArea()");
 
     {
         TGHorizontalFrame* lblRow = new TGHorizontalFrame(lblGrp);
@@ -2504,9 +2742,9 @@ void GammaFitGUI::OnOpenFile()
     if (!fi.fFilename) return;
 
     // Clear histogram state before closing the old file to avoid dangling pointers
-    if (rawHistOwned_) { delete rawHist_; rawHistOwned_ = false; }
+    if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
     rawHist_ = nullptr;
-    delete viewHist_; viewHist_ = nullptr;
+    SafeDeleteHist(viewHist_);
     currentHist_.clear();
     if (inputFile_) { inputFile_->Close(); delete inputFile_; inputFile_ = nullptr; }
 
@@ -2705,7 +2943,7 @@ void GammaFitGUI::OnHistogramSelected(Int_t id)
         size_t srcIdx = (size_t)(id - 10001);
         if (!srcRootFile_ || srcIdx >= srcHistNames_.size()) return;
         const std::string& hname = srcHistNames_[srcIdx];
-        if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+        if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
         rawHist_ = GetSrcHistogram(hname, rawHistOwned_);
         if (!rawHist_) { AppendLog("Source: cannot load " + hname); return; }
         currentHist_ = hname;
@@ -2719,7 +2957,7 @@ void GammaFitGUI::OnHistogramSelected(Int_t id)
     currentHist_ = histNames_[id - 1];
     schematicDrawn_ = false;
 
-    if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
     rawHist_ = LoadHistFromFile(currentHist_, rawHistOwned_);
 
     // Sync classification combo
@@ -2802,7 +3040,7 @@ void GammaFitGUI::OnLoadCache()
 
     // Rebuild bg-sub if the current view mode calls for it
     int viewMode = histViewCombo_ ? histViewCombo_->GetSelected() : 1;
-    delete viewHist_; viewHist_ = nullptr;
+    SafeDeleteHist(viewHist_);
     if (viewMode == 2 || viewMode == 3) {
         int iters = bgIterEntry_ ? (int)bgIterEntry_->GetNumber() : 14;
         viewHist_ = MakeBgSubHist(rawHist_, true, iters);
@@ -3074,7 +3312,7 @@ void GammaFitGUI::OnApplyTh2Labels()
     }
     // Projection  -  recreate with updated label
     if (projParent_.count(currentHist_)) {
-        if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+        if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
         rawHist_ = LoadProjection(inputFile_, currentHist_, projParent_,
                                   th2XLabelEntry_, th2YLabelEntry_);
         rawHistOwned_ = (rawHist_ != nullptr);
@@ -3095,7 +3333,7 @@ void GammaFitGUI::OnApplySrcTh2Labels()
         return;
     }
     if (srcProjParent_.count(currentHist_)) {
-        if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+        if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
         rawHist_ = LoadProjection(srcRootFile_, currentHist_, srcProjParent_,
                                   srcTh2XLabelEntry_, srcTh2YLabelEntry_);
         rawHistOwned_ = (rawHist_ != nullptr);
@@ -3123,7 +3361,7 @@ void GammaFitGUI::RunFitOnHistogram(const std::string& hname,
     }
 
     currentHist_ = hname;
-    if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
     if (!overrideFile) {
         rawHist_ = LoadHistFromFile(hname, rawHistOwned_);
     } else {
@@ -3286,7 +3524,7 @@ void GammaFitGUI::OnLoadCacheSelected()
     }
     const std::string& hname = histNames_[id - 1];
     currentHist_ = hname;
-    if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
     rawHist_ = LoadHistFromFile(hname, rawHistOwned_);
     if (!rawHist_) { AppendLog("ERROR: histogram '" + hname + "' not found"); return; }
 
@@ -3350,7 +3588,7 @@ void GammaFitGUI::OnLoadCacheAll()
         // point currentHist_ to the last selected / first available
         if (currentHist_.empty()) {
             currentHist_ = fittedHists_.front();
-            if (rawHistOwned_) { delete rawHist_; rawHistOwned_ = false; }
+            if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
             rawHist_ = LoadHistFromFile(currentHist_, rawHistOwned_);
         }
         AppendLog("Cache loaded for " + std::to_string(loaded) + " histograms.");
@@ -3697,29 +3935,28 @@ void GammaFitGUI::UpdateFitEquation()
 
     bool quadBG   = mBgQuadChk_      && mBgQuadChk_->IsDown();
     bool compStep = mComptonStepChk_ && mComptonStepChk_->IsDown();
+    bool expoTail = mExpoTailChk_    && mExpoTailChk_->IsDown();
     bool tieW     = mTieWidthsChk_   && mTieWidthsChk_->IsDown();
     bool sameSig  = mTieSameSigmaChk_ && mTieSameSigmaChk_->IsDown() && n > 1;
     bool flatBG   = mBgFlatChk_      && mBgFlatChk_->IsDown();
 
     fitEqView_->Clear();
 
-    // Line 1: Gaussian sum
+    // Line 1: Gaussian sum (+ optional extra terms)
     std::string gauss;
     if (n <= 0) {
         gauss = "f(x) = (no peaks selected)";
     } else if (n == 1) {
-        if (compStep)
-            gauss = "f(x) = A*exp(-0.5*((x-E)/s)^2) + S*erfc((x-E)/(s*sqrt(2)))";
-        else
-            gauss = "f(x) = A*exp(-0.5*((x-E)/s)^2)";
+        gauss = "f(x) = A*exp(-0.5*((x-E)/s)^2)";
+        if (compStep) gauss += " + S*erfc((x-E)/(s*sqrt2))";
+        if (expoTail) gauss += " + tail(x,E,s,T,beta)";
     } else {
         std::string sigNote = sameSig ? " [shared s]" : tieW ? " [s tied to res]" : "";
-        if (compStep)
-            gauss = Form("f(x) = Sum_i[ A_i*G(x,E_i,s_i) + S_i*erfc((x-E_i)/(s_i*sqrt(2))) ]%s",
-                         sigNote.c_str());
-        else
-            gauss = Form("f(x) = Sum_i[ A_i*exp(-0.5*((x-E_i)/s_i)^2) ]%s  (i=1..%d)",
-                         sigNote.c_str(), n);
+        std::string extra;
+        if (compStep) extra += " + S_i*erfc(...)";
+        if (expoTail) extra += " + tail_i(...)";
+        gauss = Form("f(x) = Sum_i[ A_i*G(x,E_i,s_i)%s ]%s  (i=1..%d)",
+                     extra.c_str(), sigNote.c_str(), n);
     }
     fitEqView_->AddLine(gauss.c_str());
 
@@ -3732,6 +3969,12 @@ void GammaFitGUI::UpdateFitEquation()
     else
         bg = "       + bg0 + bg1*x";
     fitEqView_->AddLine(bg.c_str());
+
+    // Line 3: definition of erfc / expo tail
+    if (compStep && !expoTail)
+        fitEqView_->AddLine("  erfc(u) = (2/sqrt(pi)) * integral_u^inf e^(-t^2) dt");
+    else if (expoTail)
+        fitEqView_->AddLine("  tail = T/2*exp((x-E)/b+s^2/2b^2)*erfc((x-E)/s*sqrt2+s/b*sqrt2)");
 
     fitEqView_->Update();
 }
@@ -3759,6 +4002,7 @@ void GammaFitGUI::OnPreview()
 
     bool previewQuad  = mBgQuadChk_      && mBgQuadChk_->IsDown();
     bool previewStep  = mComptonStepChk_ && mComptonStepChk_->IsDown();
+    bool previewTail  = mExpoTailChk_    && mExpoTailChk_->IsDown();
 
     // Seed amplitudes from the same histogram that OnManualFit will fit on:
     // bg-subtracted when view mode is 2 or 3, otherwise the raw histogram.
@@ -3775,7 +4019,7 @@ void GammaFitGUI::OnPreview()
     for (TF1* fc : fitComponents_) delete fc;
     fitComponents_.clear();
     manualTF1_ = new TF1("manual_preview",
-                         BuildNGaussFormulaEx(n, previewQuad, previewStep).c_str(),
+                         BuildNGaussFormulaEx(n, previewQuad, previewStep, previewTail).c_str(),
                          xmin, xmax);
 
     for (int i = 0; i < n; i++) {
@@ -3798,6 +4042,17 @@ void GammaFitGUI::OnPreview()
         for (int i = 0; i < n; i++) {
             double A = std::max(previewHist->GetBinContent(previewHist->FindBin(manualPeaks_[i])), 1.0);
             manualTF1_->SetParameter(3*n + nbg + i, 0.05 * A);
+        }
+    }
+    if (previewTail) {
+        int nbg   = NBgPars(previewQuad);
+        int nStep = previewStep ? n : 0;
+        for (int i = 0; i < n; i++) {
+            double E   = manualPeaks_[i];
+            double sig = res_.Sigma(E);
+            double A   = std::max(previewHist->GetBinContent(previewHist->FindBin(E)), 1.0);
+            manualTF1_->SetParameter(3*n + nbg + nStep + i,     0.02 * A);  // T_i
+            manualTF1_->SetParameter(3*n + nbg + nStep + n + i, sig);       // beta_i
         }
     }
     manualTF1_->SetLineColor(kOrange + 1);
@@ -3842,12 +4097,13 @@ void GammaFitGUI::OnManualFit()
             viewHist_ = MakeBgSubHist(rawHist_, true, iters);
         }
     } else {
-        delete viewHist_; viewHist_ = nullptr;
+        SafeDeleteHist(viewHist_);
     }
     TH1* fitHist = viewHist_ ? viewHist_ : rawHist_;
 
     bool useQuadBG    = mBgQuadChk_       && mBgQuadChk_->IsDown();
     bool useCompStep  = mComptonStepChk_  && mComptonStepChk_->IsDown();
+    bool useExpoTail  = mExpoTailChk_     && mExpoTailChk_->IsDown();
     bool useTieWidths = mTieWidthsChk_    && mTieWidthsChk_->IsDown();
     bool useSameSigma = mTieSameSigmaChk_ && mTieSameSigmaChk_->IsDown() && n > 1;
 
@@ -3860,28 +4116,40 @@ void GammaFitGUI::OnManualFit()
         // Lambda TF1: all Gaussians share p[2] as the single free sigma.
         // Parameter layout is identical to BuildNGaussFormulaEx (3i, 3i+1, 3i+2)
         // so accepted fits re-display correctly once sigma slots are back-filled.
-        int nPar = NTotalPars(n, useQuadBG, useCompStep);
+        int nPar = NTotalPars(n, useQuadBG, useCompStep, useExpoTail);
         manualTF1_ = new TF1("manual_fit",
-            [n, useQuadBG, useCompStep](double* x, double* p) -> double {
+            [n, useQuadBG, useCompStep, useExpoTail](double* x, double* p) -> double {
                 double sig = p[2];
                 double val = 0.0;
                 for (int i = 0; i < n; i++)
                     val += p[3*i] * std::exp(-0.5 * std::pow((x[0]-p[3*i+1])/sig, 2.0));
-                int bg = 3*n;
+                int bg  = 3*n;
+                int nbg = useQuadBG ? 3 : 2;
                 val += p[bg] + p[bg+1]*x[0];
                 if (useQuadBG) val += p[bg+2]*x[0]*x[0];
                 if (useCompStep) {
-                    int nbg = useQuadBG ? 3 : 2;
                     for (int i = 0; i < n; i++)
                         val += p[3*n + nbg + i]
                                * TMath::Erfc((x[0]-p[3*i+1])/(sig*1.41421356));
+                }
+                if (useExpoTail) {
+                    int nStep = useCompStep ? n : 0;
+                    for (int i = 0; i < n; i++) {
+                        double T = p[3*n + nbg + nStep + i];
+                        double B = p[3*n + nbg + nStep + n + i];
+                        double E = p[3*i+1];
+                        if (B > 0.0)
+                            val += T/2.0 * std::exp((x[0]-E)/B + sig*sig/(2.0*B*B))
+                                   * TMath::Erfc((x[0]-E)/(sig*1.41421356)
+                                                 + sig/(B*1.41421356));
+                    }
                 }
                 return val;
             },
             xmin, xmax, nPar);
     } else {
         manualTF1_ = new TF1("manual_fit",
-                             BuildNGaussFormulaEx(n, useQuadBG, useCompStep).c_str(),
+                             BuildNGaussFormulaEx(n, useQuadBG, useCompStep, useExpoTail).c_str(),
                              xmin, xmax);
     }
 
@@ -3943,6 +4211,23 @@ void GammaFitGUI::OnManualFit()
             manualTF1_->SetParName(sIdx, Form("step_%d", i+1));
             manualTF1_->SetParameter(sIdx, 0.05 * A);
             manualTF1_->SetParLimits(sIdx, 0.0, A);
+        }
+    }
+    if (useExpoTail) {
+        int nbg   = NBgPars(useQuadBG);
+        int nStep = useCompStep ? n : 0;
+        for (int i = 0; i < n; i++) {
+            double E        = manualPeaks_[i];
+            double sigModel = tieRes.Sigma(E);
+            double A        = manualTF1_->GetParameter(3*i);
+            int    tIdx     = 3*n + nbg + nStep + i;
+            int    bIdx     = 3*n + nbg + nStep + n + i;
+            manualTF1_->SetParName(tIdx, Form("T_%d",    i+1));
+            manualTF1_->SetParName(bIdx, Form("beta_%d", i+1));
+            manualTF1_->SetParameter(tIdx, 0.02 * A);
+            manualTF1_->SetParLimits(tIdx, 0.0, 0.5 * A);
+            manualTF1_->SetParameter(bIdx, sigModel);
+            manualTF1_->SetParLimits(bIdx, 0.1 * sigModel, 10.0 * sigModel);
         }
     }
 
@@ -4620,7 +4905,7 @@ void GammaFitGUI::OnFitBackground()
         int iters = bgIterEntry_ ? (int)bgIterEntry_->GetNumber() : 14;
         viewHist_ = MakeBgSubHist(rawHist_, true, iters);
     } else if (viewMode == 1) {
-        delete viewHist_; viewHist_ = nullptr;
+        SafeDeleteHist(viewHist_);
     }
     TH1* fitHist = viewHist_ ? viewHist_ : rawHist_;
 
@@ -4893,7 +5178,9 @@ struct PkLblData {
     double E;
     double peakY;       // data y at peak (fit or histogram)
     std::string iso;    // isotope name, may be empty
-    std::string ekeV;   // energy string e.g. "1234.5"
+    std::string ekeV;   // energy string e.g. "1332.492(4)"
+    std::string fwhm;   // e.g. "FWHM: 2.45(3) keV"  — empty = don't show
+    std::string area;   // e.g. "Area: 12345(89)"      — empty = don't show
 };
 
 void DrawStaggedLabels(const std::vector<PkLblData>& in, TVirtualPad* pad)
@@ -4951,10 +5238,13 @@ void DrawStaggedLabels(const std::vector<PkLblData>& in, TVirtualPad* pad)
         double E = pts[i]->E;
         if (E < xlo || E > xhi) continue;
 
-        double xNDC  = (E - xlo) / xSpan;
-        double pNDC  = toNDC(pts[i]->peakY);
-        bool   hasIso = !pts[i]->iso.empty();
-        double lblH  = hasIso ? 2.0 * kRowH : kRowH;
+        double xNDC   = (E - xlo) / xSpan;
+        double pNDC   = toNDC(pts[i]->peakY);
+        int    nRows  = 1
+                      + (!pts[i]->iso.empty()  ? 1 : 0)
+                      + (!pts[i]->fwhm.empty() ? 1 : 0)
+                      + (!pts[i]->area.empty() ? 1 : 0);
+        double lblH   = nRows * kRowH;
 
         // Start the label just above the peak
         double yBot = pNDC + kMinGap;
@@ -5006,14 +5296,25 @@ void DrawStaggedLabels(const std::vector<PkLblData>& in, TVirtualPad* pad)
             }
         }
 
-        // Energy label (bottom row)
+        // Stack rows bottom-up: energy, FWHM, area, isotope
+        double row = yBot;
         lbl.SetTextColor(kBlack);
-        lbl.DrawLatex(E, fromNDC(yBot), pts[i]->ekeV.c_str());
+        lbl.DrawLatex(E, fromNDC(row), pts[i]->ekeV.c_str());
+        row += kRowH;
 
-        // Isotope label (row above)
+        if (!pts[i]->fwhm.empty()) {
+            lbl.SetTextColor(kGreen + 2);
+            lbl.DrawLatex(E, fromNDC(row), pts[i]->fwhm.c_str());
+            row += kRowH;
+        }
+        if (!pts[i]->area.empty()) {
+            lbl.SetTextColor(kOrange + 1);
+            lbl.DrawLatex(E, fromNDC(row), pts[i]->area.c_str());
+            row += kRowH;
+        }
         if (!pts[i]->iso.empty()) {
             lbl.SetTextColor(kAzure + 2);
-            lbl.DrawLatex(E, fromNDC(yBot + kRowH), pts[i]->iso.c_str());
+            lbl.DrawLatex(E, fromNDC(row), pts[i]->iso.c_str());
         }
     }
 }
@@ -5080,6 +5381,7 @@ void GammaFitGUI::OverlayFitPeaks(const std::string& hname, TCanvas* c)
             if (overlap) break;
         }
         if (overlap) continue;
+        if (cand.entry->needsRefit) continue;
 
         // Claim seeds now (regardless of fit quality) so later entries don't
         // produce duplicate labels for the same physical peak.
@@ -5111,14 +5413,32 @@ void GammaFitGUI::OverlayFitPeaks(const std::string& hname, TCanvas* c)
                 int np = lay.n;
                 double bg0 = f->GetParameter(lay.bgBase());
                 double bg1 = f->GetParameter(lay.bgBase() + 1);
-                TF1* bgf = new TF1(Form("ofp_bg_%p", (void*)f), "[0]+[1]*x", xlo, xhi);
-                bgf->SetParameter(0, bg0);
-                bgf->SetParameter(1, bg1);
-                bgf->SetLineColor(kGreen + 2);
-                bgf->SetLineStyle(2);
-                bgf->SetLineWidth(2);
-                bgf->SetBit(kCanDelete);
-                bgf->Draw("same");
+                {
+                    std::string bgfFml = "[0]+[1]*x";
+                    int nextP = 2;
+                    if (lay.quadBG) { bgfFml += "+[2]*x*x"; nextP = 3; }
+                    std::vector<double> bgPVals = {bg0, bg1};
+                    if (lay.quadBG) bgPVals.push_back(f->GetParameter(lay.bgBase()+2));
+                    if (lay.comptonStep) {
+                        for (int gi = 0; gi < np; gi++) {
+                            double Si   = f->GetParameter(StepParIdx(np, lay.quadBG, gi));
+                            double Ei   = f->GetParameter(3*gi + 1);
+                            double sigi = std::abs(f->GetParameter(3*gi + 2));
+                            if (sigi > 0.0) {
+                                bgfFml += "+[" + std::to_string(nextP) + "]*TMath::Erfc((x-"
+                                        + std::to_string(Ei) + ")/(" + std::to_string(sigi*1.41421356) + "))";
+                                bgPVals.push_back(Si); nextP++;
+                            }
+                        }
+                    }
+                    TF1* bgf = new TF1(Form("ofp_bg_%p", (void*)f), bgfFml.c_str(), xlo, xhi);
+                    for (int pi = 0; pi < (int)bgPVals.size(); pi++) bgf->SetParameter(pi, bgPVals[pi]);
+                    bgf->SetLineColor(kGreen + 2);
+                    bgf->SetLineStyle(2);
+                    bgf->SetLineWidth(2);
+                    bgf->SetBit(kCanDelete);
+                    bgf->Draw("same");
+                }
 
                 // Individual Gaussian components when option is on and n > 1
                 if (!lay.dg && np > 1 && mShowCompChk_ && mShowCompChk_->IsDown()) {
@@ -5188,10 +5508,11 @@ void GammaFitGUI::OverlayFitPeaks(const std::string& hname, TCanvas* c)
 
             // Centroid uncertainty from fit parameter error (0 if no fit)
             double eErr = 0.0;
+            FitLayout lay;
             if (f) {
-                FitLayout lay; TryDetectDG(f, lay);
+                TryDetectDG(f, lay);
                 if (!lay.valid()) lay = DetectLayout(f->GetNpar());
-                if (lay.dg)        eErr = f->GetParError(1);
+                if (lay.dg)           eErr = f->GetParError(1);
                 else if (lay.valid()) eErr = f->GetParError(3*gi + 1);
             }
 
@@ -5208,7 +5529,21 @@ void GammaFitGUI::OverlayFitPeaks(const std::string& hname, TCanvas* c)
                 }
             }
 
-            pkLabels.push_back({E, yLabel, isoName, NNDCFormat(E, eErr)});
+            std::string fwhmStr, areaStr;
+            if (showPeakFWHMArea_ && f && lay.valid() && !lay.dg && gi < lay.n) {
+                double A    = f->GetParameter(3*gi);
+                double sig  = f->GetParameter(3*gi + 2);
+                double sigA = f->GetParError(3*gi);
+                double sigS = f->GetParError(3*gi + 2);
+                if (sig > 0.0) {
+                    fwhmStr = std::string("FWHM:") + NNDCFormat(2.3548*sig, 2.3548*sigS) + " keV";
+                    double area    = A * sig * 2.5066;
+                    double areaErr = 2.5066 * std::sqrt((sig*sigA)*(sig*sigA)
+                                                       + (A*sigS)*(A*sigS));
+                    areaStr = std::string("Area:") + NNDCFormat(area, areaErr);
+                }
+            }
+            pkLabels.push_back({E, yLabel, isoName, NNDCFormat(E, eErr), fwhmStr, areaStr});
         }
         // f is now owned by the pad (kCanDelete)  -  do NOT delete here
     }
@@ -5223,7 +5558,7 @@ void GammaFitGUI::OnHistViewChanged(Int_t id)
 {
     if (!rawHist_) return;
 
-    delete viewHist_; viewHist_ = nullptr;
+    SafeDeleteHist(viewHist_);
 
     TCanvas* c = canvas_->GetCanvas();
     c->Clear();
@@ -6018,7 +6353,7 @@ void GammaFitGUI::NavigateToPeak(int idx)
     // always shows what the user selected.  Keep the result in viewHist_ so
     // the canvas never holds a dangling pointer when ROOT calls gPad->Update().
     int viewMode = histViewCombo_->GetSelected();
-    delete viewHist_;
+    SafeDeleteHist(viewHist_);
     if (viewMode == 2 || viewMode == 3) {
         int iters = bgIterEntry_ ? (int)bgIterEntry_->GetNumber() : 14;
         viewHist_ = MakeBgSubHist(rawHist_, true, iters);
@@ -6051,10 +6386,27 @@ void GammaFitGUI::NavigateToPeak(int idx)
                 if (navLay.valid()) {
                 double bg0 = f->GetParameter(navLay.bgBase());
                 double bg1 = f->GetParameter(navLay.bgBase() + 1);
-                TF1* bgf = new TF1(Form("nav_bg_%p", (void*)f), "[0]+[1]*x",
-                                   f->GetXmin(), f->GetXmax());
-                bgf->SetParameter(0, bg0);
-                bgf->SetParameter(1, bg1);
+                double xflo = f->GetXmin(), xfhi = f->GetXmax();
+                int navN = navLay.n;
+                std::string navFml = "[0]+[1]*x";
+                int nextP = 2;
+                if (navLay.quadBG) { navFml += "+[2]*x*x"; nextP = 3; }
+                std::vector<double> navPVals = {bg0, bg1};
+                if (navLay.quadBG) navPVals.push_back(f->GetParameter(navLay.bgBase()+2));
+                if (navLay.comptonStep) {
+                    for (int gi = 0; gi < navN; gi++) {
+                        double Si   = f->GetParameter(StepParIdx(navN, navLay.quadBG, gi));
+                        double Ei   = f->GetParameter(3*gi + 1);
+                        double sigi = std::abs(f->GetParameter(3*gi + 2));
+                        if (sigi > 0.0) {
+                            navFml += "+[" + std::to_string(nextP) + "]*TMath::Erfc((x-"
+                                    + std::to_string(Ei) + ")/(" + std::to_string(sigi*1.41421356) + "))";
+                            navPVals.push_back(Si); nextP++;
+                        }
+                    }
+                }
+                TF1* bgf = new TF1(Form("nav_bg_%p", (void*)f), navFml.c_str(), xflo, xfhi);
+                for (int pi = 0; pi < (int)navPVals.size(); pi++) bgf->SetParameter(pi, navPVals[pi]);
                 bgf->SetLineColor(kGreen + 2);
                 bgf->SetLineStyle(2);
                 bgf->SetLineWidth(2);
@@ -6328,13 +6680,6 @@ void GammaFitGUI::OnClearHistCache()
         fitResultsList_->MapSubwindows(); fitResultsList_->Layout();
     }
 
-    // Remove any background subtraction definition for this histogram
-    if (bgSubtractDefs_.erase(currentHist_) > 0) {
-        SaveMetadata();
-        PopulateHistWidgets();
-        AppendLog("[ClearCache] Background subtraction for " + currentHist_ + " removed.");
-    }
-
     peakNavKeys_.clear();
     peakNavIdx_ = 0;
     PopulateNavAndResidual();
@@ -6342,6 +6687,27 @@ void GammaFitGUI::OnClearHistCache()
 
     AppendLog("[ClearCache] Cleared cache for " + currentHist_);
     SetStatus("Cache cleared: " + currentHist_);
+}
+
+void GammaFitGUI::OnSaveHistCache()
+{
+    if (currentHist_.empty()) { AppendLog("No histogram selected."); return; }
+
+    std::string cacheFile = CacheFileFor(currentHist_);
+    FitDatabase fitdb;
+    if (!fitdb.Load(cacheFile)) {
+        AppendLog("[SaveCache] No cache for " + currentHist_ + " — accept a fit first.");
+        SetStatus("No cache to save: " + currentHist_);
+        return;
+    }
+
+    fitdb.Save(cacheFile);
+    BackupCacheFile(cacheFile);
+
+    int n = (int)fitdb.GetEntries().size();
+    AppendLog("[SaveCache] Saved " + std::to_string(n) + " entr" + (n == 1 ? "y" : "ies")
+              + " → " + cacheFile);
+    SetStatus("Cache saved: " + currentHist_);
 }
 
 void GammaFitGUI::OnSrcClearHistCache()
@@ -6816,18 +7182,37 @@ void GammaFitGUI::DrawFitComponents(TCanvas* /*c*/, TF1* f)
     double bg2 = hasQuadBG ? f->GetParameter(bgB + 2) : 0.0;
 
     // ── Background component  -  always drawn, green dashed ─────────────────────
-    std::string bgFormula = "[0]+[1]*x";
-    if (hasQuadBG) bgFormula += "+[2]*x*x";
-    TF1* bgComp = new TF1(Form("fitcomp_bg_%p", (void*)f),
-                          bgFormula.c_str(), xlo, xhi);
-    bgComp->SetParameter(0, bg0);
-    bgComp->SetParameter(1, bg1);
-    if (hasQuadBG) bgComp->SetParameter(2, bg2);
-    bgComp->SetLineColor(kGreen + 2);
-    bgComp->SetLineStyle(2);
-    bgComp->SetLineWidth(2);
-    fitComponents_.push_back(bgComp);
-    bgComp->Draw("same");
+    // Includes Compton step so the line shows the true continuum background level;
+    // the Gaussian peaks then sit cleanly on top with no visual offset.
+    {
+        std::string bgFormula = "[0]+[1]*x";
+        int nextBGPar = 2;
+        if (hasQuadBG) { bgFormula += "+[2]*x*x"; nextBGPar = 3; }
+        std::vector<double> bgParVals = {bg0, bg1};
+        if (hasQuadBG) bgParVals.push_back(bg2);
+        if (hasStep) {
+            for (int i = 0; i < n; i++) {
+                double Si   = f->GetParameter(StepParIdx(n, hasQuadBG, i));
+                double Ei   = f->GetParameter(3*i + 1);
+                double sigi = std::abs(f->GetParameter(3*i + 2));
+                if (sigi > 0.0) {
+                    bgFormula += "+[" + std::to_string(nextBGPar) + "]*TMath::Erfc((x-"
+                               + std::to_string(Ei) + ")/(" + std::to_string(sigi * 1.41421356) + "))";
+                    bgParVals.push_back(Si);
+                    nextBGPar++;
+                }
+            }
+        }
+        TF1* bgComp = new TF1(Form("fitcomp_bg_%p", (void*)f),
+                              bgFormula.c_str(), xlo, xhi);
+        for (int pi = 0; pi < (int)bgParVals.size(); pi++)
+            bgComp->SetParameter(pi, bgParVals[pi]);
+        bgComp->SetLineColor(kGreen + 2);
+        bgComp->SetLineStyle(2);
+        bgComp->SetLineWidth(2);
+        fitComponents_.push_back(bgComp);
+        bgComp->Draw("same");
+    }
 
     // ── Individual Gaussian (+ BG + Erfc step)  -  drawn when checkbox is on ───
     bool showComp = mShowCompChk_ && mShowCompChk_->IsDown();
@@ -6903,7 +7288,24 @@ void GammaFitGUI::DrawPeakLabels(TF1* f)
             auto matches = db_.Match(E, res_.FWHM(E));
             if (!matches.empty()) isoName = matches[0].isotope;
         }
-        pkLabels.push_back({E, yTop, isoName, NNDCFormat(E, eErr)});
+
+        std::string fwhmStr, areaStr;
+        if (showPeakFWHMArea_ && !lay.dg && i < lay.n) {
+            double A    = f->GetParameter(3*i);
+            double sig  = f->GetParameter(3*i + 2);
+            double sigA = f->GetParError(3*i);
+            double sigS = f->GetParError(3*i + 2);
+            if (sig > 0.0) {
+                double fwhm    = 2.3548 * sig;
+                double fwhmErr = 2.3548 * sigS;
+                fwhmStr = std::string("FWHM:") + NNDCFormat(fwhm, fwhmErr) + " keV";
+                double area    = A * sig * 2.5066;
+                double areaErr = 2.5066 * std::sqrt((sig*sigA)*(sig*sigA)
+                                                   + (A*sigS)*(A*sigS));
+                areaStr = std::string("Area:") + NNDCFormat(area, areaErr);
+            }
+        }
+        pkLabels.push_back({E, yTop, isoName, NNDCFormat(E, eErr), fwhmStr, areaStr});
     }
     DrawStaggedLabels(pkLabels, gPad);
 }
@@ -7172,6 +7574,25 @@ static void DrawNegBinsRed(TH1* h, bool enabled)
     neg->SetStats(0);
     neg->SetBit(kCanDelete);
     neg->Draw("hist same");
+}
+
+void GammaFitGUI::SafeDeleteHist(TH1*& h)
+{
+    if (!h) return;
+    if (canvas_) {
+        TCanvas* c = canvas_->GetCanvas();
+        if (c) {
+            c->GetListOfPrimitives()->Remove(h);
+            // Also check sub-pads (DrawWithResiduals creates padTop/padBot)
+            TIter next(c->GetListOfPrimitives());
+            while (TObject* obj = next()) {
+                if (obj->InheritsFrom("TPad"))
+                    ((TPad*)obj)->GetListOfPrimitives()->Remove(h);
+            }
+        }
+    }
+    delete h;
+    h = nullptr;
 }
 
 void GammaFitGUI::DrawOnCanvas(TH1* h, TF1* fit)
@@ -7536,7 +7957,7 @@ void GammaFitGUI::OnResetBgSub()
     // Discard any bg-subtracted view and redraw the raw histogram that is
     // already stored in rawHist_.  Loading a fresh copy and then deleting it
     // caused a dangling pointer inside the canvas, producing a blank display.
-    delete viewHist_; viewHist_ = nullptr;
+    SafeDeleteHist(viewHist_);
 
     if (rawHist_) {
         RedrawView();
@@ -7642,9 +8063,9 @@ void GammaFitGUI::OnDeleteHistogram()
 
     // Clear canvas if the deleted histogram was on display
     if (currentHist_ == name) {
-        if (rawHistOwned_) { delete rawHist_; rawHistOwned_ = false; }
+        if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
         rawHist_ = nullptr;
-        delete viewHist_; viewHist_ = nullptr;
+        SafeDeleteHist(viewHist_);
         currentHist_.clear();
         canvas_->GetCanvas()->Clear();
         canvas_->GetCanvas()->Modified();
@@ -9386,7 +9807,7 @@ void GammaFitGUI::OnSrcExtractDetector()
     srcDetHist_->GetXaxis()->SetTitle(engTitle.c_str());
 
     // Make it the current working histogram (not owned by rawHist_ cleanup)
-    if (rawHistOwned_ && rawHist_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    if (rawHistOwned_ && rawHist_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
     rawHist_      = srcDetHist_;
     rawHistOwned_ = false;   // srcDetHist_ owns the object
     currentHist_  = histName;
@@ -10004,7 +10425,7 @@ void GammaFitGUI::OnLoadSourceCache()
     // Restore per-histogram metadata (isotope, dates, live time)
     ApplySrcMetaToUI(srcHist_);
 
-    if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
 
     auto srcProjIt = srcProjParent_.find(srcHist_);
     if (srcProjIt != srcProjParent_.end()) {
@@ -10709,6 +11130,50 @@ void GammaFitGUI::OnAddCustomProjection()
     SetStatus("Added custom projection: " + name);
 }
 
+void GammaFitGUI::OnCustProjRangeChanged()
+{
+    if (!custProjBinInfoLabel_) return;
+
+    TGLBEntry* th2Sel = custProjTh2Combo_ ? custProjTh2Combo_->GetSelectedEntry() : nullptr;
+    if (!th2Sel || !inputFile_) {
+        custProjBinInfoLabel_->SetText("");
+        return;
+    }
+
+    TH2* h2 = (TH2*)inputFile_->Get(th2Sel->GetTitle());
+    if (!h2) {
+        custProjBinInfoLabel_->SetText("(TH2 not found)");
+        return;
+    }
+
+    int    axisId = custProjAxisCombo_ ? custProjAxisCombo_->GetSelected() : 1;
+    bool   projX  = (axisId == 1);  // ProjectionX → cut on Y axis
+    double lo     = custProjLo_ ? custProjLo_->GetNumber() : 0.0;
+    double hi     = custProjHi_ ? custProjHi_->GetNumber() : 0.0;
+
+    // Cut axis (the one we slice)
+    TAxis* cutAx  = projX ? h2->GetYaxis() : h2->GetXaxis();
+    // Projected axis (the one that becomes the histogram)
+    TAxis* projAx = projX ? h2->GetXaxis() : h2->GetYaxis();
+
+    int b1 = cutAx->FindBin(lo);
+    int b2 = cutAx->FindBin(hi);
+
+    const char* cutTitle  = cutAx->GetTitle();
+    const char* projTitle = projAx->GetTitle();
+    double projLo = projAx->GetXmin();
+    double projHi = projAx->GetXmax();
+    int    projN  = projAx->GetNbins();
+
+    custProjBinInfoLabel_->SetText(
+        Form("Cut: bin %d–%d (%d bins)  %s  |  Proj: %.4g–%.4g %s (%d bins)",
+             b1, b2, b2 - b1 + 1,
+             (cutTitle && cutTitle[0]) ? cutTitle : "",
+             projLo, projHi,
+             (projTitle && projTitle[0]) ? projTitle : "",
+             projN));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Background subtraction helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -10849,8 +11314,8 @@ void GammaFitGUI::OnSubtractHistogram()
     SetStatus("Background subtracted: " + outName);
 
     // Display the result  -  clear stale view before swapping rawHist_
-    delete viewHist_; viewHist_ = nullptr;
-    if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    SafeDeleteHist(viewHist_);
+    if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
     // Use result directly (already correctly rebinned from src)
     rawHist_      = result;
     rawHistOwned_ = true;
@@ -10939,9 +11404,9 @@ void GammaFitGUI::OnRebinApply()
     }
 
     // Reload histogram with the new factor applied
-    if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
     rawHist_ = LoadHistFromFile(currentHist_, rawHistOwned_);
-    delete viewHist_; viewHist_ = nullptr;
+    SafeDeleteHist(viewHist_);
 
     // Rebuild bg-sub view if needed before calling RedrawView
     Int_t mode = histViewCombo_ ? histViewCombo_->GetSelected() : 1;
@@ -10963,9 +11428,9 @@ void GammaFitGUI::OnRebinReset()
     rebinFactors_.erase(currentHist_);
     if (rebinEntry_) rebinEntry_->SetNumber(1);
 
-    if (rawHistOwned_) { delete rawHist_; rawHist_ = nullptr; rawHistOwned_ = false; }
+    if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
     rawHist_ = LoadHistFromFile(currentHist_, rawHistOwned_);
-    delete viewHist_; viewHist_ = nullptr;
+    SafeDeleteHist(viewHist_);
 
     // Rebuild bg-sub view if needed before calling RedrawView
     Int_t mode = histViewCombo_ ? histViewCombo_->GetSelected() : 1;
@@ -10984,6 +11449,12 @@ void GammaFitGUI::OnRebinReset()
 void GammaFitGUI::OnToggleIsoLabels()
 {
     showIsoLabels_ = showIsoLabelsChk_ && showIsoLabelsChk_->IsOn();
+    if (rawHist_) RedrawView();
+}
+
+void GammaFitGUI::OnTogglePeakFWHMArea()
+{
+    showPeakFWHMArea_ = showPeakFWHMAreaChk_ && showPeakFWHMAreaChk_->IsOn();
     if (rawHist_) RedrawView();
 }
 
@@ -11080,7 +11551,7 @@ void GammaFitGUI::OnApplyCalibration()
     histNames_.push_back(newName);
     histClass_[newName] = histClass_.count(currentHist_) ? histClass_[currentHist_] : "Gamma Spectrum";
 
-    if (rawHistOwned_) { delete rawHist_; rawHistOwned_ = false; }
+    if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
     rawHist_     = cal;
     rawHistOwned_ = true;
     currentHist_ = newName;
@@ -11194,9 +11665,9 @@ void GammaFitGUI::OnOpenRecent()
     }
     std::string path = recentFiles_[sel - 1];
 
-    if (rawHistOwned_) { delete rawHist_; rawHistOwned_ = false; }
+    if (rawHistOwned_) { SafeDeleteHist(rawHist_); rawHistOwned_ = false; }
     rawHist_ = nullptr;
-    delete viewHist_; viewHist_ = nullptr;
+    SafeDeleteHist(viewHist_);
     currentHist_.clear();
     if (inputFile_) { inputFile_->Close(); delete inputFile_; inputFile_ = nullptr; }
     inputPath_ = path;

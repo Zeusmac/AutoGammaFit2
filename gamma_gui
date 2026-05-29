@@ -1,4 +1,0 @@
-#!/bin/bash
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export ROOT_INCLUDE_PATH="$DIR:$DIR/app:$DIR/core:$DIR/fitting:$DIR/tracking:$DIR/models:$DIR/database:$DIR/io:$DIR/analysis_modules:$DIR/gui"
-exec "$DIR/bin/gamma_gui" "$@"

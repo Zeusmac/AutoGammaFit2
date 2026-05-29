@@ -46,11 +46,15 @@ enum WidgetID : Int_t {
 // ─────────────────────────────────────────────────────────────────────────────
 // FitLayout  -  describes the parameter layout of a fitted TF1.
 //
-// Four supported layouts (where N = number of Gaussians):
-//   Standard:              3N+2   params  (bg0, bg1)
-//   QuadBG:                3N+3   params  (bg0, bg1, bg2)
-//   ComptonStep:           4N+2   params  (bg0, bg1, step_0..step_N-1)
-//   QuadBG + ComptonStep:  4N+3   params  (bg0, bg1, bg2, step_0..step_N-1)
+// Supported layouts (where N = number of Gaussians):
+//   Standard:                      3N+2   params  (bg0, bg1)
+//   QuadBG:                        3N+3   params  (bg0, bg1, bg2)
+//   ComptonStep:                   4N+2   params  (bg0, bg1, step_0..N-1)
+//   QuadBG + ComptonStep:          4N+3   params  (bg0, bg1, bg2, step_0..N-1)
+//   ExpoTail:                      5N+2   params  (T_0..N-1, beta_0..N-1)
+//   QuadBG + ExpoTail:             5N+3   params
+//   ComptonStep + ExpoTail:        6N+2   params  (step_0..N-1, T_0..N-1, beta_0..N-1)
+//   QuadBG + ComptonStep + Expo:   6N+3   params
 //
 // Special case: Double-Gaussian (DG) model from AdaptiveFitter has 7 params
 // but a different formula  -  detected by TryDetectDG(TF1*) below.
@@ -59,6 +63,7 @@ struct FitLayout {
     int  n           = 0;      // number of Gaussians; 0 = unrecognised
     bool quadBG      = false;
     bool comptonStep = false;
+    bool expoTail    = false;  // low-energy exponential tail (HYPERMET)
     bool dg          = false;  // true only when confirmed as DG model via TryDetectDG
 
     bool valid()    const { return n > 0; }
@@ -72,12 +77,15 @@ struct FitLayout {
     // Total parameter count (matches NTotalPars for non-DG).
     int  totalPars() const {
         if (dg) return 7;
-        return 3*n + nBGPars() + (comptonStep ? n : 0);
+        int nStep = comptonStep ? n : 0;
+        int nTail = expoTail   ? 2*n : 0;
+        return 3*n + nBGPars() + nStep + nTail;
     }
 };
 
 // Detect layout from parameter count alone.
-// npar=7 is returned as n=1, quadBG=true, comptonStep=true (4*1+3).
+// Pass 1 covers standard + comptonStep (backward compatible).
+// Pass 2 covers expoTail models (higher npar values, tried only if pass 1 fails).
 // If the TF1 is available and might be the DG model, call TryDetectDG first.
 inline FitLayout DetectLayout(int npar) {
     FitLayout lay;
@@ -86,6 +94,12 @@ inline FitLayout DetectLayout(int npar) {
         else if (npar == 3*nc + 3) { lay.n = nc; lay.quadBG      = true; return lay; }
         else if (npar == 4*nc + 2) { lay.n = nc; lay.comptonStep = true; return lay; }
         else if (npar == 4*nc + 3) { lay.n = nc; lay.quadBG = true; lay.comptonStep = true; return lay; }
+    }
+    for (int nc = 1; nc <= 12; nc++) {
+        if      (npar == 5*nc + 2) { lay.n = nc; lay.expoTail = true; return lay; }
+        else if (npar == 5*nc + 3) { lay.n = nc; lay.quadBG = true; lay.expoTail = true; return lay; }
+        else if (npar == 6*nc + 2) { lay.n = nc; lay.comptonStep = true; lay.expoTail = true; return lay; }
+        else if (npar == 6*nc + 3) { lay.n = nc; lay.quadBG = true; lay.comptonStep = true; lay.expoTail = true; return lay; }
     }
     return lay;  // invalid: valid() == false
 }
@@ -114,16 +128,22 @@ struct FitModel {
     int  n           = 1;
     bool quadBG      = false;
     bool comptonStep = false;
+    bool expoTail    = false;
 
     int bgBase()    const { return 3*n; }
     int nBGPars()   const { return quadBG ? 3 : 2; }
     int stepBase()  const { return 3*n + nBGPars(); }
-    int totalPars() const { return 3*n + nBGPars() + (comptonStep ? n : 0); }
+    int tailBase()  const { return 3*n + nBGPars() + (comptonStep ? n : 0); }
+    int totalPars() const {
+        int nStep = comptonStep ? n : 0;
+        int nTail = expoTail   ? 2*n : 0;
+        return 3*n + nBGPars() + nStep + nTail;
+    }
 
     std::string Formula() const;  // implemented via BuildNGaussFormulaEx below
 
     static FitModel FromLayout(const FitLayout& lay) {
-        return {lay.n, lay.quadBG, lay.comptonStep};
+        return {lay.n, lay.quadBG, lay.comptonStep, lay.expoTail};
     }
 };
 
@@ -200,17 +220,28 @@ inline std::string BuildNGaussFormula(int n) {
 
 // Extended formula builder  -  single source of truth for all TF1 strings.
 // Parameter layout:
-//   [3i], [3i+1], [3i+2]   = A_i, E_i, sig_i     for i in [0,n)
-//   [3n], [3n+1]            = bg0, bg1             (always present)
-//   [3n+2]                  = bg2                  (quadBG only)
-//   [3n+nBG+i]              = step_i               (comptonStep only)
+//   [3i], [3i+1], [3i+2]         = A_i, E_i, sig_i          for i in [0,n)
+//   [3n], [3n+1]                  = bg0, bg1                 (always)
+//   [3n+2]                        = bg2                      (quadBG only)
+//   [3n+nBG+i]                    = step_i                   (comptonStep only)
+//   [3n+nBG+nStep+i]              = T_i   (tail amplitude)   (expoTail only)
+//   [3n+nBG+nStep+n+i]            = beta_i (tail slope)      (expoTail only)
 inline int NBgPars(bool quadBG) { return quadBG ? 3 : 2; }
 inline int StepParIdx(int n, bool quadBG, int peakI) { return 3*n + NBgPars(quadBG) + peakI; }
-inline int NTotalPars(int n, bool quadBG, bool comptonStep) {
-    return 3*n + NBgPars(quadBG) + (comptonStep ? n : 0);
+inline int TailAmplParIdx(int n, bool quadBG, bool comptonStep, int peakI) {
+    return 3*n + NBgPars(quadBG) + (comptonStep ? n : 0) + peakI;
+}
+inline int TailSlopeParIdx(int n, bool quadBG, bool comptonStep, int peakI) {
+    return 3*n + NBgPars(quadBG) + (comptonStep ? n : 0) + n + peakI;
+}
+inline int NTotalPars(int n, bool quadBG, bool comptonStep, bool expoTail = false) {
+    int nStep = comptonStep ? n : 0;
+    int nTail = expoTail   ? 2*n : 0;
+    return 3*n + NBgPars(quadBG) + nStep + nTail;
 }
 
-inline std::string BuildNGaussFormulaEx(int n, bool quadBG = false, bool comptonStep = false) {
+inline std::string BuildNGaussFormulaEx(int n, bool quadBG = false,
+                                        bool comptonStep = false, bool expoTail = false) {
     std::string f;
     for (int i = 0; i < n; i++) {
         if (i) f += "+";
@@ -220,17 +251,33 @@ inline std::string BuildNGaussFormulaEx(int n, bool quadBG = false, bool compton
            + std::to_string(p+2) + "])^2)";
     }
     int bg = 3*n;
+    int nbg = NBgPars(quadBG);
     f += "+[" + std::to_string(bg) + "]+[" + std::to_string(bg+1) + "]*x";
     if (quadBG)
         f += "+[" + std::to_string(bg+2) + "]*x*x";
     if (comptonStep) {
-        int nbg = NBgPars(quadBG);
         for (int i = 0; i < n; i++) {
             int sIdx = 3*n + nbg + i;
-            // Compton step: erfc models photons scattered into the continuum below the FEP.
+            // Compton step: erfc models scattered photons below the full-energy peak.
             f += "+[" + std::to_string(sIdx) + "]*TMath::Erfc((x-["
                + std::to_string(3*i+1) + "])/(["
                + std::to_string(3*i+2) + "]*1.41421356))";
+        }
+    }
+    if (expoTail) {
+        int nStep = comptonStep ? n : 0;
+        for (int i = 0; i < n; i++) {
+            int tIdx = 3*n + nbg + nStep + i;
+            int bIdx = 3*n + nbg + nStep + n + i;
+            // HYPERMET low-energy exponential tail:
+            // T/2 * exp((x-E)/β + s²/(2β²)) * erfc((x-E)/(s√2) + s/(β√2))
+            // Naturally decays to zero on both sides of the peak centroid.
+            auto s = [](int v){ return "[" + std::to_string(v) + "]"; };
+            f += "+" + s(tIdx) + "/2*exp((x-" + s(3*i+1) + ")/" + s(bIdx)
+               + "+" + s(3*i+2) + "*" + s(3*i+2)
+               + "/(2*" + s(bIdx) + "*" + s(bIdx) + "))"
+               + "*TMath::Erfc((x-" + s(3*i+1) + ")/(" + s(3*i+2) + "*1.41421356)"
+               + "+" + s(3*i+2) + "/(" + s(bIdx) + "*1.41421356))";
         }
     }
     return f;
@@ -238,7 +285,7 @@ inline std::string BuildNGaussFormulaEx(int n, bool quadBG = false, bool compton
 
 // FitModel::Formula() delegates to BuildNGaussFormulaEx
 inline std::string FitModel::Formula() const {
-    return BuildNGaussFormulaEx(n, quadBG, comptonStep);
+    return BuildNGaussFormulaEx(n, quadBG, comptonStep, expoTail);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
